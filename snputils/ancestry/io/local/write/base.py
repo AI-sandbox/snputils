@@ -2,18 +2,18 @@ import abc
 from pathlib import Path
 from typing import Union
 
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 
 
 class LAIBaseWriter(abc.ABC):
     """
     Abstract class for local ancestry writers.
     """
-    def __init__(self, laiobj: LocalAncestryObject, file: Union[str, Path]) -> None:
+    def __init__(self, laiobj: WindowLevelAncestryObject, file: Union[str, Path]) -> None:
         """
         Args:
-            laiobj (LocalAncestryObject):
-                A LocalAncestryObject instance.
+            laiobj (WindowLevelAncestryObject):
+                A WindowLevelAncestryObject instance.
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. It should end with `.msp` or `.msp.tsv`. 
                 If the provided path does not have one of these extensions, the `.msp` extension will be appended.
@@ -22,13 +22,13 @@ class LAIBaseWriter(abc.ABC):
         self.__file = Path(file)
 
     @property
-    def laiobj(self) -> LocalAncestryObject:
+    def laiobj(self) -> WindowLevelAncestryObject:
         """
         Retrieve `laiobj`. 
 
         Returns:
-            laiobj (LocalAncestryObject):
-                A LocalAncestryObject instance.
+            laiobj (WindowLevelAncestryObject):
+                A WindowLevelAncestryObject instance.
         """
         return self.__laiobj
 

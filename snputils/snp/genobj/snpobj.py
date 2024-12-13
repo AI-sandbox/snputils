@@ -11,7 +11,8 @@ log = logging.getLogger(__name__)
 
 class SNPObject:
     """
-    A class for Single Nucleotide Polymorphism (SNP) data.
+    A class for Single Nucleotide Polymorphism (SNP) data, with optional support for 
+    SNP-level Local Ancestry Information (LAI).
     """
     def __init__(
         self,
@@ -23,7 +24,9 @@ class SNPObject:
         variants_filter_pass: Optional[np.ndarray] = None,
         variants_id: Optional[np.ndarray] = None,
         variants_pos: Optional[np.ndarray] = None,
-        variants_qual: Optional[np.ndarray] = None
+        variants_qual: Optional[np.ndarray] = None,
+        calldata_lai: Optional[np.ndarray] = None,
+        ancestry_map: Optional[Dict[str, str]] = None
     ) -> None:
         """
         Args:
@@ -47,6 +50,10 @@ class SNPObject:
                 An array containing the chromosomal positions for each SNP.
             variants_qual (array of shape (n_snps,), optional): 
                 An array containing the Phred-scaled quality score for each SNP.
+            calldata_lai (array of shape (n_snps, n_samples, 2)): 
+                An array containing the ancestry for each SNP.
+            ancestry_map (dict of str to str, optional): 
+                A dictionary mapping ancestry codes to region names.
         """
         self.__calldata_gt = calldata_gt
         self.__samples = samples
@@ -57,6 +64,10 @@ class SNPObject:
         self.__variants_id = variants_id
         self.__variants_pos = variants_pos
         self.__variants_qual = variants_qual
+        self.__calldata_lai = calldata_lai
+        self.__ancestry_map = ancestry_map
+
+        self._sanity_check()
 
     def __getitem__(self, key: str) -> Any:
         """
@@ -110,11 +121,11 @@ class SNPObject:
         return self.__samples
 
     @samples.setter
-    def samples(self, x: np.ndarray):
+    def samples(self, x: Union[List, np.ndarray]):
         """
         Update `samples`.
         """
-        self.__samples = x
+        self.__samples = np.asarray(x)
 
     @property
     def variants_ref(self) -> Optional[np.ndarray]:
@@ -236,6 +247,41 @@ class SNPObject:
         self.__variants_qual = x
 
     @property
+    def calldata_lai(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `calldata_lai`.
+
+        Returns:
+            **array of shape (n_snps, n_samples, 2):** 
+                An array containing the ancestry for each SNP.
+        """
+        return self.__calldata_lai
+
+    @calldata_lai.setter
+    def calldata_lai(self, x: np.ndarray):
+        """
+        Update `calldata_lai`.
+        """
+        self.__calldata_lai = x
+
+    @property
+    def ancestry_map(self) -> Optional[Dict[str, str]]:
+        """
+        Retrieve `ancestry_map`.
+
+        Returns:
+            **dict of str to str:** A dictionary mapping ancestry codes to region names.
+        """
+        return self.__ancestry_map
+
+    @ancestry_map.setter
+    def ancestry_map(self, x):
+        """
+        Update `ancestry_map`.
+        """
+        self.__ancestry_map = x
+
+    @property
     def n_samples(self) -> int:
         """
         Retrieve `n_samples`.
@@ -243,7 +289,14 @@ class SNPObject:
         Returns:
             **int:** The total number of samples.
         """
-        return self.__calldata_gt.shape[1]
+        if self.__samples is not None:
+            return len(self.__samples)
+        elif self.__calldata_gt is not None:
+            return self.__calldata_gt.shape[1]
+        elif self.__calldata_lai is not None:
+            return self.__calldata_lai.shape[1]
+        else:
+            raise ValueError("Unable to determine the total number of samples: no relevant data is available.")
 
     @property
     def n_snps(self) -> int:
@@ -253,7 +306,25 @@ class SNPObject:
         Returns:
             **int:** The total number of SNPs.
         """
-        return self.__calldata_gt.shape[0]
+        # List of attributes that can indicate the number of SNPs
+        potential_attributes = [
+            self.__calldata_gt,
+            self.__variants_ref,
+            self.__variants_alt,
+            self.__variants_chrom,
+            self.__variants_filter_pass,
+            self.__variants_id,
+            self.__variants_pos,
+            self.__variants_qual,
+            self.__calldata_lai
+        ]
+
+        # Check each attribute for its first dimension, which corresponds to `n_snps`
+        for attr in potential_attributes:
+            if attr is not None:
+                return attr.shape[0]
+
+        raise ValueError("Unable to determine the total number of SNPs: no relevant data is available.")
 
     @property
     def n_chrom(self) -> Optional[int]:
@@ -268,6 +339,19 @@ class SNPObject:
             return None
 
         return len(self.unique_chrom)
+
+    @property
+    def n_ancestries(self) -> int:
+        """
+        Retrieve `n_ancestries`.
+
+        Returns:
+            **int:** The total number of unique ancestries.
+        """
+        if self.__calldata_lai is not None:
+            return len(np.unique(self.__calldata_lai))
+        else:
+            raise ValueError("Unable to determine the total number of ancestries: no relevant data is available.")
 
     @property
     def unique_chrom(self) -> Optional[np.ndarray]:
@@ -336,8 +420,8 @@ class SNPObject:
         Filter variants based on specified chromosome names, variant positions, or variant indexes.
 
         This method updates the `calldata_gt`, `variants_ref`, `variants_alt`, 
-        `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`, and 
-        `variants_qual` attributes to include or exclude the specified variants. The filtering 
+        `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`,  
+        `variants_qual`, and `lai` attributes to include or exclude the specified variants. The filtering 
         criteria can be based on chromosome names, variant positions, or indexes. If multiple 
         criteria are provided, their union is used for filtering. The order of the variants is preserved.
         
@@ -441,16 +525,18 @@ class SNPObject:
 
         # Define keys to filter
         keys = [
-            'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 
-            'variants_id', 'variants_pos', 'variants_qual'
+            'calldata_gt', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 
+            'variants_id', 'variants_pos', 'variants_qual', 'calldata_lai'
         ]
 
         # Apply filtering based on inplace parameter
         if inplace:
             for key in keys:
                 if self[key] is not None:
-                    self[key] = np.asarray(self[key])[mask_combined]
-            self['calldata_gt'] = np.asarray(self['calldata_gt'])[mask_combined, ...]
+                    if self[key].ndim > 1:
+                        self[key] = np.asarray(self[key])[mask_combined, ...]
+                    else:
+                        self[key] = np.asarray(self[key])[mask_combined]
 
             return None
         else:
@@ -458,8 +544,10 @@ class SNPObject:
             snpobj = self.copy()
             for key in keys:
                 if snpobj[key] is not None:
-                    snpobj[key] = np.asarray(snpobj[key])[mask_combined]
-            snpobj['calldata_gt'] = np.asarray(self['calldata_gt'])[mask_combined, ...]
+                    if snpobj[key].ndim > 1:
+                        snpobj[key] = np.asarray(snpobj[key])[mask_combined, ...]
+                    else:
+                        snpobj[key] = np.asarray(snpobj[key])[mask_combined]
 
             return snpobj
 
@@ -542,20 +630,28 @@ class SNPObject:
         if not include:
             mask_combined = ~mask_combined
 
-        # Filter `samples`
-        filtered_samples = sample_names[mask_combined].tolist()
+        # Define keys to filter
+        keys = ['samples', 'calldata_gt', 'calldata_lai']
 
-        # Filter `calldata_gt`
-        filtered_calldata_gt = np.array(self['calldata_gt'])[:, mask_combined, ...]
-
+        # Apply filtering based on inplace parameter
         if inplace:
-            self['samples'] = filtered_samples
-            self['calldata_gt'] = filtered_calldata_gt
+            for key in keys:
+                if self[key] is not None:
+                    if self[key].ndim > 1:
+                        self[key] = np.asarray(self[key])[:, mask_combined, ...]
+                    else:
+                        self[key] = np.asarray(self[key])[mask_combined]
+
             return None
         else:
+            # Create A new `SNPObject` with filtered data
             snpobj = self.copy()
-            snpobj['samples'] = filtered_samples
-            snpobj['calldata_gt'] = filtered_calldata_gt
+            for key in keys:
+                if snpobj[key] is not None:
+                    if snpobj[key].ndim > 1:
+                        snpobj[key] = np.asarray(snpobj[key])[:, mask_combined, ...]
+                    else:
+                        snpobj[key] = np.asarray(snpobj[key])[mask_combined]
             return snpobj
 
     def detect_chromosome_format(self) -> str:
@@ -1413,3 +1509,16 @@ class SNPObject:
             else:
                 log.warning(f"Chromosome nomenclature not standard. Chromosome: {chrom_string}")
                 return chrom_string
+
+    def _sanity_check(self) -> None:
+        """
+        Perform sanity checks to ensure LAI and ancestry map consistency.
+
+        This method checks that all unique ancestries in the LAI data are represented 
+        in the ancestry map if it is provided.
+        """
+        if self.__calldata_lai is not None and self.__ancestry_map is not None:
+            unique_ancestries = np.unique(self.__calldata_lai)
+            missing_ancestries = [anc for anc in unique_ancestries if str(anc) not in self.__ancestry_map]
+            if missing_ancestries:
+                warnings.warn(f"Missing ancestries in ancestry_map: {missing_ancestries}")

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.patches as patches
 
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 
 
 def _custom_cmap(colors: Dict, padding: float = 1.05):
@@ -29,7 +29,7 @@ def _custom_cmap(colors: Dict, padding: float = 1.05):
 
 
 def plot_lai(
-    laiobj: LocalAncestryObject, 
+    laiobj: WindowLevelAncestryObject, 
     colors: Dict,
     sort: Optional[bool]=True,
     figsize: Optional[Tuple[float, float]]=None,
@@ -45,7 +45,7 @@ def plot_lai(
     individual samples.
 
     Args:
-        laiobj: A LocalAncestryObject containing LAI data.
+        laiobj: A WindowLevelAncestryObject containing LAI data.
         colors: A dictionary with ancestry-color mapping.
         sort: If True, sort samples based on the most frequent ancestry. 
             Samples are displayed with the most predominant ancestry first, followed by the 

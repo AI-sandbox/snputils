@@ -6,21 +6,21 @@ import numpy as np
 import warnings
 
 from .base import LAIBaseWriter
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 
 log = logging.getLogger(__name__)
 
 
 class MSPWriter(LAIBaseWriter):
     """
-    A writer class for exporting local ancestry data from a `snputils.ancestry.genobj.LocalAncestryObject` 
+    A writer class for exporting local ancestry data from a `snputils.ancestry.genobj.WindowLevelAncestryObject` 
     into an `.msp` or `.msp.tsv` file.
     """
-    def __init__(self, laiobj: LocalAncestryObject, file: Union[str, Path]) -> None:
+    def __init__(self, laiobj: WindowLevelAncestryObject, file: Union[str, Path]) -> None:
         """
         Args:
-            laiobj (LocalAncestryObject):
-                A LocalAncestryObject instance.
+            laiobj (WindowLevelAncestryObject):
+                A WindowLevelAncestryObject instance.
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. It should end with `.msp` or `.msp.tsv`. 
                 If the provided path does not have one of these extensions, the `.msp` extension will be appended.
@@ -29,13 +29,13 @@ class MSPWriter(LAIBaseWriter):
         self.__file = Path(file)
 
     @property
-    def laiobj(self) -> LocalAncestryObject:
+    def laiobj(self) -> WindowLevelAncestryObject:
         """
         Retrieve `laiobj`. 
 
         Returns:
-            **LocalAncestryObject:** 
-                A LocalAncestryObject instance.
+            **WindowLevelAncestryObject:** 
+                A WindowLevelAncestryObject instance.
         """
         return self.__laiobj
 

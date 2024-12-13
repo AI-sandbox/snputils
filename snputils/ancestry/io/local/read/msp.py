@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .base import LAIBaseReader
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 
 log = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 class MSPReader(LAIBaseReader):
     """
     A reader class for parsing Local Ancestry Inference (LAI) data from an `.msp` or `msp.tsv` file
-    and constructing a `snputils.ancestry.genobj.LocalAncestryObject`.
+    and constructing a `snputils.ancestry.genobj.WindowLevelAncestryObject`.
     """
     def __init__(self, file: Union[str, Path]) -> None:
         """
@@ -106,10 +106,10 @@ class MSPReader(LAIBaseReader):
                     return None
         return array
 
-    def read(self) -> 'LocalAncestryObject':
+    def read(self) -> 'WindowLevelAncestryObject':
         """
         Read data from the provided `.msp` or `msp.tsv` `file` and construct a 
-        `snputils.ancestry.genobj.LocalAncestryObject`.
+        `snputils.ancestry.genobj.WindowLevelAncestryObject`.
 
         **Expected MSP content:**
 
@@ -126,8 +126,8 @@ class MSPReader(LAIBaseReader):
         - `SampleID.1`: Local ancestry for the second haplotype of the sample for each window.
 
         Returns:
-            **LocalAncestryObject:**
-                A LocalAncestryObject instance.
+            **WindowLevelAncestryObject:**
+                A WindowLevelAncestryObject instance.
         """
         log.info(f"Reading '{self.file}'...")
 
@@ -160,7 +160,7 @@ class MSPReader(LAIBaseReader):
         msp_df = pd.read_csv(self.file, sep="\t", comment="#", names=header)
 
         # Extract chromosomes data
-        chromosomes = msp_df['#chm'].to_numpy()
+        chromosomes = msp_df['#chm'].astype(str).to_numpy()
 
         # Extract physical positions (if available)
         column_counter = 1
@@ -231,7 +231,7 @@ class MSPReader(LAIBaseReader):
         chromosomes = self._replace_nan_with_none(chromosomes)
         physical_pos = self._replace_nan_with_none(physical_pos)
 
-        return LocalAncestryObject(
+        return WindowLevelAncestryObject(
             haplotypes=haplotypes,
             lai=lai,
             samples=samples,

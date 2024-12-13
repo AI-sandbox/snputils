@@ -10,7 +10,7 @@ from typing import Optional, Dict, List, Union
 from sklearn.decomposition import TruncatedSVD
 
 from snputils.snp.genobj.snpobj import SNPObject
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 from ._utils.gen_tools import array_process, process_labels_weights
 from ._utils.iterative_svd import IterativeSVD
 
@@ -28,7 +28,7 @@ class mdPCA:
         self,
         method: str = 'weighted_cov_pca',
         snpobj: Optional['SNPObject'] = None,
-        laiobj: Optional['LocalAncestryObject'] = None,
+        laiobj: Optional['WindowLevelAncestryObject'] = None,
         labels_file: Optional[str] = None,
         ancestry: Optional[str] = None,
         is_masked: bool = True,
@@ -191,17 +191,17 @@ class mdPCA:
         self.__snpobj = x
 
     @property
-    def laiobj(self) -> Optional['LocalAncestryObject']:
+    def laiobj(self) -> Optional['WindowLevelAncestryObject']:
         """
         Retrieve `laiobj`.
         
         Returns:
-            **LocalAncestryObject:** A LocalAncestryObject instance.
+            **WindowLevelAncestryObject:** A WindowLevelAncestryObject instance.
         """
         return self.__laiobj
 
     @laiobj.setter
-    def laiobj(self, x: 'LocalAncestryObject') -> None:
+    def laiobj(self, x: 'WindowLevelAncestryObject') -> None:
         """
         Update `laiobj`.
         """
@@ -841,7 +841,7 @@ class mdPCA:
     def fit_transform(
             self,
             snpobj: Optional['SNPObject'] = None, 
-            laiobj: Optional['LocalAncestryObject'] = None,
+            laiobj: Optional['WindowLevelAncestryObject'] = None,
             labels_file: Optional[str] = None,
             ancestry: Optional[str] = None,
             average_strands: Optional[bool] = None

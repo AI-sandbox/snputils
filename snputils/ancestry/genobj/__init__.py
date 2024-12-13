@@ -1,4 +1,4 @@
 from .wide import GlobalAncestryObject
-from .local import LocalAncestryObject
+from .window import WindowLevelAncestryObject
 
-__all__ = ['GlobalAncestryObject', 'LocalAncestryObject']
+__all__ = ['GlobalAncestryObject', 'WindowLevelAncestryObject']

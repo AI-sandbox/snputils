@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 import numpy as np
 import copy
@@ -5,11 +6,14 @@ import warnings
 from typing import Union, List, Dict, Sequence, Optional
 
 from .base import AncestryObject
+from snputils.snp.genobj.snpobj import SNPObject
+
+log = logging.getLogger(__name__)
 
 
-class LocalAncestryObject(AncestryObject):
+class WindowLevelAncestryObject(AncestryObject):
     """
-    A class for Local Ancestry Inference (LAI) data.
+    A class for window-level Local Ancestry Inference (LAI) data.
     """
     def __init__(
         self,
@@ -50,7 +54,7 @@ class LocalAncestryObject(AncestryObject):
         n_haplotypes = lai.shape[1]
         n_samples = n_haplotypes // 2
 
-        super(LocalAncestryObject, self).__init__(n_samples, n_ancestries)
+        super(WindowLevelAncestryObject, self).__init__(n_samples, n_ancestries)
 
         self.__haplotypes = haplotypes
         self.__lai = lai
@@ -128,7 +132,12 @@ class LocalAncestryObject(AncestryObject):
         Returns:
             **list of str:** A list of unique sample identifiers.
         """
-        return self.__samples
+        if self.__samples is not None:
+            return self.__samples
+        elif self.__haplotypes is not None:
+            return [hap.split('.')[0] for hap in self.__haplotypes][::2]
+        else:
+            return None
     
     @samples.setter
     def samples(self, x):
@@ -277,12 +286,12 @@ class LocalAncestryObject(AncestryObject):
         """
         return self.__lai.shape[0]
 
-    def copy(self) -> 'LocalAncestryObject':
+    def copy(self) -> 'WindowLevelAncestryObject':
         """
         Create and return a copy of `self`.
 
         Returns:
-            **LocalAncestryObject:** 
+            **WindowLevelAncestryObject:** 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -296,14 +305,14 @@ class LocalAncestryObject(AncestryObject):
                 A list of attribute names, with internal name-mangling removed, 
                 for easier reference to public attributes in the instance.
         """
-        return [attr.replace('_LocalAncestryObject__', '').replace('_AncestryObject__', '') for attr in vars(self)]
+        return [attr.replace('_WindowLevelAncestryObject__', '').replace('_AncestryObject__', '') for attr in vars(self)]
 
     def filter_windows(
             self,
             indexes: Union[int, Sequence[int], np.ndarray],
             include: bool = True,
             inplace: bool = False
-        ) -> Optional['LocalAncestryObject']:
+        ) -> Optional['WindowLevelAncestryObject']:
         """
         Filter genomic windows based on specified indexes. 
 
@@ -322,12 +331,12 @@ class LocalAncestryObject(AncestryObject):
                 If True, includes only the specified windows. If False, excludes the specified
                 windows. Default is True.
             inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `LocalAncestryObject` with 
+                If True, modifies `self` in place. If False, returns a new `WindowLevelAncestryObject` with 
                 the windows filtered. Default is False.
 
         Returns:
-            **Optional[LocalAncestryObject]:** 
-                A new `LocalAncestryObject` with the specified windows filtered if `inplace=False`. 
+            **Optional[WindowLevelAncestryObject]:** 
+                A new `WindowLevelAncestryObject` with the specified windows filtered if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Convert indexes to a NumPy array
@@ -388,7 +397,7 @@ class LocalAncestryObject(AncestryObject):
         indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
         include: bool = True,
         inplace: bool = False
-    ) -> Optional['LocalAncestryObject']:
+    ) -> Optional['WindowLevelAncestryObject']:
         """
         Filter samples based on specified names or indexes.
 
@@ -413,12 +422,12 @@ class LocalAncestryObject(AncestryObject):
                 If True, includes only the specified samples. If False, excludes the specified
                 samples. Default is True.
             inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `LocalAncestryObject` with the 
+                If True, modifies `self` in place. If False, returns a new `WindowLevelAncestryObject` with the 
                 samples filtered. Default is False.
 
         Returns:
-            **Optional[LocalAncestryObject]:** 
-                A new `LocalAncestryObject` with the specified samples filtered if `inplace=False`. 
+            **Optional[WindowLevelAncestryObject]:** 
+                A new `WindowLevelAncestryObject` with the specified samples filtered if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         if samples is None and indexes is None:
@@ -485,6 +494,170 @@ class LocalAncestryObject(AncestryObject):
             laiobj['samples'] = filtered_samples
             laiobj['lai'] = filtered_lai
             return laiobj
+
+    def convert_to_snp_level(
+        self,
+        snpobject: Optional['SNPObject'] = None,
+        variants_chrom: Optional[np.ndarray] = None,
+        variants_pos: Optional[np.ndarray] = None,
+        variants_ref: Optional[np.ndarray] = None,
+        variants_alt: Optional[np.ndarray] = None,
+        variants_filter_pass: Optional[np.ndarray] = None,
+        variants_id: Optional[np.ndarray] = None,
+        variants_qual: Optional[np.ndarray] = None
+    ) -> 'SNPObject':
+        """
+        Convert `self` into a `snputils.snp.genobj.SNPObject` SNP-level Local Ancestry Information (LAI), 
+        with optional support for Single Nucleotide Polymorphism (SNP) data.
+        
+        If SNP positions (`variants_pos`) and chromosomes (`variants_chrom`) are not specified, the method generates 
+        SNPs uniformly across the start and end positions of each genomic window. Otherwise, the provided SNP 
+        coordinates are used to assign ancestry values based on their respective windows.
+
+        If an `SNPObject` is provided, its attributes are used unless explicitly overridden by the function arguments.
+
+        Args:
+            snpobject (SNPObject, optional):
+                An existing `SNPObject` to extract SNP attributes from.
+            variants_chrom (array of shape (n_snps,), optional): 
+                An array containing the chromosome for each SNP.
+            variants_pos (array of shape (n_snps,), optional): 
+                An array containing the chromosomal positions for each SNP.
+            variants_ref (array of shape (n_snps,), optional): 
+                An array containing the reference allele for each SNP.
+            variants_alt (array of shape (n_snps,), optional): 
+                An array containing the alternate allele for each SNP.
+            variants_filter_pass (array of shape (n_snps,), optional): 
+                An array indicating whether each SNP passed control checks.
+            variants_id (array of shape (n_snps,), optional): 
+                An array containing unique identifiers (IDs) for each SNP.
+            variants_qual (array of shape (n_snps,), optional): 
+                An array containing the Phred-scaled quality score for each SNP.
+
+        Returns:
+            SNPObject: 
+                A `SNPObject` containing SNP-level ancestry data, along with optional metadata.
+        """
+        # Extract attributes from SNPObject if provided
+        if snpobject is not None:
+            variants_chrom = variants_chrom if variants_chrom is not None else snpobject.variants_chrom
+            variants_pos = variants_pos if variants_pos is not None else snpobject.variants_pos
+            variants_ref = variants_ref if variants_ref is not None else snpobject.variants_ref
+            variants_alt = variants_alt if variants_alt is not None else snpobject.variants_alt
+            variants_filter_pass = variants_filter_pass if variants_filter_pass is not None else snpobject.variants_filter_pass
+            variants_id = variants_id if variants_id is not None else snpobject.variants_id
+            variants_qual = variants_qual if variants_qual is not None else snpobject.variants_qual
+
+        n_samples = self.n_samples
+
+        # Reshape lai to (n_windows, n_samples, 2)
+        lai_reshaped = self.lai.reshape(self.n_windows, n_samples, 2)
+
+        if variants_pos is None or variants_chrom is None:
+            # Generate SNP positions and chromosomes from windows
+            variants_pos_list = []
+            variants_chrom_list = []
+            ancestry_list = []
+
+            for i in range(self.n_windows):
+                start = int(self.physical_pos[i, 0])
+                end = int(self.physical_pos[i, 1])
+                chrom = self.chromosomes[i]
+                ancestry = lai_reshaped[i, :, :]  # Shape: (n_samples, 2)
+
+                # Create SNP positions between start and end with the given step size
+                positions_in_window = np.arange(start, end + 1)
+                n_positions = len(positions_in_window)
+
+                if n_positions == 0:
+                    continue  # Skip windows with no positions
+
+                variants_pos_list.append(positions_in_window)
+                variants_chrom_list.append(np.full(n_positions, chrom))
+
+                # Repeat ancestry for each SNP position in the window
+                ancestry_repeated = np.repeat(ancestry[np.newaxis, :, :], n_positions, axis=0)
+                ancestry_list.append(ancestry_repeated)
+
+                # Concatenate all SNP positions, chromosomes, and ancestries
+                variants_pos = np.concatenate(variants_pos_list)
+                variants_chrom = np.concatenate(variants_chrom_list)
+                calldata_lai = np.concatenate(ancestry_list)
+
+        else:
+            # Use provided SNP positions and chromosomes
+            n_snps = len(variants_pos)
+            if len(variants_chrom) != n_snps:
+                raise ValueError("`variants_pos` and `variants_chrom` must have the same length.")
+
+            # Map SNPs to windows
+            window_starts = self.physical_pos[:, 0]
+            window_ends = self.physical_pos[:, 1]
+            window_chromosomes = self.chromosomes
+            
+            # Initialize array to store window indices for each SNP
+            snp_to_window_indices = np.full(n_snps, -1, dtype=int)
+            unique_chroms = np.unique(variants_chrom)
+
+            for chrom in unique_chroms:
+                # Indices of SNPs on this chromosome
+                snp_indices = np.where(variants_chrom == chrom)[0]
+                snp_pos_chr = variants_pos[snp_indices]
+                
+                # Indices of windows on this chromosome
+                window_indices = np.where(window_chromosomes == chrom)[0]
+                window_starts_chr = window_starts[window_indices]
+                window_ends_chr = window_ends[window_indices]
+                
+                # Check if windows are defined
+                if len(window_starts_chr) == 0:
+                    continue
+                
+                # For SNP positions, find where they would be inserted in window_starts to maintain order
+                inds = np.searchsorted(window_starts_chr, snp_pos_chr, side='right') - 1
+                
+                # Ensure indices are within valid range
+                valid_inds = (inds >= 0) & (inds < len(window_starts_chr))
+                snp_inds_valid = snp_indices[valid_inds]
+                inds_valid = inds[valid_inds]
+                snp_pos_valid = snp_pos_chr[valid_inds]
+                
+                # Check if SNP positions are within window ranges
+                within_window = snp_pos_valid <= window_ends_chr[inds_valid]
+                final_snp_indices = snp_inds_valid[within_window]
+                final_window_indices = window_indices[inds_valid[within_window]]
+                log.debug(f"Number of SNPs within window ranges for chromosome {chrom}: {len(final_snp_indices)}")
+                
+                # Assign window indices to SNPs
+                snp_to_window_indices[final_snp_indices] = final_window_indices
+
+            # Initialize SNP-level ancestry array
+            calldata_lai = np.full((n_snps, n_samples, 2), np.nan)
+
+            # Create a boolean mask for valid SNP indices (where window_idx != -1)
+            valid_snp_mask = (snp_to_window_indices != -1)
+
+            # Get the array of valid SNP indices
+            valid_snp_indices = np.where(valid_snp_mask)[0]
+
+            # Get the corresponding window indices for valid SNPs
+            valid_window_indices = snp_to_window_indices[valid_snp_indices]
+
+            # Assign lai_values to calldata_lai for all valid SNPs at once
+            calldata_lai[valid_snp_indices] = lai_reshaped[valid_window_indices]
+        
+        return SNPObject(
+            calldata_lai=calldata_lai,
+            samples=self.samples,
+            variants_ref=variants_ref,
+            variants_alt=variants_alt,
+            variants_filter_pass=variants_filter_pass,
+            variants_chrom=variants_chrom,
+            variants_id=variants_id,
+            variants_pos=variants_pos,
+            variants_qual=variants_qual,
+            ancestry_map=self.ancestry_map
+        )
 
     def _sanity_check(self) -> None:
         """

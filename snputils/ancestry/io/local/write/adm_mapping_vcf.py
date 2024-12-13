@@ -4,7 +4,7 @@ import numpy as np
 from typing import Dict, Union, Optional
 from pathlib import Path
 
-from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.ancestry.genobj.window import WindowLevelAncestryObject
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.write.vcf import VCFWriter
 
@@ -18,14 +18,14 @@ class AdmixtureMappingVCFWriter:
     """
     def __init__(
             self, 
-            laiobj: LocalAncestryObject, 
+            laiobj: WindowLevelAncestryObject, 
             file: Union[str, Path], 
             ancestry_map: Optional[Dict[str, str]] = None
         ):
         """
         Args:
-            laiobj (LocalAncestryObject): 
-                A LocalAncestryObject instance.
+            laiobj (WindowLevelAncestryObject): 
+                A WindowLevelAncestryObject instance.
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. It should end with `.vcf` or `.bcf`. 
                 If the provided path does not have one of these extensions, the `.vcf` extension will be appended.
@@ -38,13 +38,13 @@ class AdmixtureMappingVCFWriter:
         self.__ancestry_map = ancestry_map
 
     @property
-    def laiobj(self) -> LocalAncestryObject:
+    def laiobj(self) -> WindowLevelAncestryObject:
         """
         Retrieve `laiobj`. 
 
         Returns:
-            **LocalAncestryObject:** 
-                A LocalAncestryObject instance.
+            **WindowLevelAncestryObject:** 
+                A WindowLevelAncestryObject instance.
         """
         return self.__laiobj
 

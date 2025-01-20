@@ -22,7 +22,6 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "numpy<2; python_version < '3.10'",
     "numpy; python_version >= '3.10'",
     "pandas",
     "pandas-stubs",
@@ -39,6 +38,7 @@ dependencies = [
     "nbformat",
     "adjustText",
     "zstandard",
+    "pygrgl"
 ]
 
 [project.optional-dependencies]

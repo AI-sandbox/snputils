@@ -85,7 +85,9 @@ target/
 # IPython
 profile_default/
 ipython_config.py
-
+*.vcf
+*.grg
+*.igd
 # pyenv
 .python-version
 

@@ -1,1 +1,2 @@
 from .scatter_plot import scatter
+from .chromosome_painting import chromosome_painting_from_bed, chromosome_paintings_from_msp_files

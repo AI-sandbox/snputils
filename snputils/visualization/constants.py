@@ -82,3 +82,16 @@ CHROM_SIZES = {
         "Y": 57227415,
     },
 }
+
+snputils_palette = [
+    "#3E5C76", # Mystic Indigo
+    "#76B7B2", # Teal
+    "#E15759", # Red
+    "#F28E2B", # Orange
+    "#7E5A9B", # Lunar Lavender
+    "#9E9AC8", # Light Blue
+    "#5A7F4A", # Verdant Dusk
+    "#59A14F", # Green
+    "#7D7F7F", # Nebula Gray
+    "#1B263B", # Deep Space Blue
+]

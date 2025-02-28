@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 chromosome_painting.py
 
@@ -15,7 +14,6 @@ import pickle
 import re
 import sys
 from typing import List, Optional, Union, Dict, Tuple
-
 import cairosvg
 
 from snputils.ancestry.io.local.write.msp_to_bed import msp_files_to_bed
@@ -27,8 +25,17 @@ logging.basicConfig(level=logging.INFO)
 
 def load_svg_base() -> Tuple[str, str]:
     """
-    Load the SVG header and footer from the base.svg.p file
-    (assumed to be in the same directory as this script).
+    Load the SVG header and footer from the base.svg.p file.
+
+    The base.svg.p file is expected to be in the same directory as this script
+    and should contain a pickled tuple of two strings: the SVG header and footer.
+
+    Returns:
+        Tuple[str, str]: A tuple containing (svg_header, svg_footer) strings
+            needed to construct the complete SVG document.
+
+    Raises:
+        Exception: If the file cannot be found or loaded properly.
     """
     base_svg_path = pathlib.Path(__file__).parent / "base.svg.p"
     try:
@@ -36,7 +43,7 @@ def load_svg_base() -> Tuple[str, str]:
             svg_header, svg_footer = pickle.load(fh)
         return svg_header, svg_footer
     except Exception as e:
-        log.error(f"Error loading base SVG file at {base_svg_path}: {e}")
+        log.error(f"Failed to load base SVG file from {base_svg_path}: {e}")
         raise
 
 
@@ -181,10 +188,10 @@ def chromosome_painting_from_bed(
 ) -> str:
     """
     Generate a chromosome painting from a BED file.
-    
+
     This function creates an SVG file from the BED input and then converts it to the specified format.
     Use this function if you already have a properly formatted BED file.
-    
+
     Args:
         bed_file: Path to the BED file.
         output_prefix: Output prefix (SVG and output file will be saved as <output_prefix>.svg and <output_prefix>.[png|pdf]).
@@ -193,9 +200,12 @@ def chromosome_painting_from_bed(
         force: Overwrite existing files.
         verbose: If True, show verbose output.
         show: If True, show the output file (only works for PNG format).
-    
+
     Returns:
-        Path to the generated output file.
+        str: Path to the generated output file.
+
+    Raises:
+        ValueError: If output_format is not 'png' or 'pdf'.
     """
     bed_file = str(bed_file)
     output_prefix = str(output_prefix)
@@ -209,10 +219,10 @@ def chromosome_painting_from_bed(
     svg_header, svg_footer = load_svg_base()
 
     if not force and os.path.exists(svg_file):
-        log.info(f"SVG file {svg_file} already exists. Skipping generation.")
+        log.info(f"Found existing SVG file at {svg_file}, skipping generation")
     else:
         if verbose:
-            log.info(f"Generating SVG from {bed_file} ...")
+            log.info(f"Generating SVG painting from {bed_file}")
         # Create the SVG painting from the BED file
         draw_svg(
             input_bed=bed_file,
@@ -224,10 +234,10 @@ def chromosome_painting_from_bed(
         )
 
     if not force and os.path.exists(output_file):
-        log.info(f"{output_format.upper()} file {output_file} already exists. Skipping conversion.")
+        log.info(f"Found existing {output_format.upper()} file at {output_file}, skipping conversion")
     else:
         if verbose:
-            log.info(f"Converting SVG {svg_file} to {output_format.upper()} ...")
+            log.info(f"Converting SVG to {output_format.upper()} format")
         # Convert the SVG to the desired format
         try:
             if output_format == "png":
@@ -236,7 +246,7 @@ def chromosome_painting_from_bed(
                 cairosvg.svg2pdf(url=svg_file, write_to=output_file)
             
             if verbose:
-                log.info(f"Converted {svg_file} to {output_file}")
+                log.info(f"Successfully generated {output_format.upper()} file at {output_file}")
             
             if show and output_format == "png":
                 import matplotlib.pyplot as plt
@@ -248,9 +258,9 @@ def chromosome_painting_from_bed(
                 plt.tight_layout(pad=0)
                 plt.show()
             elif show and output_format == "pdf":
-                log.warning("Show option is only supported for PNG format")
+                log.warning("Show functionality is only supported for PNG format")
         except Exception as e:
-            log.error(f"Error converting SVG to {output_format.upper()}: {e}")
+            log.error(f"Failed to convert SVG to {output_format.upper()} format: {e}")
             raise
 
     return output_file

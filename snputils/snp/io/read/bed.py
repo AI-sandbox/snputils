@@ -129,8 +129,7 @@ class BEDReader(SNPBaseReader):
                     "IID": pl.String,
                     "Father ID": pl.String,
                     "Mother ID": pl.String,
-                    "Sex code": pl.Int64,
-                    "Phenotype value": pl.Float64
+                    "Sex code": pl.String,
                 }
             ).with_row_index()
             file_num_samples = fam.height

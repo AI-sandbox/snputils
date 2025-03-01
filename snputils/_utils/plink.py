@@ -38,9 +38,9 @@ def download_plink(suppress_output: bool = True) -> Path:
     return plink_path
 
 
-def execute_plink_cmd(args, cwd=None, supress_output=True) -> subprocess.CompletedProcess:
+def execute_plink_cmd(args, cwd=None, suppress_output=True) -> subprocess.CompletedProcess:
     cwd = cwd or get_data_home()
-    plink_path = download_plink(supress_output=supress_output)  # Download plink if it does not exist
+    plink_path = download_plink(suppress_output=suppress_output)  # Download plink if it does not exist
     args = [arg for arg in args if arg is not None]  # Remove None arguments
     return subprocess.run([str(plink_path), *args], cwd=str(cwd),
-                          stdout=subprocess.DEVNULL if supress_output else None)
+                          stdout=subprocess.DEVNULL if suppress_output else None)

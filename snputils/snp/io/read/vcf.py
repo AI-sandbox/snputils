@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List
+from typing import Optional, List, Any
 from pathlib import Path
 import gzip
 import csv
@@ -7,15 +7,26 @@ import csv
 import allel
 import numpy as np
 import polars as pl
-
+import pygrgl as pyg
+import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
+from snputils.common.utils import ITE
+from os.path import splitext, exists, abspath
+import subprocess
 
+import pathlib 
+from typing import Union
 log = logging.getLogger(__name__)
 
 
 @SNPBaseReader.register
 class VCFReader(SNPBaseReader):
+    def __init__(self, filename: Union[str, pathlib.Path]):
+        super().__init__(filename)
+        self._igd_path : Union[str, pathlib.Path] = None
+        self._grg_path : Union[str, pathlib.Path] = None
+
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -96,6 +107,94 @@ class VCFReader(SNPBaseReader):
 
         log.info(f"Finished reading {self.filename}")
         return snpobj
+    # for now, I'm gonna do this in a bit of a hacky way
+    def _to_igd(self) -> None:
+        """
+        Converts the VCF file to an IGD file. Do not call this.
+        """
+
+        if not exists(self.filename):
+            raise FileNotFoundError(f"File {self.filename} does not exist")
+
+
+        # split extension twice
+        name, _ext1 = splitext(self.filename)
+        name, _ext2 = splitext(self.filename)
+        # may use _ext later. not sure. 
+        _ext = _ext1 + _ext2
+        self._igd_path : pathlib.Path = pathlib.Path(name + ".igd") 
+
+        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)])
+        
+            
+    def to_grg(self,
+               range : Optional[str] = None,
+               parts : Optional[int] = None,
+               jobs  : Optional[int] = None,
+               trees : Optional[int] = None,
+               binmuts : Optional[bool] = None,
+               no_file_cleanup : Optional[bool] = None,
+               maf_flip : Optional[bool] = None,
+               shape_lf_filter : Optional[float] = None,
+               population_ids : Optional[str] = None,
+               bs_triplet : Optional[int] = None,
+               out_file : Optional[str] = None,
+               verbose : Optional[bool] = None,
+               no_merge : Optional[bool] = None,
+               ) -> None:
+        """
+        Converts the VCF file to a GRG file using an IGD intermediary. All of these parameters are passed into the grg command-line tool.
+        The main difference is in parts and trees, which are designed for large files.
+        Args:
+            range: Restrict to the given range. Can be absolute (in base-pairs) or relative (0.0 to 1.0).
+            parts: The number of parts to split the sequence into; Unlike grgl's default of 8, we default to 50.
+            jobs: Number of jobs (threads/cores) to use. Defaults to 1.
+            trees: Number of trees to use during shape construction. Unlike grgl, defaults to 16. 
+            binary_muts: Use binary mutations (don't track specific alternate alleles).
+            no_file_cleanup: Do not cleanup intermediate files (for debugging, e.g.).
+            maf_flip: Switch the reference allele with the major allele when they differ
+            shape_lf_filter: During shape construction ignore mutations with counts less than this.
+                If value is <1.0 then it is treated as a frequency. Defaults to 10 (count).
+            population_ids: Format: "filename:fieldname". Read population ids from the given 
+                tab-separate file, using the given fieldname.
+            bs_triplet: Run the triplet algorithm for this many iterations in BuildShape
+            out_file: Specify an output file. If none is supplied, the default name is <current_vcf_name>.grg.
+            verbose:Verbose output, including timing information.
+            no_merge: Do not merge the resulting GRGs (so if you specified "parts = C" there will be C GRGs).
+        """
+        self._to_igd()
+        name, _ext = splitext(self._igd_path)
+        self._grg_path = name + ".grg"
+
+
+
+        args = ["grg", "construct"]
+        args += self._bind(range, "-r", None)
+        args += self._bind(parts, "-p", 50)
+        args += self._bind(jobs,  "-j", f"{multiprocessing.cpu_count()}")
+        args += self._bind(trees, "-t", 16)
+        args += self._bind(binmuts, "-b", None)
+        args += self._bind(no_file_cleanup, "-c", None)
+        args += self._bind(maf_flip, "--maf-flip", None)
+        args += self._bind(shape_lf_filter, "--shape-lf-filter", None)
+        args += self._bind(population_ids, "--population-ids", None)
+        args += self._bind(bs_triplet, "--bs_triplet", None)
+        args += self._bind(out_file, "--out-file", self._grg_path)
+        args += self._bind(verbose, "-v", None)
+        args += self._bind(no_merge, "--no-merge", None)
+        subprocess.run(args)
+        
+
+        # with so many option types, the best path seems monadic to me
+    def _bind(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
+        if x is None and default_arg is not None:
+            return [flag, default_arg] 
+        elif x is not None:
+            return [flag, f"{x}"]
+        else:
+            return []
+        
+
 
 
 def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):

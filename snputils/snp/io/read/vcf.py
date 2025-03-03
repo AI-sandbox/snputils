@@ -183,13 +183,14 @@ class VCFReader(SNPBaseReader):
         args += self._bind(out_file, "--out-file", self._grg_path)
         args += self._bind(verbose, "-v", None)
         args += self._bind(no_merge, "--no-merge", None)
+        args += [f"{self._igd_path}"]
         subprocess.run(args)
         
 
         # with so many option types, the best path seems monadic to me
     def _bind(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
         if x is None and default_arg is not None:
-            return [flag, default_arg] 
+            return [flag, f"{default_arg}"] 
         elif x is not None:
             return [flag, f"{x}"]
         else:

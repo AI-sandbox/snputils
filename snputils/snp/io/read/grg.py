@@ -1,0 +1,16 @@
+import pygrgl as pyg
+from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.read.base import SNPBaseReader
+from typing import Optional, Union
+from os.path import abspath
+import pathlib
+@SNPBaseReader.register
+class GRGReader(SNPBaseReader):
+    def read(self,
+             mutable: Optional[bool] = None) -> Union[pyg.GRG | pyg.mutableGRG]:
+        if isinstance(self.filename, pathlib.Path):
+                self.filename = abspath(self.filename)
+        if mutable:
+            return pyg.load_mutable_grg(self.filename)
+        else:
+            return pyg.load_immutable_grg(self.filename)

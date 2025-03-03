@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snputils"
-dynamic = ["version"]  # Version is set by setuptools_scm and determined by the latest git tag
+version = "2.78"
+# dynamic = ["version"]  # Version is set by setuptools_scm and determined by the latest git tag
 description = "Process diverse genomes with ease"
 readme = "README.md"
 requires-python = ">=3.8"

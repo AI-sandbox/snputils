@@ -6,6 +6,7 @@ import csv
 
 import allel
 import numpy as np
+import time # TODO remove
 import polars as pl
 import pygrgl as pyg
 import multiprocessing
@@ -13,8 +14,9 @@ from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.common.utils import ITE
 from os.path import splitext, exists, abspath
+import os 
 import subprocess
-
+from io import TextIOWrapper
 import pathlib 
 from typing import Union
 log = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ class VCFReader(SNPBaseReader):
         super().__init__(filename)
         self._igd_path : Union[str, pathlib.Path] = None
         self._grg_path : Union[str, pathlib.Path] = None
-
+        self.debug : bool = True
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -108,23 +110,33 @@ class VCFReader(SNPBaseReader):
         log.info(f"Finished reading {self.filename}")
         return snpobj
     # for now, I'm gonna do this in a bit of a hacky way
-    def _to_igd(self) -> None:
+    def _to_igd(self,
+                logfile_out : Optional[str] = None,
+                logfile_err : Optional[str] = None) -> None:
         """
         Converts the VCF file to an IGD file. Do not call this.
         """
 
         if not exists(self.filename):
             raise FileNotFoundError(f"File {self.filename} does not exist")
-
-
+        print(logfile_out, os.devnull)
+        lf_o = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
+        lf_e = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+        # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
+        # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
         # split extension twice
         name, _ext1 = splitext(self.filename)
-        name, _ext2 = splitext(self.filename)
+        name, _ext2 = splitext(name)
         # may use _ext later. not sure. 
         _ext = _ext1 + _ext2
         self._igd_path : pathlib.Path = pathlib.Path(name + ".igd") 
 
-        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)])
+        if not isinstance(lf_o, int):
+            lf_o.close()
+        if not isinstance(lf_e, int):
+            lf_e.close()
+
+        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)], stdout=lf_o, stderr=lf_e)
         
             
     def to_grg(self,
@@ -141,6 +153,8 @@ class VCFReader(SNPBaseReader):
                out_file : Optional[str] = None,
                verbose : Optional[bool] = None,
                no_merge : Optional[bool] = None,
+               logfile_out : Optional[str] = None,
+               logfile_err : Optional[str] = None
                ) -> None:
         """
         Converts the VCF file to a GRG file using an IGD intermediary. All of these parameters are passed into the grg command-line tool.
@@ -162,32 +176,52 @@ class VCFReader(SNPBaseReader):
             verbose:Verbose output, including timing information.
             no_merge: Do not merge the resulting GRGs (so if you specified "parts = C" there will be C GRGs).
         """
-        self._to_igd()
+
+        # for debugging only 
+        if self.debug:
+            start = time.time()
+        self._to_igd(logfile_out, logfile_err)
+        if self.debug:
+            end = time.time()
+            print("vcf -> igd ", end - start)
         name, _ext = splitext(self._igd_path)
         self._grg_path = name + ".grg"
 
-
-
+        # set logfiles 
+        # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
+        lf_o = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
+        lf_e = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+        # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
+        # lf_e : TextIOWrapper  = ITE((logfile_err == None), open(os.devnull, "w"), open(logfile_err, "w"))
+        if self.debug:
+            start = time.time()
         args = ["grg", "construct"]
-        args += self._bind(range, "-r", None)
-        args += self._bind(parts, "-p", 50)
-        args += self._bind(jobs,  "-j", f"{multiprocessing.cpu_count()}")
-        args += self._bind(trees, "-t", 16)
-        args += self._bind(binmuts, "-b", None)
-        args += self._bind(no_file_cleanup, "-c", None)
-        args += self._bind(maf_flip, "--maf-flip", None)
-        args += self._bind(shape_lf_filter, "--shape-lf-filter", None)
-        args += self._bind(population_ids, "--population-ids", None)
-        args += self._bind(bs_triplet, "--bs_triplet", None)
-        args += self._bind(out_file, "--out-file", self._grg_path)
-        args += self._bind(verbose, "-v", None)
-        args += self._bind(no_merge, "--no-merge", None)
+        args += self._setarg(range, "-r", None)
+        args += self._setarg(parts, "-p", 50)
+        args += self._setarg(jobs,  "-j", f"{multiprocessing.cpu_count()}")
+        args += self._setarg(trees, "-t", 16)
+        args += self._setarg(binmuts, "-b", None)
+        args += self._setarg(no_file_cleanup, "-c", None)
+        args += self._setarg(maf_flip, "--maf-flip", None)
+        args += self._setarg(shape_lf_filter, "--shape-lf-filter", None)
+        args += self._setarg(population_ids, "--population-ids", None)
+        args += self._setarg(bs_triplet, "--bs_triplet", None)
+        args += self._setarg(out_file, "--out-file", self._grg_path)
+        args += self._setarg(verbose, "-v", None)
+        args += self._setarg(no_merge, "--no-merge", None)
         args += [f"{self._igd_path}"]
-        subprocess.run(args)
-        
-
+        subprocess.run(args, stdout=lf_o, stderr=lf_e)
+        if self.debug:
+            end = time.time()
+            print("igd -> grg ", end - start)
+        if not isinstance(lf_o, int):
+            lf_o.close()
+        if not isinstance(lf_e, int):
+            lf_e.close()
         # with so many option types, the best path seems monadic to me
-    def _bind(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
+        # it's not truly monadic
+        # options are type hints not haskell maybes
+    def _setarg(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
         if x is None and default_arg is not None:
             return [flag, f"{default_arg}"] 
         elif x is not None:

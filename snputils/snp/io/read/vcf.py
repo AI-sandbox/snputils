@@ -12,7 +12,7 @@ import pygrgl as pyg
 import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
-from snputils.common.utils import ITE
+from snputils.common._utils import ITE
 from os.path import splitext, exists, abspath
 import os 
 import subprocess
@@ -28,7 +28,7 @@ class VCFReader(SNPBaseReader):
         super().__init__(filename)
         self._igd_path : Union[str, pathlib.Path] = None
         self._grg_path : Union[str, pathlib.Path] = None
-        self.debug : bool = True
+        self.debug : bool = False # no more debugging required
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -115,13 +115,19 @@ class VCFReader(SNPBaseReader):
                 logfile_err : Optional[str] = None) -> None:
         """
         Converts the VCF file to an IGD file. Do not call this.
+        Args:
+            These are shared with to_grg.
+            logfile_out: The file to log standard output to. If None (default), no output will be logged (i.e., piped to dev null).
+            logfile_err: The file to log standard error to. If None (default), no error will be logged (i.e., piped to dev null).
+
         """
 
         if not exists(self.filename):
             raise FileNotFoundError(f"File {self.filename} does not exist")
-        print(logfile_out, os.devnull)
-        lf_o = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
-        lf_e = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+
+        # TODO use ITE
+        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
+        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
         # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
         # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
         # split extension twice
@@ -175,6 +181,9 @@ class VCFReader(SNPBaseReader):
             out_file: Specify an output file. If none is supplied, the default name is <current_vcf_name>.grg.
             verbose:Verbose output, including timing information.
             no_merge: Do not merge the resulting GRGs (so if you specified "parts = C" there will be C GRGs).
+            logfile_out: The file to log standard output to. If None (default), no output will be logged (i.e., piped to dev null).
+            logfile_err: The file to log standard error to. If None (default), no error will be logged (i.e., piped to dev null).
+
         """
 
         # for debugging only 
@@ -189,8 +198,8 @@ class VCFReader(SNPBaseReader):
 
         # set logfiles 
         # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
-        lf_o = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
-        lf_e = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
+        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
         # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
         # lf_e : TextIOWrapper  = ITE((logfile_err == None), open(os.devnull, "w"), open(logfile_err, "w"))
         if self.debug:
@@ -209,18 +218,21 @@ class VCFReader(SNPBaseReader):
         args += self._setarg(out_file, "--out-file", self._grg_path)
         args += self._setarg(verbose, "-v", None)
         args += self._setarg(no_merge, "--no-merge", None)
+        # finally, add the infile
         args += [f"{self._igd_path}"]
+        
         subprocess.run(args, stdout=lf_o, stderr=lf_e)
+        
         if self.debug:
             end = time.time()
             print("igd -> grg ", end - start)
-        if not isinstance(lf_o, int):
-            lf_o.close()
-        if not isinstance(lf_e, int):
-            lf_e.close()
-        # with so many option types, the best path seems monadic to me
-        # it's not truly monadic
-        # options are type hints not haskell maybes
+
+        # cleanup
+        ITE(not isinstance(lf_o, int), lf_o.close(), None)
+        ITE(not isinstance(lf_e, int), lf_e.close(), None)
+       
+     
+
     def _setarg(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
         if x is None and default_arg is not None:
             return [flag, f"{default_arg}"] 

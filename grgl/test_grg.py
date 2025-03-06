@@ -1,10 +1,17 @@
-from snputils.snp.io import read_vcf
-from snputils.snp.genobj.snpobj import SNPObject
+
 from typing import Callable, Any
 import subprocess
 import multiprocessing
 import pygrgl
 import time
+
+
+import os,sys
+dir = os.path.abspath('../')
+if not dir in sys.path: sys.path.insert(0,dir)
+from snputils.snp.io import read_vcf
+from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io import VCFReader
 
 # functional programming has corrupted me
 ITE : Callable[[bool, Any, Any], Any] = lambda x, y, z : y if x else z
@@ -34,17 +41,21 @@ def igd_to_grg(filename: str,
 
 def main():
     vcf_file : str = "chr22.vcf.gz"
-    vcf_start = time.time()
-    test_vcf : SNPObject = read_vcf(vcf_file)
-    vcf_end = time.time()
-    print("VCF load time ", vcf_end - vcf_start)
-    grg_start = time.time()
-    igd_file : str = vcf_to_igd(vcf_file)
-    grg_file : str = igd_to_grg(igd_file)
-    grg_file = "chr22.grg"
-    grg_data : pygrgl._grgl.MutableGRG = pygrgl.load_mutable_grg(grg_file)
-    grg_end = time.time()
-    print("GRG load time ", grg_end - grg_start)
+    # vcf_start = time.time()
+    # test_vcf : SNPObject = read_vcf(vcf_file)
+    # vcf_end = time.time()
+    # print("VCF load time ", vcf_end - vcf_start)
+    # grg_start = time.time()
+    # igd_file : str = vcf_to_igd(vcf_file)
+    # grg_file : str = igd_to_grg(igd_file)
+    # grg_file = "chr22.grg"
+    # grg_data : pygrgl._grgl.MutableGRG = pygrgl.load_mutable_grg(grg_file)
+    # grg_end = time.time()
+    # print("GRG load time ", grg_end - grg_start)
+    testfile = "chr22.vcf.gz"
+    chr22_vcf = VCFReader(testfile)
+
+    chr22_vcf.to_grg()
 
 
 if __name__ == "__main__":

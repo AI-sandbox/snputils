@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from pathlib import Path
 import numpy as np
@@ -5,6 +6,7 @@ import copy
 import warnings
 import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional
+
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class SNPObject:
                 An array containing genotype data for each sample. This array can be either 2D with shape 
                 `(n_snps, n_samples)` if the paternal and maternal strands are averaged, or 3D with shape 
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
-            samples (array of shape (n_sampels,), optional): 
+            samples (array of shape (n_samples,), optional): 
                 An array containing unique sample identifiers.
             variants_ref (array of shape (n_snps,), optional): 
                 An array containing the reference allele for each SNP.
@@ -104,7 +106,7 @@ class SNPObject:
         Retrieve `samples`.
 
         Returns:
-            **array of shape (n_sampels,):** 
+            **array of shape (n_samples,):** 
                 An array containing unique sample identifiers.
         """
         return self.__samples
@@ -303,7 +305,7 @@ class SNPObject:
         
         return self.calldata_gt.ndim == 2
 
-    def copy(self) -> 'SNPObject':
+    def copy(self) -> SNPObject:
         """
         Create and return a copy of `self`.
 

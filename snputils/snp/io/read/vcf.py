@@ -12,7 +12,6 @@ import pygrgl as pyg
 import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
-from snputils.common._utils import ITE
 from os.path import splitext, exists, abspath
 import os 
 import subprocess
@@ -200,8 +199,6 @@ class VCFReader(SNPBaseReader):
         # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
         lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
         lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
-        # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
-        # lf_e : TextIOWrapper  = ITE((logfile_err == None), open(os.devnull, "w"), open(logfile_err, "w"))
         if self.debug:
             start = time.time()
         args = ["grg", "construct"]
@@ -220,7 +217,7 @@ class VCFReader(SNPBaseReader):
         args += self._setarg(no_merge, "--no-merge", None)
         # finally, add the infile
         args += [f"{self._igd_path}"]
-        
+        print(args)
         subprocess.run(args, stdout=lf_o, stderr=lf_e)
         
         if self.debug:
@@ -228,8 +225,11 @@ class VCFReader(SNPBaseReader):
             print("igd -> grg ", end - start)
 
         # cleanup
-        ITE(not isinstance(lf_o, int), lf_o.close(), None)
-        ITE(not isinstance(lf_e, int), lf_e.close(), None)
+     
+        if not isinstance(lf_o, int):
+            lf_o.close()
+        if not isinstance(lf_e, int): 
+            lf_e.close()
        
      
 

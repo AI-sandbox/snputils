@@ -1,3 +1,3 @@
 from .snpobj import SNPObject
-
-__all__ = ['SNPObject']
+from .grgobj import GRGObject
+__all__ = ['SNPObject', 'GRGObject']

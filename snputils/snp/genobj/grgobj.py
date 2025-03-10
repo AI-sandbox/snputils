@@ -2,12 +2,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import numpy as np
+import pandas as pd
 import copy
 import warnings
 import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional
 import pygrgl as pyg
+import subprocess
 log = logging.getLogger(__name__)
+import tempfile
 
 GRGType = Union[pyg.GRG | pyg.MutableGRG]
 class GRGObject:
@@ -17,14 +20,17 @@ class GRGObject:
     def __init__(
         self,
         calldata_gt: Optional[GRGType] = None,
+        filename: Optional[str] = None
     ) -> None:
         """
         Args:
             calldata_gt (GRG | MutableGRG, optional): 
                 A Genotype Representation Graph containing genotype data for each sample. 
+            filename (str, optional)
+                File storing the GRG.
         """
         self.__calldata_gt = calldata_gt
-        
+        self.__filename = filename
 
     def __getitem__(self, key: str) -> Any:
         """
@@ -64,13 +70,45 @@ class GRGObject:
         """
         self.__calldata_gt = x
 
+
+    @property
+    def filename(self) -> str:
+        """
+        Retrieve `filename`.
+
+        Returns:
+            **str** 
+                A string containing the file name.
+        """
+        return self.__filename
+
+    @filename.setter
+    def calldata_gt(self, x: str):
+        """
+        Update `calldata_gt`.
+        """
+        self.__filename = x
+
     def allele_freq(self) -> np.ndarray:
         # allele frequency array
-        al_freq = np.ones(self.calldata_gt.num_mutations) / self.calldata_gt.num_mutations
-        return pyg.dot_product(self.calldata_gt, al_freq, pyg.TraversalDirection.DOWN)
+        al_freq = np.ones(self.calldata_gt.num_samples) / self.calldata_gt.num_samples
+        return pyg.dot_product(self.calldata_gt, al_freq, pyg.TraversalDirection.UP)
 
-        
 
+    def gwas(self, genotype_file: str, filename: str) -> pd.DataFrame:
+        with tempfile.NamedTemporaryFile() as fp:
+            subprocess.run(["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"], stdout=fp)
+            fp.seek(0)
+            print(fp.name)
+            return pd.read_csv(fp.name, sep="\t")
+    def n_samples(self, ploidy = 2) -> int:
+        """
+        Get number of samples from GRG. Diploid by default. 
+        """
+        return self.__calldata_gt.num_samples / ploidy
+    
+    def n_snps(self) -> int:
+        return self.__calldata_gt.num_mutations
 
     def copy(self) -> GRGObject:
         """

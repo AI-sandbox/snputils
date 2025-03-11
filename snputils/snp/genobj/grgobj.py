@@ -20,7 +20,8 @@ class GRGObject:
     def __init__(
         self,
         calldata_gt: Optional[GRGType] = None,
-        filename: Optional[str] = None
+        filename: Optional[str] = None,
+        mutable: Optional[bool] = None
     ) -> None:
         """
         Args:
@@ -31,6 +32,8 @@ class GRGObject:
         """
         self.__calldata_gt = calldata_gt
         self.__filename = filename
+        self.__mutable = mutable
+        self.__latest   = False
 
     def __getitem__(self, key: str) -> Any:
         """
@@ -88,6 +91,10 @@ class GRGObject:
         Update `calldata_gt`.
         """
         self.__filename = x
+    
+    @property
+    def mutable(self, x:bool):
+        return self.__mutable
 
     def allele_freq(self) -> np.ndarray:
         # allele frequency array
@@ -98,9 +105,18 @@ class GRGObject:
     def gwas(self, genotype_file: str, filename: str) -> pd.DataFrame:
         with tempfile.NamedTemporaryFile() as fp:
             subprocess.run(["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"], stdout=fp)
-            fp.seek(0)
-            print(fp.name)
+            fp.seek(0) # set the file cursor
             return pd.read_csv(fp.name, sep="\t")
+    
+    def merge(self, inplace: bool = True, *args) -> Optional[GRGType]:
+        assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
+        for arg in args:
+            assert isinstance(arg, str), "argument must be string"
+        merged_data = self.calldata_gt().merge(args)
+        #pep8 be damned
+        if inplace: self.calldata_gt(merged_data)
+        else      : return merged_data
+
     def n_samples(self, ploidy = 2) -> int:
         """
         Get number of samples from GRG. Diploid by default. 

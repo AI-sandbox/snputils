@@ -7,6 +7,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.lock
+*.txt
 
 # C extensions
 *.so
@@ -86,11 +88,14 @@ target/
 profile_default/
 ipython_config.py
 *.vcf
+*.vcf.gz
 *.grg
 *.igd
 # pyenv
 .python-version
-
+*.code-workspace
+*.trees
+grgl/data/
 # pipenv
 #   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
 #   However, in case of collaboration, if having platform-specific dependencies or dependencies

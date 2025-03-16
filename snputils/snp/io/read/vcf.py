@@ -27,7 +27,7 @@ class VCFReader(SNPBaseReader):
         super().__init__(filename)
         self._igd_path : Union[str, pathlib.Path] = None
         self._grg_path : Union[str, pathlib.Path] = None
-        self.debug : bool = False # no more debugging required
+        self.debug : bool = True # no more debugging required
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -109,7 +109,8 @@ class VCFReader(SNPBaseReader):
         log.info(f"Finished reading {self.filename}")
         return snpobj
     # for now, I'm gonna do this in a bit of a hacky way
-    def _to_igd(self,
+    def to_igd(self,
+                igd_file : Optional[str] = None,
                 logfile_out : Optional[str] = None,
                 logfile_err : Optional[str] = None) -> None:
         """
@@ -125,8 +126,8 @@ class VCFReader(SNPBaseReader):
             raise FileNotFoundError(f"File {self.filename} does not exist")
 
         # TODO use ITE
-        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
-        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "a")
+        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "a")
         # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
         # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
         # split extension twice
@@ -134,15 +135,15 @@ class VCFReader(SNPBaseReader):
         name, _ext2 = splitext(name)
         # may use _ext later. not sure. 
         _ext = _ext1 + _ext2
-        self._igd_path : pathlib.Path = pathlib.Path(name + ".igd") 
+        if igd_file is None: self._igd_path : pathlib.Path = pathlib.Path(name + ".igd") 
+        else: self._igd_path : pathlib.Path = pathlib.Path(igd_file) 
+        
 
+        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)], stdout=lf_o, stderr=lf_e)
         if not isinstance(lf_o, int):
             lf_o.close()
         if not isinstance(lf_e, int):
             lf_e.close()
-
-        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)], stdout=lf_o, stderr=lf_e)
-        
             
     def to_grg(self,
                range : Optional[str] = None,
@@ -155,6 +156,7 @@ class VCFReader(SNPBaseReader):
                shape_lf_filter : Optional[float] = None,
                population_ids : Optional[str] = None,
                bs_triplet : Optional[int] = None,
+               igd_file : Optional[str] = None,
                out_file : Optional[str] = None,
                verbose : Optional[bool] = None,
                no_merge : Optional[bool] = None,
@@ -188,7 +190,7 @@ class VCFReader(SNPBaseReader):
         # for debugging only 
         if self.debug:
             start = time.time()
-        self._to_igd(logfile_out, logfile_err)
+        self.to_igd(igd_file, logfile_out, logfile_err)
         if self.debug:
             end = time.time()
             print("vcf -> igd ", end - start)
@@ -197,8 +199,8 @@ class VCFReader(SNPBaseReader):
 
         # set logfiles 
         # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
-        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "w")
-        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "w")
+        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "a")
+        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "a")
         if self.debug:
             start = time.time()
         args = ["grg", "construct"]

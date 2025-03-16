@@ -101,21 +101,36 @@ class GRGObject:
         al_freq = np.ones(self.calldata_gt.num_samples) / self.calldata_gt.num_samples
         return pyg.dot_product(self.calldata_gt, al_freq, pyg.TraversalDirection.UP)
 
+    def dot_product(self, array: np.ndarray, traversal_direction: pyg.TraversalDirection):
+        return pyg.dot_product(self.calldata_gt, array, traversal_direction)
+    
+    # TODO: consider moving this elsewhere.
+    def allele_freq_from_file(self, filename : Optional[str]) -> pd.DataFrame:
+        newfile = filename if filename is not None else self.__filename
+        assert newfile is not None, "Either pass in a filename, or store an existing GRG's filename."
 
+        with tempfile.NamedTemporaryFile() as fp:
+
+            subprocess.run(["grg", "process", "freq", f"{filename}"], stdout=fp)
+            fp.seek(0) # set the file cursor
+            return pd.read_csv(fp.name, sep="\t")
+        
+        
     def gwas(self, genotype_file: str, filename: str) -> pd.DataFrame:
         with tempfile.NamedTemporaryFile() as fp:
             subprocess.run(["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"], stdout=fp)
             fp.seek(0) # set the file cursor
             return pd.read_csv(fp.name, sep="\t")
     
-    def merge(self, inplace: bool = True, *args) -> Optional[GRGType]:
-        assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
+    def merge(self, combineNodes : bool = False, *args) -> Optional[GRGType]:
+        # assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
         for arg in args:
             assert isinstance(arg, str), "argument must be string"
-        merged_data = self.calldata_gt().merge(args)
+        # list of files, and combineNodes 
+        self.__calldata_gt.merge(list(args), combineNodes)
         #pep8 be damned
-        if inplace: self.calldata_gt(merged_data)
-        else      : return merged_data
+        # if inplace: self.__calldata_gt = merged_data
+        # else      : return merged_data
 
     def n_samples(self, ploidy = 2) -> int:
         """
@@ -146,3 +161,7 @@ class GRGObject:
                 for easier reference to public attributes in the instance.
         """
         return [attr.replace('_GRGObject__', '') for attr in vars(self)]
+
+    def to_grg(self, filename: str, 
+                     allow_simplify: bool = True):
+        pyg.save_grg(self.__calldata_gt, filename, allow_simplify)

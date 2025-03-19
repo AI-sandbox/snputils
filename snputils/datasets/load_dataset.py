@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Union
+from typing import Optional, Union, List
 import tempfile
 from pathlib import Path
 
@@ -22,7 +22,8 @@ chr_urls = {
     }
 }
 
-def available_datasets_list() -> list[str]:
+
+def available_datasets_list() -> List[str]:
     """
     Get the list of available datasets.
     """
@@ -31,20 +32,25 @@ def available_datasets_list() -> list[str]:
 
 def load_dataset(
         name: str,
-        chromosomes: Union[list[str], list[int], str, int],
-        variants_ids: Optional[list[str]] = None,
-        sample_ids: Optional[list[str]] = None,
-        verbose: bool = True
+        chromosomes: Union[List[str], List[int], str, int],
+        variants_ids: Optional[List[str]] = None,
+        sample_ids: Optional[List[str]] = None,
+        verbose: bool = True,
+        **read_kwargs
 ) -> SNPObject:
     """
     Load a genome dataset.
 
     Args:
         name (str): Name of the dataset to load. Call `available_datasets_list()` to get the list of available datasets.
-        chromosomes (list[str] | list[int] | str | int): Chromosomes to load.
-        variants_ids (list[str]): List of variant IDs to load.
-        sample_ids (list[str]): List of sample IDs to load.
+        chromosomes (List[str] | List[int] | str | int): Chromosomes to load.
+        variants_ids (List[str]): List of variant IDs to load.
+        sample_ids (List[str]): List of sample IDs to load.
         verbose (bool): Whether to show progress.
+        **read_kwargs: Keyword arguments to pass to `PGENReader.read()`.
+
+    Returns:
+        SNPObject: SNPObject containing the loaded dataset.
     """
     if isinstance(chromosomes, (str, int)):
         chromosomes = [chromosomes]
@@ -52,12 +58,12 @@ def load_dataset(
 
     if variants_ids is not None:
         variants_ids_txt = tempfile.NamedTemporaryFile(mode='w')
-        variants_ids_txt.write("\n".join(variants_ids).encode())
+        variants_ids_txt.write("\n".join(variants_ids))
         variants_ids_txt.flush()
 
     if sample_ids is not None:
         sample_ids_txt = tempfile.NamedTemporaryFile(mode='w')
-        sample_ids_txt.write("\n".join(sample_ids).encode())
+        sample_ids_txt.write("\n".join(sample_ids))
         sample_ids_txt.flush()
 
     merge_list_txt = tempfile.NamedTemporaryFile(mode='w')
@@ -103,7 +109,7 @@ def load_dataset(
 
         # Read PGEN fileset with PGENReader into SNPObject
         log.info("Reading PGEN fileset...")
-        snpobj = PGENReader(data_path / "1kgp").read()
+        snpobj = PGENReader(data_path / "1kgp").read(**read_kwargs)
     else:
         raise NotImplementedError(f"Dataset {name} not implemented.")
 

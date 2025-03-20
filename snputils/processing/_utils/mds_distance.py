@@ -595,7 +595,7 @@ def mds_transform(distance_list, groups, weights, ind_ID_list, num_dims, num_arr
     -------                                                                                   
     None
     """
-    ind_IDs = ind_ID_list[0]
+    ind_IDs = ind_ID_list
     for i in range(1,num_arrays):
         ind_IDs = np.hstack((ind_IDs, ind_ID_list[i]))
     

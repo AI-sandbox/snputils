@@ -36,7 +36,7 @@ class SNPObject:
         Args:
             calldata_gt (array, optional): 
                 An array containing genotype data for each sample. This array can be either 2D with shape 
-                `(n_snps, n_samples)` if the paternal and maternal strands are averaged, or 3D with shape 
+                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
             samples (array of shape (n_sampels,), optional): 
                 An array containing unique sample identifiers.
@@ -102,7 +102,7 @@ class SNPObject:
         Returns:
             **array:** 
                 An array containing genotype data for each sample. This array can be either 2D with shape 
-                `(n_snps, n_samples)` if the paternal and maternal strands are averaged, or 3D with shape 
+                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
         """
         return self.__calldata_gt
@@ -257,8 +257,9 @@ class SNPObject:
         Retrieve `calldata_lai`.
 
         Returns:
-            **array of shape (n_snps, n_samples, 2):** 
-                An array containing the ancestry for each SNP.
+            **array:** 
+                An array containing the ancestry for each SNP. This array can be either 2D with shape
+                `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
         """
         return self.__calldata_lai
 
@@ -299,7 +300,10 @@ class SNPObject:
         elif self.__calldata_gt is not None:
             return self.__calldata_gt.shape[1]
         elif self.__calldata_lai is not None:
-            return self.__calldata_lai.shape[1]
+            if self.__calldata_lai.ndim == 2:
+                return self.__calldata_lai.shape[1] // 2
+            elif self.__calldata_lai.ndim == 3:
+                return self.__calldata_lai.shape[1]
         else:
             raise ValueError("Unable to determine the total number of samples: no relevant data is available.")
 
@@ -412,6 +416,36 @@ class SNPObject:
                 for easier reference to public attributes in the instance.
         """
         return [attr.replace('_SNPObject__', '') for attr in vars(self)]
+
+    def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
+        """
+        Sum paternal and maternal strands.
+
+        Args:
+            inplace (bool, default=False): 
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants 
+                filtered. Default is False.
+
+        Returns:
+            **Optional[SNPObject]:** 
+                A new `SNPObject` with summed strands if `inplace=False`. 
+                If `inplace=True`, modifies `self` in place and returns None.
+        """
+        if self.calldata_gt is None:
+            warnings.warn("Genotype data `calldata_gt` is None.")
+            return None if not inplace else self
+
+        if self.are_strands_summed:
+            warnings.warn("Genotype data `calldata_gt` is already summed.")
+            return self if inplace else self.copy()
+        
+        if inplace:
+            self.calldata_gt = self.calldata_gt.sum(axis=2, dtype=np.int8)
+            return self
+        else:
+            snpobj = self.copy()
+            snpobj.calldata_gt = self.calldata_gt.sum(axis=2, dtype=np.int8)
+            return snpobj
 
     def filter_variants(
             self, 
@@ -1019,7 +1053,7 @@ class SNPObject:
 
         Returns:
             **Optional[SNPObject]:** 
-                Optional[SNPObject]: A new `SNPObject` with the common variants subsetted if `inplace=False`. 
+                A new `SNPObject` with the common variants subsetted if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Get indices of common variants if not provided
@@ -1053,8 +1087,8 @@ class SNPObject:
                 subsetted. Default is False.
 
         Returns:
-            **SNPObject:** 
-                **Optional[SNPObject]:** A new `SNPObject` with the common markers subsetted if `inplace=False`. 
+            **Optional[SNPObject]:** 
+                A new `SNPObject` with the common markers subsetted if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Get indices of common markers if not provided
@@ -1065,6 +1099,216 @@ class SNPObject:
 
         # Use filter_variants method with the identified indices, applying `inplace` as specified
         return self.filter_variants(indexes=query_idx, include=True, inplace=inplace)
+
+    def merge(
+            self, 
+            snpobj: 'SNPObject', 
+            force_samples: bool = False, 
+            prefix: str = '2', 
+            inplace: bool = False
+        ) -> Optional['SNPObject']:
+        """
+        Merge `self` with `snpobj` along the sample axis.
+
+        This method expects both SNPObjects to contain the same set of SNPs in the same order, 
+        then combines their genotype (`calldata_gt`) and LAI (`calldata_lai`) arrays by 
+        concatenating the sample dimension. Samples from `snpobj` are appended to those in `self`.
+
+        Args:
+            snpobj (SNPObject): 
+                The SNPObject to merge samples with.
+            force_samples (bool, default=False): 
+                If True, duplicate sample names are resolved by prepending the `prefix` to duplicate sample names in 
+                `snpobj`. Otherwise, merging fails when duplicate sample names are found. Default is False.
+            prefix (str, default='2'): 
+                A string prepended to duplicate sample names in `snpobj` when `force_samples=True`. 
+                Duplicates are renamed from `<sample_name>` to `<prefix>:<sample_name>`. For instance, 
+                if `prefix='2'` and there is a conflict with a sample called "sample_1", it becomes "2:sample_1".
+            inplace (bool, default=False): 
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the merged samples. 
+                Default is False.
+
+        Returns:
+            **Optional[SNPObject]**: A new SNPObject containing the merged sample data.
+        """
+        # Merge calldata_gt if present and compatible
+        if self.calldata_gt is not None and snpobj.calldata_gt is not None:
+            if self.calldata_gt.shape[0] != snpobj.calldata_gt.shape[0]:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in the number of SNPs in `calldata_gt`.\n"
+                    f"`self.calldata_gt` has {self.calldata_gt.shape[0]} SNPs, "
+                    f"while `snpobj.calldata_gt` has {snpobj.calldata_gt.shape[0]} SNPs."
+                )
+            if self.are_strands_summed and not snpobj.are_strands_summed:
+                raise ValueError(
+                    "Cannot merge SNPObjects: `self` has summed strands, but `snpobj` does not.\n"
+                    "Ensure both objects have the same genotype summation state before merging."
+                )
+            if not self.are_strands_summed and snpobj.are_strands_summed:
+                raise ValueError(
+                    "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
+                    "Ensure both objects have the same genotype summation state before merging."
+                )
+            calldata_gt = np.concatenate([self.calldata_gt, snpobj.calldata_gt], axis=1)
+        else:
+            calldata_gt = None
+
+        # Merge samples if present and compatible, handling duplicates if `force_samples=True`
+        if self.samples is not None and snpobj.samples is not None:
+            overlapping_samples = set(self.samples).intersection(set(snpobj.samples))
+            if overlapping_samples:
+                if not force_samples:
+                    raise ValueError(
+                        f"Cannot merge SNPObjects: Found overlapping sample names {overlapping_samples}.\n"
+                        "Samples must be strictly non-overlapping. To allow merging with renaming, set `force_samples=True`."
+                    )
+                else:
+                    # Rename duplicate samples by prepending the file index
+                    renamed_samples = [f"{prefix}:{sample}" if sample in overlapping_samples else sample for sample in snpobj.samples]
+                    samples = np.concatenate([self.samples, renamed_samples], axis=0)
+            else:
+                samples = np.concatenate([self.samples, snpobj.samples], axis=0)
+        else:
+            samples = None
+
+        # Merge LAI data if present and compatible
+        if self.calldata_lai is not None and snpobj.calldata_lai is not None:
+            if self.calldata_lai.ndim != snpobj.calldata_lai.ndim:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in `calldata_lai` dimensions.\n"
+                    f"`self.calldata_lai` has {self.calldata_lai.ndim} dimensions, "
+                    f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.ndim} dimensions."
+                )
+            if self.calldata_lai.shape[0] != snpobj.calldata_lai.shape[0]:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in the number of SNPs in `calldata_lai`.\n"
+                    f"`self.calldata_lai` has {self.calldata_lai.shape[0]} SNPs, "
+                    f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[0]} SNPs."
+                )
+            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=1)
+        else:
+            calldata_lai = None
+
+        if inplace:
+            self.calldata_gt = calldata_gt
+            self.calldata_lai = calldata_lai
+            self.samples = samples
+            return self
+
+        # Create and return a new SNPObject containing the merged samples
+        return SNPObject(
+            calldata_gt=calldata_gt,
+            samples=samples,
+            variants_ref=self.variants_ref,
+            variants_alt=self.variants_alt,
+            variants_chrom=self.variants_chrom,
+            variants_filter_pass=self.variants_filter_pass,
+            variants_id=self.variants_id,
+            variants_pos=self.variants_pos,
+            variants_qual=self.variants_qual,
+            calldata_lai=calldata_lai,
+            ancestry_map=self.ancestry_map
+        )
+    
+    def concat(
+        self,
+        snpobj: 'SNPObject', 
+        inplace: bool = False
+    ) -> Optional['SNPObject']:
+        """
+        Concatenate self with snpobj along the SNP axis.
+
+        This method expects both SNPObjects to contain the same set of samples in the same order, 
+        and that the chromosome(s) in snpobj follow (i.e. have higher numeric identifiers than) 
+        those in self.
+
+        Args:
+            snpobj (SNPObject):
+                The SNPObject to concatenate SNPs with.
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the concatenated SNPs. 
+                Default is False.
+        
+        Returns:
+            **Optional[SNPObject]**: A new SNPObject containing the concatenated SNP data.
+        """
+        # Merge calldata_gt if present and compatible
+        if self.calldata_gt is not None and snpobj.calldata_gt is not None:
+            if self.calldata_gt.shape[1] != snpobj.calldata_gt.shape[1]:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in the number of samples in `calldata_gt`.\n"
+                    f"`self.calldata_gt` has {self.calldata_gt.shape[1]} samples, "
+                    f"while `snpobj.calldata_gt` has {snpobj.calldata_gt.shape[1]} samples."
+                )
+            if self.are_strands_summed and not snpobj.are_strands_summed:
+                raise ValueError(
+                    "Cannot merge SNPObjects: `self` has summed strands, but `snpobj` does not.\n"
+                    "Ensure both objects have the same genotype summation state before merging."
+                )
+            if not self.are_strands_summed and snpobj.are_strands_summed:
+                raise ValueError(
+                    "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
+                    "Ensure both objects have the same genotype summation state before merging."
+                )
+            calldata_gt = np.concatenate([self.calldata_gt, snpobj.calldata_gt], axis=0)
+        else:
+            calldata_gt = None
+
+        # Merge SNP-related attributes if present
+        attributes = [
+            'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 'variants_id', 'variants_pos', 'variants_qual'
+        ]
+        merged_attrs = {}
+        for attr in attributes:
+            self_attr = getattr(self, attr, None)
+            obj_attr = getattr(snpobj, attr, None)
+
+            # Concatenate if both present
+            if self_attr is not None and obj_attr is not None:
+                merged_attrs[attr] = np.concatenate([self_attr, obj_attr], axis=0)
+            else:
+                # If either is None, store None
+                merged_attrs[attr] = None
+
+        # Merge LAI data if present and compatible
+        if self.calldata_lai is not None and snpobj.calldata_lai is not None:
+            if self.calldata_lai.ndim != snpobj.calldata_lai.ndim:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in `calldata_lai` dimensions.\n"
+                    f"`self.calldata_lai` has {self.calldata_lai.ndim} dimensions, "
+                    f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.ndim} dimensions."
+                )
+            if self.calldata_lai.shape[1] != snpobj.calldata_lai.shape[1]:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in the number of samples in `calldata_lai`.\n"
+                    f"`self.calldata_lai` has {self.calldata_lai.shape[1]} samples, "
+                    f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[1]} samples."
+                )
+            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=0)
+        else:
+            calldata_lai = None
+        
+        if inplace:
+            self.calldata_gt = calldata_gt
+            self.calldata_lai = calldata_lai
+            for attr in attributes:
+                self[attr] = merged_attrs[attr]
+            return self
+        
+        # Create and return a new SNPObject containing the concatenated SNPs
+        return SNPObject(
+            calldata_gt=calldata_gt,
+            calldata_lai=calldata_lai,
+            samples=self.samples,
+            variants_ref=merged_attrs['variants_ref'],
+            variants_alt=merged_attrs['variants_alt'],
+            variants_chrom=merged_attrs['variants_chrom'],
+            variants_id=merged_attrs['variants_id'],
+            variants_pos=merged_attrs['variants_pos'],
+            variants_qual=merged_attrs['variants_qual'],
+            variants_filter_pass=merged_attrs['variants_filter_pass'],
+            ancestry_map=self.ancestry_map
+        )
 
     def remove_strand_ambiguous_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
@@ -1309,7 +1553,7 @@ class SNPObject:
                         # `calldata_gt`` has a different shape, so it's shuffled along axis 0
                         self[key] = self[key][shuffle_index, ...]
                     elif 'variant' in key:
-                        # Other attributes are 1D arrays
+                        # snpobj attributes are 1D arrays
                         self[key] = np.asarray(self[key])[shuffle_index]
             return None
         else:
@@ -1421,7 +1665,7 @@ class SNPObject:
         if window_size is None and physical_pos is None and laiobj is None:
             raise ValueError("One of `window_size`, `physical_pos`, or `laiobj` must be provided.")
         
-        # 1. Fixed window size
+        # Fixed window size
         if window_size is not None:
             physical_pos = []   # Boundaries [start, end] of each window
             chromosomes = []    # Chromosome for each window
@@ -1458,7 +1702,7 @@ class SNPObject:
             chromosomes = np.array(chromosomes)
             window_sizes = np.array(window_sizes)
         
-        # 2. Custom start and end positions
+        # Custom start and end positions
         elif physical_pos is not None:
             # Check if there is exactly one chromosome
             if chromosomes is None:
@@ -1470,7 +1714,7 @@ class SNPObject:
                 else:
                     raise ValueError("Multiple chromosomes detected, but `chromosomes` was not provided.")
 
-        # 3. Match existing windows to a reference laiobj
+        # Match existing windows to a reference laiobj
         elif laiobj is not None:
             physical_pos = laiobj.physical_pos
             chromosomes = laiobj.chromosomes
@@ -1479,7 +1723,7 @@ class SNPObject:
         # Allocate an output LAI array
         n_windows = physical_pos.shape[0]
         n_samples = self.n_samples
-        if len(self.calldata_lai.shape) == 3:
+        if self.calldata_lai.ndim == 3:
             lai = np.zeros((n_windows, n_samples, 2))
         else:
             lai = np.zeros((n_windows, n_samples*2))
@@ -1502,7 +1746,7 @@ class SNPObject:
         haplotypes = [f"{sample}.{i}" for sample in self.samples for i in range(2)]
 
         # If original data was (n_snps, n_samples, 2), flatten to (n_windows, n_samples*2)
-        if len(self.calldata_lai.shape) == 3:
+        if self.calldata_lai.ndim == 3:
             lai = lai.reshape(n_windows, -1)
 
         # Aggregate into a LocalAncestryObject

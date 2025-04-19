@@ -44,6 +44,9 @@ def scatter(
     # Load labels from TSV
     labels_df = pd.read_csv(labels_file, sep='\t')
 
+    # Ensure 'indID' is treated as a string
+    labels_df['indID'] = labels_df['indID'].astype(str)
+
     # Filter labels based on the indIDs in dimredobj
     sample_ids = dimredobj.samples_
     filtered_labels_df = labels_df[labels_df['indID'].isin(sample_ids)]

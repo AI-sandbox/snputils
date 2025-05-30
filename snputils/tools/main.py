@@ -9,7 +9,7 @@ def main():
     #snputils_version = version("snputils")
     #log.info(f"snputils - Version {snputils_version}")
     arg_list = tuple(sys.argv)
-    assert len(arg_list) > 1, 'Please provide an argument for a tool {"pca", "dummy_tool", "admixture_mapping"}.'
+    assert len(arg_list) > 1, 'Please provide an argument for a tool {"pca", "dummy_tool", "admixture_mapping", "simulation"}.'
     if sys.argv[1] == 'pca':
         from . import pca
         sys.exit(pca.plot_and_save_pca(arg_list[2:]))
@@ -19,5 +19,8 @@ def main():
     if sys.argv[1] == 'admixture_mapping':
         from . import admixture_mapping
         sys.exit(admixture_mapping.admixmap(arg_list[2:]))
-    log.error(f'Invalid argument {arg_list[1]}. Tools available are "pca", "dummy_tool" and "admixture_mapping". Please follow the example: "tools_testing.py pca"')
+    elif sys.argv[1] == 'simulation':
+        from ..simulation import simulator_cli
+        sys.exit(simulator_cli.main(arg_list[2:]))
+    log.error(f'Invalid argument {arg_list[1]}. Tools available are "pca", "dummy_tool", "admixture_mapping", and "simulation". Please follow the example: "tools_testing.py pca"')
     sys.exit(1)

@@ -34,7 +34,7 @@ log = logging.getLogger("simulator_cli")
 def parse_sim_args(cli_args=None) -> argparse.Namespace:
     """Parse command-line flags for the simulator CLI."""
     p = argparse.ArgumentParser(
-        prog="simulator_cli",
+        prog="snputils simulation",
         description="Batch-simulate admixed haplotypes with OnlineSimulator.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )

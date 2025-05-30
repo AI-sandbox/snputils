@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%Y-%m-%d %H:%M:%S")
 log = logging.getLogger("simulator_cli")
     
-def parse_sim_args() -> argparse.Namespace:
+def parse_sim_args(cli_args=None) -> argparse.Namespace:
     """Parse command-line flags for the simulator CLI."""
     p = argparse.ArgumentParser(
         prog="simulator_cli",
@@ -74,15 +74,15 @@ def parse_sim_args() -> argparse.Namespace:
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Print additional debugging info.")
 
-    args = p.parse_args()
+    args = p.parse_args(cli_args)
 
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
     return args
 
-def main():
-    args = parse_sim_args()
+def main(cli_args=None):
+    args = parse_sim_args(cli_args)
 
     # 1) Sanity checks / output directory
     out_dir = Path(args.output_dir).expanduser()

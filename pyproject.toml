@@ -55,7 +55,7 @@ benchmark = ["pytest", "pytest-benchmark", "memory_profiler",
 "Issue Tracker" = "https://github.com/AI-sandbox/snputils/issues"
 
 [project.scripts]
-snputils = "snputils.tools.entry:main"
+snputils = "snputils.tools.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

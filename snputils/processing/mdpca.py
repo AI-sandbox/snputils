@@ -11,18 +11,21 @@ from sklearn.decomposition import TruncatedSVD
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from ._utils.gen_tools import array_process, process_labels_weights
+from ._utils.gen_tools import process_calldata_gt, process_labels_weights
 from ._utils.iterative_svd import IterativeSVD
 
 
 class mdPCA:
     """
-    A class for missing data principal component analysis (mdPCA).
+    A class for performing missing data principal component analysis (mdPCA) on SNP data.
 
-    This class supports both separate and averaged strand processing for SNP data. If the `snpobj`, 
-    `laiobj`, `labels_file`, and `ancestry` parameters are all provided during instantiation, 
-    the `fit_transform` method will be automatically called, applying the specified mdPCA method to transform 
-    the data upon instantiation.
+    The mdPCA class focuses on genotype segments from the ancestry of interest when the `is_masked` flag is set to `True`. It offers 
+    flexible processing options, allowing either separate handling of masked haplotype strands or combining (averaging) strands into a 
+    single composite representation for each individual. Moreover, the analysis can be performed on individual-level data, group-level SNP 
+    frequencies, or a combination of both.
+
+    If the `snpobj`, `laiobj`, `labels_file`, and `ancestry` parameters are all provided during instantiation, the `fit_transform` method 
+    will be automatically called, applying the specified mdPCA method to transform the data upon instantiation.
     """
     def __init__(
         self,
@@ -30,13 +33,14 @@ class mdPCA:
         snpobj: Optional['SNPObject'] = None,
         laiobj: Optional['LocalAncestryObject'] = None,
         labels_file: Optional[str] = None,
-        ancestry: Optional[str] = None,
+        ancestry: Optional[Union[int, str]] = None,
         is_masked: bool = True,
-        prob_thresh: float = 0,
         average_strands: bool = False,
+        force_nan_incomplete_strands: bool = False,
         is_weighted: bool = False,
-        groups_to_remove: Dict[int, List[str]] = {},
+        groups_to_remove: List[str] = None,
         min_percent_snps: float = 4,
+        group_snp_frequencies_only: bool = True,
         save_masks: bool = False,
         load_masks: bool = False,
         masks_file: Union[str, pathlib.Path] = 'masks.npz',
@@ -72,27 +76,40 @@ class mdPCA:
             laiobj (LAIObject, optional): 
                 A LAIObject instance.
             labels_file (str, optional): 
-                Path to the labels file in .tsv format. The first column, `indID`, contains the individual identifiers, and the second 
-                column, `label`, specifies the groups for all individuals. If `is_weighted=True`, a `weight` column with individual 
-                weights is required. Optionally, `combination` and `combination_weight` columns can specify sets of individuals to be 
-                combined into groups, with respective weights.
-            ancestry (str, optional): 
-                Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
+                Path to a `.tsv` file with metadata on individuals, including population labels, optional weights, and groupings. 
+                The `indID` column must contain unique individual identifiers matching those in `laiobj` and `snpobj` for proper alignment. 
+                The `label` column assigns population groups. If `is_weighted=True`, a `weight` column must be provided, assigning a weight to 
+                each individual, where those with a weight of zero are removed. Optional columns include `combination` and `combination_weight` 
+                to aggregate individuals into combined groups, where SNP frequencies represent their sequences. The `combination` column assigns 
+                each individual to a specific group (0 for no combination, 1 for the first group, 2 for the second, etc.). All members of a group 
+                must share the same `label` and `combination_weight`. If `combination_weight` column is not provided, the combinations are 
+                assigned a default weight of `1`. Individuals excluded via `groups_to_remove` or those falling below `min_percent_snps` are removed 
+                from the analysis.
+            ancestry (int or str, optional): 
+                Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`. The ancestry input can be:
+                - An integer (e.g., 0, 1, 2).
+                - A string representation of an integer (e.g., '0', '1').
+                - A string matching one of the ancestry map values (e.g., 'Africa').
             is_masked (bool, default=True): 
-                True if an ancestry file is passed for ancestry-specific masking, or False otherwise.
-            prob_thresh (float, default=0): 
-                Minimum probability threshold for a SNP to belong to an ancestry.
+                If `True`, applies ancestry-specific masking to the genotype matrix, retaining only genotype data 
+                corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
             average_strands (bool, default=False): 
                 True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+            force_nan_incomplete_strands (bool): 
+                If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
+                Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
             is_weighted (bool, default=False): 
-                True if weights are provided in the labels file, or False otherwise.
-            groups_to_remove (dict of int to list of str, default={}): 
-                Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
-                lists of groups to remove for each array.
-                Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
+                If `True`, assigns individual weights from the `weight` column in `labels_file`. Otherwise, all individuals have equal weight of `1`.
+            groups_to_remove (list of str, optional): 
+                List with groups to exclude from analysis. Example: ['group1', 'group2'].
             min_percent_snps (float, default=4): 
-                Minimum percentage of SNPs that must be known for an individual to be included in the analysis.
+                Minimum percentage of SNPs that must be known for an individual and of the ancestry of interest to be included in the analysis.
                 All individuals with fewer percent of unmasked SNPs than this threshold will be excluded.
+            group_snp_frequencies_only (bool, default=True):
+                If True, mdPCA is performed exclusively on group-level SNP frequencies, ignoring individual-level data. This applies when `is_weighted` is 
+                set to True and a `combination` column is provided in the `labels_file`,  meaning individuals are aggregated into groups based on their assigned 
+                labels. If False, mdPCA is performed on individual-level SNP data alone or on both individual-level and group-level SNP frequencies when 
+                `is_weighted` is True and a `combination` column is provided.
             save_masks (bool, default=False): 
                 True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
             load_masks (bool, default=False): 
@@ -106,7 +123,7 @@ class mdPCA:
             n_components (int, default=2): 
                 The number of principal components.
             rsid_or_chrompos (int, default=2): 
-                Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
+                Format indicator for SNP IDs in `self.__X_new_`. Use 1 for `rsID` format or 2 for `chromosome_position`.
             percent_vals_masked (float, default=0): 
                 Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
                 `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
@@ -114,14 +131,15 @@ class mdPCA:
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
-        self.__ancestry = ancestry
+        self.__ancestry = self._define_ancestry(ancestry, laiobj.ancestry_map)
         self.__method = method
         self.__is_masked = is_masked
-        self.__prob_thresh = prob_thresh
         self.__average_strands = average_strands
+        self.__force_nan_incomplete_strands = force_nan_incomplete_strands
         self.__is_weighted = is_weighted
         self.__groups_to_remove = groups_to_remove
         self.__min_percent_snps = min_percent_snps
+        self.__group_snp_frequencies_only = group_snp_frequencies_only
         self.__save_masks = save_masks
         self.__load_masks = load_masks
         self.__masks_file = masks_file
@@ -131,8 +149,9 @@ class mdPCA:
         self.__rsid_or_chrompos = rsid_or_chrompos
         self.__percent_vals_masked = percent_vals_masked
         self.__X_new_ = None  # Store transformed SNP data
-        self.__haplotypes_ = None  # Store haplotypes after filtering if min_percent_snps > 0
-        self.__samples_ = None  # Store samples after filtering if min_percent_snps > 0
+        self.__haplotypes_ = None  # Store haplotypes of X_new_ (after filtering if min_percent_snps > 0)
+        self.__samples_ = None  # Store samples of X_new_ (after filtering if min_percent_snps > 0)
+        self.__variants_id_ = None  # Store variants ID (after filtering SNPs not in laiobj)
 
         # Fit and transform if a `snpobj`, `laiobj`, `labels_file`, and `ancestry` are provided
         if self.snpobj is not None and self.laiobj is not None and self.labels_file is not None and self.ancestry is not None:
@@ -261,22 +280,6 @@ class mdPCA:
         self.__is_masked = x
 
     @property
-    def prob_thresh(self) -> float:
-        """
-        Retrieve `prob_thresh`.
-        
-        Returns:
-            **float:** Minimum probability threshold for a SNP to belong to an ancestry.
-        """
-        return self.__prob_thresh
-
-    @prob_thresh.setter
-    def prob_thresh(self, x: float) -> None:
-        """Update `prob_thresh`.
-        """
-        self.__prob_thresh = x
-
-    @property
     def average_strands(self) -> bool:
         """
         Retrieve `average_strands`.
@@ -292,6 +295,24 @@ class mdPCA:
         Update `average_strands`.
         """
         self.__average_strands = x
+
+    @property
+    def force_nan_incomplete_strands(self) -> bool:
+        """
+        Retrieve `force_nan_incomplete_strands`.
+        
+        Returns:
+            **bool**: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
+                      Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
+        """
+        return self.__force_nan_incomplete_strands
+
+    @force_nan_incomplete_strands.setter
+    def force_nan_incomplete_strands(self, x: bool) -> None:
+        """
+        Update `force_nan_incomplete_strands`.
+        """
+        self.__force_nan_incomplete_strands = x
 
     @property
     def is_weighted(self) -> bool:
@@ -346,6 +367,27 @@ class mdPCA:
         Update `min_percent_snps`.
         """
         self.__min_percent_snps = x
+
+    @property
+    def group_snp_frequencies_only(self) -> bool:
+        """
+        Retrieve `group_snp_frequencies_only`.
+        
+        Returns:
+            **bool:** 
+                If True, mdPCA is performed exclusively on group-level SNP frequencies, ignoring individual-level data. This applies 
+                when `is_weighted` is set to True and a `combination` column is provided in the `labels_file`,  meaning individuals are 
+                aggregated into groups based on their assigned labels. If False, mdPCA is performed on individual-level SNP data alone 
+                or on both individual-level and group-level SNP frequencies when `is_weighted` is True and a `combination` column is provided.
+        """
+        return self.__group_snp_frequencies_only
+
+    @group_snp_frequencies_only.setter
+    def group_snp_frequencies_only(self, x: bool) -> None:
+        """
+        Update `group_snp_frequencies_only`.
+        """
+        self.__group_snp_frequencies_only = x
 
     @property
     def save_masks(self) -> bool:
@@ -561,6 +603,26 @@ class mdPCA:
             return [x[:-2] for x in haplotypes]
 
     @property
+    def variants_id_(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `variants_id_`.
+
+        Returns:
+            **array of shape (n_snp,):** 
+                An array containing unique identifiers (IDs) for each SNP,
+                potentially reduced if there are SNPs not present in the `laiobj`.
+                The format will depend on `rsid_or_chrompos`.
+        """
+        return self.__variants_id_
+
+    @variants_id_.setter
+    def variants_id_(self, x: np.ndarray) -> None:
+        """
+        Update `variants_id_`.
+        """
+        self.__variants_id_ = x
+
+    @property
     def n_haplotypes(self) -> Optional[int]:
         """
         Retrieve `n_haplotypes`.
@@ -594,20 +656,41 @@ class mdPCA:
         """
         return copy.copy(self)
 
-    def _process_masks(self, masks, rs_ID_list, ind_ID_list):
-        masked_matrix = masks[0][self.ancestry].T
-        rs_IDs = rs_ID_list[0]
-        ind_IDs = ind_ID_list[0]
-        return masked_matrix, rs_IDs, ind_IDs
+    @staticmethod
+    def _define_ancestry(ancestry, ancestry_map):
+        """
+        Determine the ancestry index based on different input types.
+
+        Args:
+            ancestry (int or str): The ancestry input, which can be:
+                - An integer (e.g., 0, 1, 2).
+                - A string representation of an integer (e.g., '0', '1').
+                - A string matching one of the ancestry map values (e.g., 'Africa').
+            ancestry_map (dict): A dictionary mapping ancestry indices (as strings) to ancestry names.
+
+        Returns:
+            int: The corresponding ancestry index.
+        """
+        if isinstance(ancestry, int):  
+            return ancestry  
+        elif isinstance(ancestry, str) and ancestry.isdigit():  
+            return int(ancestry)  
+        elif ancestry in ancestry_map.values():  
+            return int(next(key for key, value in ancestry_map.items() if value == ancestry))  
+        else:  
+            raise ValueError(f"Invalid ancestry input: {ancestry}")
 
     def _load_mask_file(self):
+        """
+        Load previously saved masked genotype data from an `.npz` file.
+        """
         mask_files = np.load(self.masks_file, allow_pickle=True)
-        masks = mask_files['masks']
+        mask = mask_files['mask']
         rs_ID_list = mask_files['rs_ID_list']
         ind_ID_list = mask_files['ind_ID_list']
         labels = mask_files['labels']
         weights = mask_files['weights']
-        return masks, rs_ID_list, ind_ID_list, labels, weights
+        return mask, rs_ID_list, ind_ID_list, labels, weights
 
     @staticmethod
     def _compute_strength_vector(X):
@@ -967,39 +1050,45 @@ class mdPCA:
             average_strands = self.average_strands
         
         if self.load_masks:
-            masks, rs_id_list, ind_id_list, _, weights = self._load_mask_file()
+            # Load precomputed ancestry-based masked genotype matrix, SNP identifiers, haplotype identifiers, and weights
+            mask, variants_id, haplotypes, _, weights = self._load_mask_file()
         else:
-            masks, rs_id_list, ind_id_list = array_process(
+            # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
+            mask, variants_id, haplotypes = process_calldata_gt(
                 self.snpobj,
                 self.laiobj,
+                self.ancestry,
                 self.average_strands,
-                self.prob_thresh,
+                self.force_nan_incomplete_strands,
                 self.is_masked,
                 self.rsid_or_chrompos
             )
 
-            masks, ind_id_list, _, weights = process_labels_weights(
+            # Process individual genomic labels and weights, aligning them with a masked genotype matrix by 
+            # filtering out low-coverage individuals, reordering data to match the matrix structure, and 
+            # handling group-based adjustments
+            mask, haplotypes, _, weights = process_labels_weights(
                 self.labels_file,
-                masks,
-                rs_id_list,
-                ind_id_list,
+                mask,
+                variants_id,
+                haplotypes,
                 self.average_strands,
                 self.ancestry,
                 self.min_percent_snps,
+                self.group_snp_frequencies_only,
                 self.groups_to_remove,
                 self.is_weighted,
                 self.save_masks,
                 self.masks_file
             )
 
-        X_incomplete, _, _ = self._process_masks(masks, rs_id_list, ind_id_list)
-
         # Call run_cov_matrix with the specified method
         self.X_new_ = self._run_cov_matrix(
-            X_incomplete,
+            mask[self.ancestry].T,
             weights
         )
 
-        self.haplotypes_ = ind_id_list
+        self.haplotypes_ = haplotypes
+        self.variants_id_ = variants_id
 
         return self.X_new_

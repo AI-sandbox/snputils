@@ -1,10 +1,8 @@
-import sys
-import torch
 import argparse
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Tuple, Union
+from typing import List
 
 from ..processing import PCA
 from snputils.snp.io.read import VCFReader
@@ -12,10 +10,8 @@ from snputils.snp.io.read import VCFReader
 log = logging.getLogger(__name__)
 
 
-def parse_pca_args(argv):
+def parse_pca_args(argv) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog='pca', description='Principal Component Analysis plot and save components.')
-
-    # parser = argparse.ArgumentParser(description='.')
 
     parser.add_argument('--vcf_file', required=True, type=str, help='Load .vcf from this path.')
     parser.add_argument('--fig_path', required=True, type=str, help='Path used to save PCA plot.')

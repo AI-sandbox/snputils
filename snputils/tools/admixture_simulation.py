@@ -66,76 +66,76 @@ def parse_sim_args(argv=None) -> argparse.Namespace:
 
     return args
 
+
 def simulate_admixed_individuals(argv=None):
     args = parse_sim_args(argv)
 
-    # 1) Sanity checks / output directory
+    # Prepare output directory
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     log.info("Output directory: %s", out_dir.resolve())
 
-    # 2) Read inputs
-    log.info("Reading VCF …")
+    # Read phased VCF data
+    log.info("Reading VCF...")
     vcf_reader = VCFReaderPolars(args.vcf)
-    vcf_data   = vcf_reader.read()
+    vcf_data = vcf_reader.read()
 
-    log.info("Reading metadata table …")
+    # Read metadata
+    log.info("Reading metadata table...")
     meta = pd.read_csv(args.metadata, sep=None, engine="python")
-    # Subset to single-ancestry samples if that column exists
+
+    # Filter to single-ancestry samples if present
     if "Single_Ancestry" in meta.columns:
         meta = meta[meta.Single_Ancestry == True]
 
-    # Keep only the required columns
+    # Check and subset required columns
     cols_needed = ["Sample", "Population", "Latitude", "Longitude"]
     missing = [c for c in cols_needed if c not in meta.columns]
     if missing:
         log.error("Metadata is missing columns: %s", ", ".join(missing))
         sys.exit(1)
+    
     meta = meta[cols_needed]
 
-    # Genetic map (optional)
+    # Load genetic map if provided
     genetic_map = None
     if args.genetic_map:
         log.info("Reading genetic map …")
-        gm = pd.read_csv(args.genetic_map, sep=None, engine="python",
-                         names=["chm", "pos", "cM"])
+        gm = pd.read_csv(args.genetic_map, sep=None, engine="python", names=["chm", "pos", "cM"])
         if args.chromosome is not None:
             gm = gm[gm.chm == args.chromosome]
         genetic_map = gm
 
-    # 3) Instantiate simulator
+    # Initialize the simulator
     log.info("Initialising OnlineSimulator …")
     simulator = OnlineSimulator(
-        vcf_data           = vcf_data,
-        meta               = meta,
-        genetic_map        = genetic_map,
-        make_haploid       = args.make_haploid,
-        window_size        = args.window_size,
-        store_latlon_as_nvec = args.store_latlon_as_nvec,
+        vcf_data=vcf_data,
+        meta=meta,
+        genetic_map=genetic_map,
+        make_haploid=args.make_haploid,
+        window_size=args.window_size,
+        store_latlon_as_nvec=args.store_latlon_as_nvec,
     )
 
-    # 4) Run batches
+    # Run simulation for each batch
     log.info("Generating %d batch(es)…", args.n_batches)
-    for b in range(1, args.n_batches + 1):
+    for batch_num in range(1, args.n_batches + 1):
         snps, labels_d, labels_c, cp = simulator.simulate(
-            batch_size        = args.batch_size,
-            num_generation_max= args.num_generations,
-            pool_method       = "mode",
-            device            = args.device
+            batch_size=args.batch_size,
+            num_generation_max=args.num_generations,
+            pool_method="mode",
+            device=args.device
         )
 
-        # 5) Save
-        out_path = out_dir / f"batch_{b:04d}.npz"
+        # Save output
+        out_path = out_dir / f"batch_{batch_num:04d}.npz"
         np.savez_compressed(
             out_path,
-            snps      = snps.cpu().numpy(),
-            labels_d  = (labels_d.cpu().numpy()
-                         if labels_d is not None else np.empty(0)),
-            labels_c  = (labels_c.cpu().numpy()
-                         if labels_c is not None else np.empty(0)),
-            cp        = (cp.cpu().numpy()
-                         if cp is not None else np.empty(0)),
+            snps=snps.cpu().numpy(),
+            labels_d=(labels_d.cpu().numpy() if labels_d is not None else np.empty(0)),
+            labels_c=(labels_c.cpu().numpy() if labels_c is not None else np.empty(0)),
+            cp=(cp.cpu().numpy() if cp is not None else np.empty(0)),
         )
-        log.info("Saved %s", out_path.name)
+        log.info("Saved batch: %s", out_path.name)
 
     log.info("[✓] All done. %d files written to %s", args.n_batches, out_dir)

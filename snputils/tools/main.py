@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 # Define tool descriptions
 TOOL_DESCRIPTIONS = {
     'pca': 'Perform Principal Component Analysis on SNP data',
-    'simulation': 'Simulate admixed haplotypes using the OnlineSimulator',
+    'admixture_simulation': 'Simulate admixed haplotypes with OnlineSimulator',
     'admixture_mapping': 'Perform admixture mapping analysis'
 }
 
@@ -57,12 +57,12 @@ def main():
         if tool == 'pca':
             from . import pca
             return pca.plot_and_save_pca(arg_list[2:])
+        elif tool == 'admixture_simulation':
+            from . import admixture_simulation
+            return admixture_simulation.simulate_admixed_individuals(arg_list[2:])
         elif tool == 'admixture_mapping':
             from . import admixture_mapping
             return admixture_mapping.admixmap(arg_list[2:])
-        elif tool == 'simulation':
-            from ..simulation import simulator_cli
-            return simulator_cli.main(arg_list[2:])
             
     except Exception as e:
         log.error(f"Error: {str(e)}")

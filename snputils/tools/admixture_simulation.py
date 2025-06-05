@@ -26,63 +26,48 @@ import pandas as pd
 from snputils.snp.io.read.vcf import VCFReaderPolars
 from snputils.simulation.simulator import OnlineSimulator
 
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s │ %(levelname)-8s │ %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 log = logging.getLogger("simulator_cli")
-    
-def parse_sim_args(cli_args=None) -> argparse.Namespace:
-    """Parse command-line flags for the simulator CLI."""
-    p = argparse.ArgumentParser(
-        prog="snputils simulation",
-        description="Batch-simulate admixed haplotypes with OnlineSimulator.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+
+
+def parse_sim_args(argv=None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="admixture_simulation", description="Batch-simulate admixed haplotypes with OnlineSimulator.")
 
     # Required I/O
-    p.add_argument("--vcf", required=True,
-                   help="Path to the phased VCF/VCF-gz file.")
-    p.add_argument("--metadata", required=True,
-                   help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
-    p.add_argument("--output-dir", required=True,
-                   help="Directory in which to save the simulated batches.")
+    p.add_argument("--vcf", required=True, help="Path to the phased VCF/VCF-gz file.")
+    p.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
+    p.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
+    
     # Optional genetic map
-    p.add_argument("--genetic-map", default=None,
-                   help="Genetic map table with columns: chrom, pos, cM.")
-    p.add_argument("--chromosome", type=int, default=None,
-                   help="If provided, restrict genetic map rows to this chromosome id.")
+    p.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")
+    p.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
 
     # Simulator hyper-parameters
-    p.add_argument("--window-size", type=int, default=1000,
-                   help="#SNPs per window.")
-    p.add_argument("--store-latlon-as-nvec", action="store_true",
-                   help="Convert lat/lon to unit n-vectors (x,y,z).")
-    p.add_argument("--make-haploid", action="store_true",
-                   help="Flatten diploid genotypes into haplotypes.")
-    p.add_argument("--device", default="cpu",
-                   help="torch device string, e.g. 'cuda:0'.")
+    p.add_argument("--window-size", type=int, default=1000, help="#SNPs per window.")
+    p.add_argument("--store-latlon-as-nvec", action="store_true", help="Convert lat/lon to unit n-vectors (x,y,z).")
+    p.add_argument("--make-haploid", action="store_true", help="Flatten diploid genotypes into haplotypes.")
+    p.add_argument("--device", default="cpu", help="torch device string, e.g. 'cuda:0'.")
 
     # Admixture parameters
-    p.add_argument("--batch-size", type=int, default=256,
-                   help="#simulated haplotypes per batch.")
-    p.add_argument("--num-generations", type=int, default=10,
-                   help="Upper bound on random generations since admixture.")
-    p.add_argument("--n-batches", type=int, default=1,
-                   help="#separate batches to generate & save.")
+    p.add_argument("--batch-size", type=int, default=256, help="#simulated haplotypes per batch.")
+    p.add_argument("--num-generations", type=int, default=10, help="Upper bound on random generations since admixture.")
+    p.add_argument("--n-batches", type=int, default=1, help="#separate batches to generate & save.")
 
     # Misc
-    p.add_argument("-v", "--verbose", action="store_true",
-                   help="Print additional debugging info.")
+    p.add_argument("-v", "--verbose", action="store_true", help="Print additional debugging info.")
 
-    args = p.parse_args(cli_args)
+    args = p.parse_args(argv)
 
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
     return args
 
-def simulate_admixed_individuals(cli_args=None):
-    args = parse_sim_args(cli_args)
+def simulate_admixed_individuals(argv=None):
+    args = parse_sim_args(argv)
 
     # 1) Sanity checks / output directory
     out_dir = Path(args.output_dir).expanduser()

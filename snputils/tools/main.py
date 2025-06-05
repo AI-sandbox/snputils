@@ -1,18 +1,21 @@
+from importlib.metadata import version
 import sys
 import logging
 
 log = logging.getLogger(__name__)
 
+
 # Define tool descriptions
 TOOL_DESCRIPTIONS = {
     'pca': 'Perform Principal Component Analysis on SNP data',
     'simulation': 'Simulate admixed haplotypes using the OnlineSimulator',
-    'dummy_tool': 'Example tool for demonstration purposes',
     'admixture_mapping': 'Perform admixture mapping analysis'
 }
 
 def show_help():
-    """Display help information for all available tools."""
+    """
+    Display help information for all available tools.
+    """
     print("snputils - Process genomes with ease")
     print("\nAvailable tools:")
     for tool, desc in TOOL_DESCRIPTIONS.items():
@@ -54,9 +57,6 @@ def main():
         if tool == 'pca':
             from . import pca
             return pca.plot_and_save_pca(arg_list[2:])
-        elif tool == 'dummy_tool':
-            from . import dummy_tool
-            return dummy_tool.dummy_tool(arg_list[2:])
         elif tool == 'admixture_mapping':
             from . import admixture_mapping
             return admixture_mapping.admixmap(arg_list[2:])

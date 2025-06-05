@@ -2,10 +2,7 @@ import logging
 import torch
 import numpy as np
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s │ %(levelname)-8s │ %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
-log = logging.getLogger("simulator_cli")
+log = logging.getLogger(__name__)
     
 
 def latlon_to_nvector(lat, lon):
@@ -27,7 +24,7 @@ def nvector_to_latlon(nvec):
 
     Parameters
     ----------
-    nvec : np.ndarray of shape (3,) or (N,3)
+    nvec : np.ndarray of shape (3,) or (n_samples,3)
         x, y, z coordinates of the n-vector.
 
     Returns
@@ -49,28 +46,28 @@ def nvector_to_latlon(nvec):
         return (np.degrees(lat_rad), np.degrees(lon_rad))
     
 def approximate_mode_per_row(
-    row_2d: torch.Tensor,   # shape (B, W) 
+    row_2d: torch.Tensor,   # shape (batch_size, W) 
     nbins=32
 ) -> torch.Tensor:
     """
-    row_2d: shape (B, W), continuous data on GPU
+    row_2d: shape (batch_size, W), continuous data on GPU
     nbins:  number of histogram bins
 
-    Returns: shape (B,) approximate mode for each row 
+    Returns: shape (batch_size,) approximate mode for each row 
              (i.e. each row in row_2d).
     """
     device = row_2d.device
-    B, W = row_2d.shape
+    batch_size, W = row_2d.shape
 
     # row-wise min/max
-    row_min = row_2d.min(dim=1).values  # (B,)
-    row_max = row_2d.max(dim=1).values  # (B,)
+    row_min = row_2d.min(dim=1).values  # (batch_size,)
+    row_max = row_2d.max(dim=1).values  # (batch_size,)
 
-    out_modes = torch.zeros(B, device=device, dtype=torch.float32)
+    out_modes = torch.zeros(batch_size, device=device, dtype=torch.float32)
 
-    # We'll do a simple loop over B rows,
+    # We'll do a simple loop over batch_size rows,
     # because torch.histc only handles 1D at a time
-    for i in range(B):
+    for i in range(batch_size):
         data_i = row_2d[i]  # shape (W,)
         vmin = row_min[i].item()
         vmax = row_max[i].item()
@@ -100,9 +97,9 @@ def _chunk_label_array(
     nbins=32
 ):
     """
-    labels: shape (B, D) or (B, D, dim) after final crossovers
-      - If descriptor="continuous" => shape (B, D[, dim])
-      - If descriptor="discrete"   => shape (B, D)
+    labels: shape (batch_size, n_snps) or (batch_size, n_snps, dim) after final crossovers
+      - If descriptor="continuous" => shape (batch_size, n_snps[, dim])
+      - If descriptor="discrete"   => shape (batch_size, n_snps)
     window_size: # of SNPs per window
     descriptor:  "continuous" or "discrete"
     pool_method: "mean" or "mode"
@@ -110,27 +107,27 @@ def _chunk_label_array(
     nbins: # of bins if using approximate mode for continuous
 
     Returns:
-      chunked => shape (B, n_win, dim), (B, n_win, 1), or (B, n_win)
+      chunked => shape (batch_size, n_win, dim), (batch_size, n_win, 1), or (batch_size, n_win)
         depending on descriptor + dimension
     """
     device = labels.device
 
     if labels.ndim == 2:
-        # shape => (B, D) => discrete or continuous w/ dim=1
-        B, D = labels.shape
+        # shape => (batch_size, n_snps) => discrete or continuous w/ dim=1
+        batch_size, n_snps = labels.shape
         label_dim = None
     else:
-        # shape => (B, D, dim)
-        B, D, label_dim = labels.shape
+        # shape => (batch_size, n_snps, dim)
+        batch_size, n_snps, label_dim = labels.shape
 
-    n_full = D // window_size
-    leftover = D % window_size
+    n_full = n_snps // window_size
+    leftover = n_snps % window_size
 
     chunks = []
     start = 0
     for _ in range(n_full):
         end = start + window_size
-        # slice => (B, window_size[, dim])
+        # slice => (batch_size, window_size[, dim])
         window_segment = (
             labels[:, start:end, ...]
             if label_dim else labels[:, start:end]
@@ -140,41 +137,41 @@ def _chunk_label_array(
             if pool_method == "mean":
                 # normal PyTorch .mean(...)
                 if label_dim:
-                    # shape => (B, window_size, dim)
-                    mean_vals = window_segment.mean(dim=1)  # => (B, dim)
+                    # shape => (batch_size, window_size, dim)
+                    mean_vals = window_segment.mean(dim=1)  # => (batch_size, dim)
                     chunks.append(mean_vals)
                 else:
-                    # shape => (B, window_size)
-                    mean_vals = window_segment.float().mean(dim=1)  # => (B,)
+                    # shape => (batch_size, window_size)
+                    mean_vals = window_segment.float().mean(dim=1)  # => (batch_size,)
                     chunks.append(mean_vals.unsqueeze(-1))
 
             elif pool_method == "mode":
                 # approximate GPU mode
                 if label_dim:
-                    # shape => (B, window_size, dim)
+                    # shape => (batch_size, window_size, dim)
                     # do dimension by dimension
-                    # => we'll gather a list of (B,) for each dim, then stack
+                    # => we'll gather a list of (batch_size,) for each dim, then stack
                     mode_vals_list = []
                     for d_i in range(label_dim):
-                        # slice => (B, window_size)
+                        # slice => (batch_size, window_size)
                         slice_2d = window_segment[:, :, d_i]
-                        # approximate mode => (B,)
+                        # approximate mode => (batch_size,)
                         approx_m = approximate_mode_per_row(slice_2d, nbins=nbins)
                         mode_vals_list.append(approx_m)
-                    # stack => (B, label_dim)
+                    # stack => (batch_size, label_dim)
                     mode_vals_cat = torch.stack(mode_vals_list, dim=1)
                     chunks.append(mode_vals_cat)
                 else:
-                    # shape => (B, window_size)
-                    approx_m = approximate_mode_per_row(window_segment, nbins=nbins) # => (B,)
+                    # shape => (batch_size, window_size)
+                    approx_m = approximate_mode_per_row(window_segment, nbins=nbins) # => (batch_size,)
                     chunks.append(approx_m.unsqueeze(-1))
             else:
                 raise ValueError(f"pool_method '{pool_method}' not implemented for continuous.")
 
         else:
             # descriptor == "discrete" => use built-in .mode(dim=1)
-            # shape => (B, window_size)
-            # mode along dimension=1 => shape (B,)
+            # shape => (batch_size, window_size)
+            # mode along dimension=1 => shape (batch_size,)
             mode_vals = window_segment.mode(dim=1).values
             chunks.append(mode_vals)
 
@@ -189,7 +186,7 @@ def _chunk_label_array(
         if descriptor == "continuous":
             if label_dim:
                 if pool_method == "mean":
-                    mean_vals = window_segment.mean(dim=1)  # => (B, dim)
+                    mean_vals = window_segment.mean(dim=1)  # => (batch_size, dim)
                     chunks.append(mean_vals)
                 else:
                     # pool_method == "mode" => approximate
@@ -202,7 +199,7 @@ def _chunk_label_array(
                     chunks.append(mode_vals_cat)
             else:
                 if pool_method == "mean":
-                    mean_vals = window_segment.float().mean(dim=1)  # (B,)
+                    mean_vals = window_segment.float().mean(dim=1)  # (batch_size,)
                     chunks.append(mean_vals.unsqueeze(-1))
                 else:
                     # approximate mode
@@ -214,30 +211,30 @@ def _chunk_label_array(
             chunks.append(mode_vals)
 
     if len(chunks) == 0:
-        # if window_size >= D => no chunk
+        # if window_size >= n_snps => no chunk
         return None
 
-    # Now stack => shape (B, n_windows[, dim]) or (B, n_windows)
+    # Now stack => shape (batch_size, n_windows[, dim]) or (batch_size, n_windows)
     if descriptor == "continuous":
         cat_res = torch.stack(chunks, dim=1)  
         return cat_res
     else:
-        # discrete => shape => (B,) in each chunk => stack => (B, n_windows)
+        # discrete => shape => (batch_size,) in each chunk => stack => (batch_size, n_windows)
         cat_res = torch.stack(chunks, dim=1)
         return cat_res
 
 
 def _chunk_changepoints(cp_mask, window_size):
     """
-    cp_mask: shape (B, D), a boolean (or 0/1) array indicating
+    cp_mask: shape (batch_size, n_snps), a boolean (or 0/1) array indicating
              breakpoint positions at the SNP level.
 
-    Returns: shape (B, n_windows), with 1 if any SNP in that window
+    Returns: shape (batch_size, n_windows), with 1 if any SNP in that window
              was a breakpoint, else 0.
     """
-    B, D = cp_mask.shape
-    n_full = D // window_size
-    leftover = D % window_size
+    batch_size, n_snps = cp_mask.shape
+    n_full = n_snps // window_size
+    leftover = n_snps % window_size
 
     chunks = []
     start = 0
@@ -255,7 +252,7 @@ def _chunk_changepoints(cp_mask, window_size):
     if len(chunks) == 0:
         return None
 
-    # stack along new dim => (B, n_windows)
+    # stack along new dim => (batch_size, n_windows)
     out = np.stack(chunks, axis=1).astype(np.int8)
     return torch.tensor(out)
     
@@ -348,9 +345,9 @@ class OnlineSimulator:
         """
         Intersects VCF samples with metadata samples.
         Produces:
-          self.snps: shape (N, D) or (N,2,D) if not yet flattened
+          self.snps: shape (n_samples, n_snps) or (n_samples,2,n_snps) if not yet flattened
           self.samples: array of sample names
-        If self.make_haploid is True, flattens to haplotype level => shape (N*2, D).
+        If self.make_haploid is True, flattens to haplotype level => shape (n_samples*2, n_snps).
         """
         # Intersect VCF samples with metadata samples
         vcf_samples = self.vcf_data["samples"]
@@ -413,8 +410,9 @@ class OnlineSimulator:
             pop_values = self.meta['Population'].values
             unique_pops = sorted(np.unique(pop_values))
             pop2code = {p: i for i, p in enumerate(unique_pops)}
+            self.ancestry_map = {str(v): k for k, v in pop2code.items()}
             discrete_arr = np.array([pop2code[p] for p in pop_values], dtype=np.int16)
-            # shape => (N,1)
+            # shape => (n_samples,1)
             discrete_arr = discrete_arr[:, None]
             self.labels_discrete = torch.tensor(discrete_arr, dtype=torch.int16)
             log.info(f"Built discrete labels => shape {self.labels_discrete.shape}")
@@ -424,35 +422,35 @@ class OnlineSimulator:
             lat_vals = self.meta["Latitude"].values
             lon_vals = self.meta["Longitude"].values
             if self.store_latlon_as_nvec:
-                coords = latlon_to_nvector(lat_vals, lon_vals)  # (N, 3)
+                coords = latlon_to_nvector(lat_vals, lon_vals)  # (n_samples, 3)
             else:
-                coords = np.stack([lat_vals, lon_vals], axis=-1)  # (N, 2)
+                coords = np.stack([lat_vals, lon_vals], axis=-1)  # (n_samples, 2)
             self.labels_continuous = torch.tensor(coords, dtype=torch.float32)
             log.info(f"Built continuous labels => shape {self.labels_continuous.shape}")
 
 
     def _broadcast_labels_across_snps(self):
         """
-        Make self.labels have shape (N, D) for discrete or (N, D, coord_dim) for continuous
+        Make self.labels have shape (n_samples, n_snps) for discrete or (n_samples, n_snps, coord_dim) for continuous
         so we can do per-SNP crossovers that also scramble the labels.
         """
-        N, _, D = self.snps.shape
+        n_samples, n_snps = self.snps.shape
         
         # Discrete
         if self.labels_discrete is not None:
-            # shape => (N,1) => broadcast => (N, D)
-            arr = self.labels_discrete.cpu().numpy()  # shape (N,1)
-            arr_bcast = np.repeat(arr, D, axis=1)     # (N, D)
+            # shape => (n_samples,1) => broadcast => (n_samples, n_snps)
+            arr = self.labels_discrete.cpu().numpy()  # shape (n_samples,1)
+            arr_bcast = np.repeat(arr, n_snps, axis=1)     # (n_samples, n_snps)
             self.labels_discrete = torch.tensor(arr_bcast, dtype=torch.int16)
             log.info(f"Broadcast discrete => {self.labels_discrete.shape}")
 
         # Continuous
         if self.labels_continuous is not None:
-            arr = self.labels_continuous.cpu().numpy()   # shape (N, 2 or 3)
+            arr = self.labels_continuous.cpu().numpy()   # shape (n_samples, 2 or 3)
             coord_dim = arr.shape[1]
-            arr_bcast = np.zeros((N, D, coord_dim), dtype=arr.dtype)
+            arr_bcast = np.zeros((n_samples, n_snps, coord_dim), dtype=arr.dtype)
             for i in range(coord_dim):
-                arr_bcast[:,:,i] = np.repeat(arr[:, i][:, None], D, axis=1)
+                arr_bcast[:,:,i] = np.repeat(arr[:, i][:, None], n_snps, axis=1)
             self.labels_continuous = torch.tensor(arr_bcast, dtype=torch.float32)
             log.info(f"Broadcast continuous => {self.labels_continuous.shape}")
        
@@ -467,9 +465,9 @@ class OnlineSimulator:
         """
         Shuffle segments for admixture on snps, discrete labels, continuous labels (if they exist).
         Each has shape: 
-          snps => (B, D)
-          batch_labels_discrete => (B, D) or None
-          batch_labels_continuous => (B, D, cdim) or None
+          snps => (batch_size, n_snps)
+          batch_labels_discrete => (batch_size, n_snps) or None
+          batch_labels_continuous => (batch_size, n_snps, cdim) or None
         """
         if device != 'cpu':
             batch_snps = batch_snps.to(device)
@@ -478,21 +476,23 @@ class OnlineSimulator:
             if batch_labels_continuous is not None:
                 batch_labels_continuous = batch_labels_continuous.to(device)
 
+
         # 1) Pick the number of generations
         G = np.random.randint(0, num_generation_max+1)
         # 2) If we have a rate_per_snp array, we can do random binomial switch at each SNP
         #    or if cM is provided, uniform. 
         #    We'll keep it simple: we do g random switch points
-        B, D = batch_snps.shape 
+        batch_size, n_snps = batch_snps.shape 
+        
 
         if self.rate_per_snp is not None:
             switch = np.random.binomial(G, self.rate_per_snp) % 2
             split_points = np.flatnonzero(switch)
         else:
-            split_points = torch.randint(D, (G,))
+            split_points = torch.randint(n_snps, (G,))
 
         for sp in split_points:
-            perm = torch.randperm(B, device=batch_snps.device)
+            perm = torch.randperm(batch_size, device=batch_snps.device)
             # Swap SNPs
             batch_snps[:, sp:] = batch_snps[perm, sp:]
             # Swap discrete
@@ -509,8 +509,6 @@ class OnlineSimulator:
         self,
         batch_size=256,
         num_generation_max=10,
-        balanced=False,
-        single_ancestry=False,
         device='cpu',
         pool_method='mode'
     ):
@@ -519,36 +517,34 @@ class OnlineSimulator:
           ( batch_snps, final_discrete_labels_window, final_continuous_labels_window )
 
         where:
-          - batch_snps.shape == (B, D)
-          - final_discrete_labels_window == (B, n_windows) if discrete was present, else None
-          - final_continuous_labels_window == (B, n_windows, cdim) if continuous was present, else None
+          - batch_snps.shape == (batch_size, n_snps)
+          - final_discrete_labels_window == (batch_size, n_windows) if discrete was present, else None
+          - final_continuous_labels_window == (batch_size, n_windows, cdim) if continuous was present, else None
         """
         # pick random subset of samples
-        N = self.snps.shape[0]
-        idx = torch.randint(N, (batch_size,))
-        batch_snps = self.snps[idx, :].clone()  # shape (B, D)
-        
+        n_samples = self.snps.shape[0]
+        idx = torch.randint(n_samples, (batch_size,))
+        batch_snps = self.snps[idx, :].clone()  # shape (batch_size, n_snps)
+
         # Subset discrete
         if self.labels_discrete is not None:
-            batch_discrete = self.labels_discrete[idx, :].clone()  # shape (B, D)
+            batch_discrete = self.labels_discrete[idx, :].clone()  # shape (batch_size, n_snps)
         else:
             batch_discrete = None
 
         # Subset continuous
         if self.labels_continuous is not None:
-            batch_continuous = self.labels_continuous[idx, :, :].clone() # (B, D, dim)
+            batch_continuous = self.labels_continuous[idx, :, :].clone() # (batch_size, n_snps, dim)
         else:
             batch_continuous = None
-            
-        # 2) possibly do single_ancestry or balanced logic if you want
-        # We'll skip it for brevity; your original code had that logic.
-
+        
         # Crossovers
         batch_snps, batch_discrete, batch_continuous = self._simulate_from_pool(
             batch_snps, batch_discrete, batch_continuous,
             num_generation_max=num_generation_max,
             device=device
         )
+
         # Window-chunk each label array if window_size is specified
         discrete_out = None
         continuous_out = None
@@ -562,21 +558,21 @@ class OnlineSimulator:
                     descriptor="discrete",
                     pool_method=None,
                 )
-                # shape => (B, D)
+                # shape => (batch_size, n_snps)
                 # find SNP-level breakpoints
                 # Compare label[i] vs label[i-1]
                 # We'll do that in NumPy or Torch
-                lab_np = batch_discrete.cpu().numpy()  # (B, D)
+                lab_np = batch_discrete.cpu().numpy()  # (batch_size, n_snps)
                 # define a shift comparison
                 # cp_mask[:,i] = True if lab[:,i] != lab[:,i-1]
-                # We'll do it for i from 1..D-1
-                cp_mask = np.zeros_like(lab_np, dtype=bool)  # (B, D)
+                # We'll do it for i from 1..n_snps-1
+                cp_mask = np.zeros_like(lab_np, dtype=bool)  # (batch_size, n_snps)
                 cp_mask[:, 1:] = (lab_np[:, 1:] != lab_np[:, :-1])
                 
                 # Now chunk that cp_mask into windows
                 cp_mask_t = torch.from_numpy(cp_mask)
                 final_cp_window = _chunk_changepoints(cp_mask_t, self.window_size)
-                
+            
             if batch_continuous is not None:
                 continuous_out = _chunk_label_array(
                     labels=batch_continuous,

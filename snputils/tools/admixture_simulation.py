@@ -24,13 +24,11 @@ import numpy as np
 import pandas as pd
 
 from snputils.snp.io.read.vcf import VCFReaderPolars
+from snputils.snp.genobj import SNPObject
 from snputils.simulation.simulator import OnlineSimulator
 
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s │ %(levelname)-8s │ %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
-log = logging.getLogger("simulator_cli")
+log = logging.getLogger(__name__)
 
 
 def parse_sim_args(argv=None) -> argparse.Namespace:
@@ -89,7 +87,7 @@ def simulate_admixed_individuals(argv=None):
         meta = meta[meta.Single_Ancestry == True]
 
     # Check and subset required columns
-    cols_needed = ["Sample", "Population", "Latitude", "Longitude"]
+    cols_needed = ["Sample", "Population"]
     missing = [c for c in cols_needed if c not in meta.columns]
     if missing:
         log.error("Metadata is missing columns: %s", ", ".join(missing))
@@ -100,14 +98,16 @@ def simulate_admixed_individuals(argv=None):
     # Load genetic map if provided
     genetic_map = None
     if args.genetic_map:
-        log.info("Reading genetic map …")
+        log.info("Reading genetic map...")
         gm = pd.read_csv(args.genetic_map, sep=None, engine="python", names=["chm", "pos", "cM"])
+
         if args.chromosome is not None:
+            args.chromosome = f"chr{args.chromosome}"
             gm = gm[gm.chm == args.chromosome]
         genetic_map = gm
 
     # Initialize the simulator
-    log.info("Initialising OnlineSimulator …")
+    log.info("Initialising OnlineSimulator...")
     simulator = OnlineSimulator(
         vcf_data=vcf_data,
         meta=meta,
@@ -126,6 +126,21 @@ def simulate_admixed_individuals(argv=None):
             pool_method="mode",
             device=args.device
         )
+
+        snpobj = SNPObject(
+            calldata_gt=snps.T,
+            variants_ref=vcf_data['variants_ref'],
+            variants_alt=vcf_data['variants_alt'], 
+            variants_chrom=vcf_data['variants_chrom'],
+            variants_filter_pass=vcf_data['variants_filter_pass'],
+            variants_id=vcf_data['variants_id'],
+            variants_pos=vcf_data['variants_pos'],
+            variants_qual=vcf_data['variants_qual'],
+            calldata_lai=labels_d.T,
+            ancestry_map=simulator.ancestry_map
+        )
+
+        snpobj.save_pickle(f'/private/groups/ioannidislab/mbarrabes/laipy/data/HGDP+1KGP.v2/tmp/snpobj_batch_{batch_num}.pkl')
 
         # Save output
         out_path = out_dir / f"batch_{batch_num:04d}.npz"

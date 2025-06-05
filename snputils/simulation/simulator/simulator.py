@@ -436,7 +436,7 @@ class OnlineSimulator:
         Make self.labels have shape (N, D) for discrete or (N, D, coord_dim) for continuous
         so we can do per-SNP crossovers that also scramble the labels.
         """
-        N, D = self.snps.shape
+        N, _, D = self.snps.shape
         
         # Discrete
         if self.labels_discrete is not None:

@@ -5,10 +5,16 @@ import numpy as np
 log = logging.getLogger(__name__)
     
 
-def latlon_to_nvector(lat, lon):
+def latlon_to_nvector(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """
-    Convert lat/long (in DEGREES) to x,y,z n-vector.
-    If lat/lon are in radians, remove the radian conversion below.
+    Convert latitude and longitude (in degrees) to 3D unit n-vector (x, y, z).
+
+    Args:
+        lat (np.ndarray): Latitude values in degrees.
+        lon (np.ndarray): Longitude values in degrees.
+
+    Returns:
+        np.ndarray: Array of shape (..., 3) containing corresponding x, y, z unit vectors.
     """
     lat_rad = np.radians(lat)
     lon_rad = np.radians(lon)

@@ -13,7 +13,7 @@ class GlobalAncestryObject(AncestryObject):
     def __init__(
         self,
         Q: np.ndarray,
-        P: np.ndarray,
+        P: Optional[np.ndarray] = None,
         samples: Optional[Sequence] = None,
         snps: Optional[Sequence] = None,
         ancestries: Optional[Sequence] = None
@@ -37,12 +37,12 @@ class GlobalAncestryObject(AncestryObject):
         """
         # Determine dimensions
         n_samples, n_ancestries_Q = Q.shape
-        n_snps, n_ancestries_P = P.shape
-
-        if n_ancestries_Q != n_ancestries_P:
-            raise ValueError(
-                f"The number of ancestries in Q ({n_ancestries_Q}) and P ({n_ancestries_P}) must be the same."
-            )
+        if P is not None:
+            n_snps, n_ancestries_P = P.shape
+            if n_ancestries_Q != n_ancestries_P:
+                raise ValueError(
+                    f"The number of ancestries in Q ({n_ancestries_Q}) and P ({n_ancestries_P}) must be the same."
+                )
 
         n_ancestries = n_ancestries_Q
 
@@ -57,14 +57,17 @@ class GlobalAncestryObject(AncestryObject):
                 )
 
         # Assign default SNP identifiers if none provided
-        if snps is None:
-            snps = list(range(n_snps))
+        if P is None:
+            snps = None
         else:
-            snps = list(snps)
-            if len(snps) != n_snps:
-                raise ValueError(
-                    f"Length of snps ({len(snps)}) does not match number of SNPs ({n_snps})."
-                )
+            if snps is None:
+                snps = list(range(n_snps))
+            else:
+                snps = list(snps)
+                if len(snps) != n_snps:
+                    raise ValueError(
+                        f"Length of snps ({len(snps)}) does not match number of SNPs ({n_snps})."
+                    )
 
         if ancestries is not None:
             if len(ancestries) != n_samples:
@@ -78,7 +81,7 @@ class GlobalAncestryObject(AncestryObject):
         self.__Q = Q
         self.__P = P
         self.__samples = np.asarray(samples)
-        self.__snps = np.asarray(snps)
+        self.__snps = np.asarray(snps) if snps is not None else None
         self.__ancestries = np.asarray(ancestries) if ancestries is not None else None
 
         # Perform sanity checks
@@ -144,9 +147,9 @@ class GlobalAncestryObject(AncestryObject):
         """
         Update `P`.
         """
-        if x.shape != (self.n_snps, self.n_ancestries):
+        if x.shape[1] != self.n_ancestries:
             raise ValueError(
-                f"P must have shape ({self.n_snps}, {self.n_ancestries}). Provided shape is {x.shape}."
+                f"P must have {self.n_ancestries} columns (one per ancestry); got shape {x.shape}."
             )
         self.__P = x
         self._sanity_check()
@@ -168,9 +171,9 @@ class GlobalAncestryObject(AncestryObject):
         """
         Update `F`.
         """
-        if x.shape != (self.n_snps, self.n_ancestries):
+        if x.shape[1] != self.n_ancestries:
             raise ValueError(
-                f"F must have shape ({self.n_snps}, {self.n_ancestries}). Provided shape is {x.shape}."
+                f"F must have {self.n_ancestries} columns (one per ancestry); got shape {x.shape}."
             )
         self.__P = x
     
@@ -270,7 +273,7 @@ class GlobalAncestryObject(AncestryObject):
         Returns:
             **int:** The total number of SNPs.
         """
-        return self.__P.shape[0]
+        return 0 if self.__P is None else self.__P.shape[0]
 
     @property
     def n_ancestries(self) -> int:
@@ -315,11 +318,12 @@ class GlobalAncestryObject(AncestryObject):
                 f"Q must have shape ({self.n_samples}, {self.n_ancestries}); got {self.__Q.shape}."
             )
 
-        # Check that the P matrix has the correct shape
-        if self.__P.shape != (self.n_snps, self.n_ancestries):
-            raise ValueError(
-                f"P must have shape ({self.n_snps}, {self.n_ancestries}); got {self.__P.shape}."
-            )
+        # Check that the P matrix has the correct shape (if provided)
+        if self.__P is not None:
+            if self.__P.shape != (self.n_snps, self.n_ancestries):
+                raise ValueError(
+                    f"P must have shape ({self.n_snps}, {self.n_ancestries}); got {self.__P.shape}."
+                )
 
         # Check that samples length matches n_samples
         if self.samples is not None:

@@ -45,7 +45,7 @@ def read_admixture(
     return AdmixtureReader(
         Q_file=Q_file,
         P_file=P_file,
-        sample_id_file=sample_file,
+        sample_file=sample_file,
         snp_file=snp_file,
         ancestry_file=ancestry_file
     ).read()

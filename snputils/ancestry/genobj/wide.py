@@ -66,10 +66,11 @@ class GlobalAncestryObject(AncestryObject):
                     f"Length of snps ({len(snps)}) does not match number of SNPs ({n_snps})."
                 )
 
-        if len(ancestries) != n_samples:
-            raise ValueError(
-                f"Length of ancestries ({len(ancestries)}) does not match number of samples ({n_samples})."
-            )
+        if ancestries is not None:
+            if len(ancestries) != n_samples:
+                raise ValueError(
+                    f"Length of ancestries ({len(ancestries)}) does not match number of samples ({n_samples})."
+                )
 
         super().__init__(n_samples, n_ancestries)
 
@@ -78,7 +79,7 @@ class GlobalAncestryObject(AncestryObject):
         self.__P = P
         self.__samples = np.asarray(samples)
         self.__snps = np.asarray(snps)
-        self.__ancestries = np.asarray(ancestries)
+        self.__ancestries = np.asarray(ancestries) if ancestries is not None else None
 
         # Perform sanity checks
         self._sanity_check()
@@ -245,7 +246,7 @@ class GlobalAncestryObject(AncestryObject):
             raise ValueError(
                 f"ancestries must have length {self.n_samples}; got length {num_x}."
             )
-        if num_unique_x <= self.n_ancestries:
+        if num_unique_x > self.n_ancestries:
             raise ValueError(
                 f"Number of unique ancestry labels must be less than or equal to {self.n_ancestries}; got {num_unique_x} unique labels."
             )
@@ -343,7 +344,7 @@ class GlobalAncestryObject(AncestryObject):
 
             # Check number of unique ancestry labels
             num_unique_ancestries = len(np.unique(self.__ancestries))
-            if num_unique_ancestries <= self.n_ancestries:
+            if num_unique_ancestries > self.n_ancestries:
                 raise ValueError(
                     f"Number of unique ancestry labels must be less than or equal to {self.n_ancestries}; got {num_unique_ancestries} unique labels."
                 )

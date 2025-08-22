@@ -14,7 +14,7 @@ class WideBaseReader(abc.ABC):
     def __init__(
         self,
         Q_file: Union[str, Path],
-        P_file: Union[str, Path],
+        P_file: Optional[Union[str, Path]] = None,
         sample_file: Optional[Union[str, Path]] = None,
         snp_file: Optional[Union[str, Path]] = None,
         ancestry_file: Optional[Union[str, Path]] = None
@@ -25,10 +25,10 @@ class WideBaseReader(abc.ABC):
                 Path to the file containing the Q matrix (per-sample ancestry proportions).
                 It should end with `.Q` or `.txt`.
                 The file should use space (' ') as the delimiter.
-            P_file (str or pathlib.Path):
+            P_file (str or pathlib.Path, optional):
                 Path to the file containing the P/F matrix (per-ancestry SNP frequencies).
                 It should end with `.P` or `.txt`.
-                The file should use space (' ') as the delimiter.
+                The file should use space (' ') as the delimiter. If None, P is not loaded.
             sample_file (str or pathlib.Path, optional):
                 Path to the single-column file containing sample identifiers. 
                 It should end with `.fam` or `.txt`.
@@ -43,7 +43,7 @@ class WideBaseReader(abc.ABC):
                 If None, ancestries are not loaded.
         """
         self.__Q_file = Path(Q_file)
-        self.__P_file = Path(P_file)
+        self.__P_file = Path(P_file) if P_file is not None else None
         self.__sample_file = Path(sample_file) if sample_file is not None else None
         self.__snp_file = Path(snp_file) if snp_file is not None else None
         self.__ancestry_file = Path(ancestry_file) if ancestry_file is not None else None
@@ -62,15 +62,15 @@ class WideBaseReader(abc.ABC):
         return self.__Q_file
 
     @property
-    def P_file(self) -> Path:
+    def P_file(self) -> Optional[Path]:
         """
         Retrieve `P_file`.
 
         Returns:
-            **pathlib.Path:** 
+            **pathlib.Path or None:** 
                 Path to the file containing the P/F matrix (per-ancestry SNP frequencies).
                 It should end with `.P` or `.txt`.
-                The file should use space (' ') as the delimiter.
+                The file should use space (' ') as the delimiter. If None, P is not loaded.
         """
         return self.__P_file
 

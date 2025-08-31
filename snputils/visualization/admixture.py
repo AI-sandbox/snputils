@@ -17,15 +17,16 @@ def reorder_admixture(Q_mat):
     # Group samples by whichever column is argmax
     row_groups = []
     boundary_list = [0]
+    argmax_all = np.argmax(Q_cols_sorted, axis=1)
     for k in range(K):
-        rows_k = np.where(np.argmax(Q_cols_sorted, axis=1) == k)[0]
+        rows_k = np.where(argmax_all == k)[0]
         # Sort these rows by their proportion in col k
         rows_k_sorted = rows_k[np.argsort(Q_cols_sorted[rows_k, k])[::-1]]
         row_groups.append(rows_k_sorted)
         boundary_list.append(boundary_list[-1] + len(rows_k_sorted))
     
     # Combine them into one final row order
-    row_order = np.concatenate(row_groups)
+    row_order = np.concatenate(row_groups) if row_groups else np.arange(n_samples)
     Q_mat_sorted = Q_cols_sorted[row_order, :]
     
     return Q_mat_sorted, row_order, boundary_list, col_order
@@ -58,18 +59,24 @@ def plot_admixture(ax, Q_mat_sorted, boundary_list, col_order=None, colors=None,
 
     # cumulative sum across columns for stacked fill
     Q_cum = np.cumsum(Q_mat_sorted, axis=1)
-    x_vals = np.arange(n_samples)
-
-    step_mode = "post"
-    ax.step(x_vals, Q_cum, linewidth=0.0, where=step_mode)
+    # Use step='post' with padded x/y so the last bar renders fully and no thin band appears
+    x_edges = np.arange(n_samples + 1)
+    Q_pad = np.vstack([Q_cum, Q_cum[-1]])
 
     # fill-between for a stacked bar effect
     for j in range(K):
         c = colors[j] if (colors is not None) else None
-        if j == 0:
-            ax.fill_between(x_vals, 0, Q_cum[:, j], step=step_mode, color=c)
-        else:
-            ax.fill_between(x_vals, Q_cum[:, j - 1], Q_cum[:, j], step=step_mode, color=c)
+        lower = Q_pad[:, j - 1] if j > 0 else np.zeros(n_samples + 1)
+        upper = Q_pad[:, j]
+        ax.fill_between(
+            x_edges,
+            lower,
+            upper,
+            step="post",
+            color=c,
+            linewidth=0,
+            edgecolor='none',
+        )
 
     # Vertical lines for group boundaries
     if show_boundaries:
@@ -77,7 +84,7 @@ def plot_admixture(ax, Q_mat_sorted, boundary_list, col_order=None, colors=None,
             ax.axvline(boundary, color='black', ls='--', lw=1.0)
 
     if set_limits:
-        ax.set_xlim(0, n_samples - 1)
+        ax.set_xlim(0, n_samples)
         ax.set_ylim(0, 1)
 
     if show_axes_labels:

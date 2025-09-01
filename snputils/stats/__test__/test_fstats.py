@@ -5,16 +5,14 @@ from snputils.stats import f2, f3, f4, d_stat, f4_ratio
 
 
 def _toy_data():
-    # Build simple AFs where populations A, B, C, D have clear relationships
-    # n_snps=6
-    # Pop A and B close; C different; D outgroup-like
+    # Build simple AFs
     afs = np.array([
         [0.1, 0.1, 0.9, 0.9],
         [0.2, 0.2, 0.8, 0.8],
-        [0.3, 0.3, 0.7, 0.7],
-        [0.4, 0.4, 0.6, 0.6],
+        [0.3, 0.32, 0.7, 0.7],
+        [0.4, 0.48, 0.6, 0.6],
         [0.5, 0.5, 0.5, 0.5],
-        [0.6, 0.55, 0.4, 0.4],
+        [0.6, 0.55, 0.4, 0.35],
     ])
     counts = np.full_like(afs, 20)
     pops = ["A", "B", "C", "D"]
@@ -49,7 +47,7 @@ def test_f4_and_d_basic():
     assert resd.shape[0] == 1
     assert np.isfinite(res4.est.iloc[0])
     assert np.isfinite(resd.est.iloc[0])
-
+    
 
 def test_f4_ratio_basic():
     afs, counts, pops = _toy_data()
@@ -60,3 +58,189 @@ def test_f4_ratio_basic():
     assert np.isfinite(res.est.iloc[0])
 
 
+def test_f4_identities_symmetry_and_signs():
+    afs, counts, pops = _toy_data()
+    base = f4((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["D"], block_size=2).est.iloc[0]
+    swapped_pairs = f4((afs, counts, pops), a=["C"], b=["D"], c=["A"], d=["B"], block_size=2).est.iloc[0]
+    swapped_ab = f4((afs, counts, pops), a=["B"], b=["A"], c=["C"], d=["D"], block_size=2).est.iloc[0]
+    swapped_cd = f4((afs, counts, pops), a=["A"], b=["B"], c=["D"], d=["C"], block_size=2).est.iloc[0]
+
+    assert np.isclose(base, swapped_pairs, atol=1e-12)
+    assert np.isclose(base, -swapped_ab, atol=1e-12)
+    assert np.isclose(base, -swapped_cd, atol=1e-12)
+
+
+def test_f4_identity_additivity():
+    afs, counts, pops = _toy_data()
+    ab_cd = f4((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["D"], block_size=2).est.iloc[0]
+    ac_bd = f4((afs, counts, pops), a=["A"], b=["C"], c=["B"], d=["D"], block_size=2).est.iloc[0]
+    ad_cb = f4((afs, counts, pops), a=["A"], b=["D"], c=["C"], d=["B"], block_size=2).est.iloc[0]
+
+    assert np.isclose(ab_cd, ac_bd + ad_cb, atol=1e-12)
+
+
+def test_f2_equals_f4_self_definition():
+    afs, counts, pops = _toy_data()
+    f2_ab = f2((afs, counts, pops), pop1=["A"], pop2=["B"], apply_correction=False, block_size=2).est.iloc[0]
+    f4_abab = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["B"], block_size=2).est.iloc[0]
+    assert np.isclose(f2_ab, f4_abab, atol=1e-12)
+
+
+def test_f3_equals_f4_cross_definition():
+    afs, counts, pops = _toy_data()
+    f3_a_bc = f3((afs, counts, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=False, block_size=2).est.iloc[0]
+    f4_abac = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["C"], block_size=2).est.iloc[0]
+    assert np.isclose(f3_a_bc, f4_abac, atol=1e-12)
+    
+
+def test_f3_corrected_equals_f4_minus_target_term():
+    afs, counts, pops = _toy_data()
+    t, a, b = "A", "B", "C"
+    res_unc = f3((afs, counts, pops), target=[t], ref1=[a], ref2=[b],
+                 apply_correction=False, block_size=2).est.iloc[0]
+    res_cor = f3((afs, counts, pops), target=[t], ref1=[a], ref2=[b],
+                 apply_correction=True, block_size=2).est.iloc[0]
+    # All counts are 20 in _toy_data, so the mean correction is mean[p_t(1-p_t)/(20-1)]
+    ti = pops.index(t)
+    corr = np.mean(afs[:, ti] * (1 - afs[:, ti]) / (counts[:, ti] - 1))
+    assert np.isclose(res_unc - corr, res_cor, atol=1e-12)
+
+
+def test_f4_admixture_linearity():
+    # Construct synthetic data with an admixed population Cmix = alpha*C1 + (1-alpha)*C2
+    alpha = 0.3
+    # 8 SNPs, 6 populations: A, B, C1, C2, Cmix, D
+    A = np.array([0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80])
+    B = np.array([0.12, 0.18, 0.31, 0.39, 0.52, 0.58, 0.69, 0.79])
+    C1 = np.array([0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65])
+    C2 = np.array([0.60, 0.55, 0.50, 0.45, 0.40, 0.35, 0.30, 0.25])
+    D = np.array([0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20])
+    Cmix = alpha * C1 + (1 - alpha) * C2
+    afs = np.vstack([A, B, C1, C2, Cmix, D]).T  # shape (8, 6)
+    counts = np.full_like(afs, 20)
+    pops = ["A", "B", "C1", "C2", "Cmix", "D"]
+
+    f4_cmix = f4((afs, counts, pops), a=["A"], b=["B"], c=["Cmix"], d=["D"], block_size=2).est.iloc[0]
+    f4_c1 = f4((afs, counts, pops), a=["A"], b=["B"], c=["C1"], d=["D"], block_size=2).est.iloc[0]
+    f4_c2 = f4((afs, counts, pops), a=["A"], b=["B"], c=["C2"], d=["D"], block_size=2).est.iloc[0]
+
+    rhs = alpha * f4_c1 + (1 - alpha) * f4_c2
+    assert np.isclose(f4_cmix, rhs, atol=1e-12)
+
+
+def test_f4_as_sum_of_f2s():
+    # Verify f4(A,B;C,D) = 1/2 [ f2(A,D) + f2(B,C) - f2(A,C) - f2(B,D) ]
+    # Use uncorrected f2 to match algebraic identity on allele frequencies.
+    afs, counts, pops = _toy_data()
+
+    f4_ab_cd = f4((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["D"], block_size=2).est.iloc[0]
+
+    f2_ad = f2((afs, counts, pops), pop1=["A"], pop2=["D"], apply_correction=False, block_size=2).est.iloc[0]
+    f2_bc = f2((afs, counts, pops), pop1=["B"], pop2=["C"], apply_correction=False, block_size=2).est.iloc[0]
+    f2_ac = f2((afs, counts, pops), pop1=["A"], pop2=["C"], apply_correction=False, block_size=2).est.iloc[0]
+    f2_bd = f2((afs, counts, pops), pop1=["B"], pop2=["D"], apply_correction=False, block_size=2).est.iloc[0]
+
+    rhs = 0.5 * (f2_ad + f2_bc - f2_ac - f2_bd)
+    assert np.isclose(f4_ab_cd, rhs, atol=1e-12)
+
+
+def test_f2_diagonal_behavior():
+    afs, counts, pops = _toy_data()
+    # Diagonal with no correction should be exactly zero
+    res0 = f2((afs, counts, pops), pop1=["A"], pop2=["A"], apply_correction=False, block_size=2)
+    assert np.isclose(res0.est.iloc[0], 0.0, atol=1e-15)
+    # With correction, diagonal is not defined in the same sense; just ensure it is finite
+    res1 = f2((afs, counts, pops), pop1=["A"], pop2=["A"], apply_correction=True, block_size=2)
+    assert np.isfinite(res1.est.iloc[0])
+
+
+def test_f2_correction_filters_n_le_1():
+    afs, counts, pops = _toy_data()
+    counts2 = counts.copy()
+    counts2[0, 0] = 1  # SNP 0 pop A has n=1
+    counts2[1, 1] = 1  # SNP 1 pop B has n=1
+    r0 = f2((afs, counts2, pops), pop1=["A"], pop2=["B"], apply_correction=False, block_size=2).iloc[0]
+    r1 = f2((afs, counts2, pops), pop1=["A"], pop2=["B"], apply_correction=True, block_size=2).iloc[0]
+    assert r1.n_snps < r0.n_snps
+    assert np.isfinite(r1.est)
+
+
+def test_f3_correction_filters_target_n_le_1():
+    afs, counts, pops = _toy_data()
+    counts2 = counts.copy()
+    counts2[0, pops.index("A")] = 1  # target A has n=1 at SNP 0
+    r0 = f3((afs, counts2, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=False, block_size=2).iloc[0]
+    r1 = f3((afs, counts2, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=True, block_size=2).iloc[0]
+    assert r1.n_snps < r0.n_snps
+
+
+def test_f4_trivial_zero_and_sign():
+    afs, counts, pops = _toy_data()
+    # If A==B or C==D, f4 should be 0
+    z1 = f4((afs, counts, pops), a=["A"], b=["A"], c=["C"], d=["D"], block_size=2).est.iloc[0]
+    z2 = f4((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["C"], block_size=2).est.iloc[0]
+    assert np.isclose(z1, 0.0, atol=1e-15)
+    assert np.isclose(z2, 0.0, atol=1e-15)
+    # Swap within a pair flips the sign
+    base = f4((afs, counts, pops), a=["A"], b=['B'], c=['C'], d=['D'], block_size=2).est.iloc[0]
+    flip = f4((afs, counts, pops), a=["B"], b=['A'], c=['C'], d=['D'], block_size=2).est.iloc[0]
+    assert np.isclose(base, -flip, atol=1e-15)
+
+
+def test_f4_ratio_negative_denominator():
+    afs, counts, pops = _toy_data()
+    # Make denominator f4 likely negative by swapping references
+    num = [("A", "B", "C", "D")]
+    den = [("A", "B", "D", "C")]
+    res = f4_ratio((afs, counts, pops), num=num, den=den, block_size=2).iloc[0]
+    assert np.isfinite(res.est)
+    # Denominator should be near -numerator in this toy, so ratio near -1
+    assert res.est < 0
+
+
+def test_empty_block_is_dropped():
+    afs, counts, pops = _toy_data()
+    # Make SNPs 0-1 invalid for A or B to wipe out block 0 when block_size=2
+    counts2 = counts.copy()
+    counts2[0:2, pops.index("A")] = 0
+    res = f2((afs, counts2, pops), pop1=["A"], pop2=["B"], apply_correction=False, block_size=2).iloc[0]
+    # Originally 3 blocks. Now first block is empty, so contributing blocks should be 2
+    assert res.n_blocks == 2
+
+
+def test_results_invariant_to_snp_order_with_labels():
+    afs, counts, pops = _toy_data()
+    n = afs.shape[0]
+    labels = np.array([0,0,1,1,2,2])
+    base = f4((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["D"], blocks=labels).est.iloc[0]
+    perm = np.random.permutation(n)
+    base2 = f4((afs[perm], counts[perm], pops), a=["A"], b=["B"], c=["C"], d=["D"], blocks=labels[perm]).est.iloc[0]
+    assert np.isclose(base, base2, atol=1e-15)
+
+
+def test_missing_afs_and_zero_counts_are_ignored():
+    afs, counts, pops = _toy_data()
+    afs2 = afs.copy().astype(float)
+    afs2[3, pops.index("C")] = np.nan
+    counts2 = counts.copy()
+    counts2[4, pops.index("D")] = 0
+    res = f4((afs2, counts2, pops), a=["A"], b=["B"], c=["C"], d=["D"], block_size=2).iloc[0]
+    assert np.isfinite(res.est)
+    # Should have fewer SNPs than the original 6
+    assert res.n_snps < 6
+
+
+def test_d_stat_zero_when_pairs_equal():
+    afs, counts, pops = _toy_data()
+    # If C==D, numerator is zero for every SNP
+    res = d_stat((afs, counts, pops), a=["A"], b=["B"], c=["C"], d=["C"], block_size=2).iloc[0]
+    assert np.isclose(res.est, 0.0, atol=1e-15)
+
+
+def test_all_snps_invalid_returns_nan():
+    afs, counts, pops = _toy_data()
+    counts2 = counts.copy()
+    counts2[:, :] = 0
+    res = f4((afs, counts2, pops), a=["A"], b=["B"], c=["C"], d=["D"]).iloc[0]
+    assert np.isnan(res.est) and np.isnan(res.se) and np.isnan(res.z) and np.isnan(res.p)
+    assert res.n_blocks == 0 and res.n_snps == 0

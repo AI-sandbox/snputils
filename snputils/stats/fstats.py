@@ -21,25 +21,6 @@ class BlockJackknifeResult:
     n_snps: int
 
 
-def _as_array(x: Optional[np.ndarray]) -> Optional[np.ndarray]:
-    if x is None:
-        return None
-    return np.asarray(x)
-
-
-def _safe_nanmean(values: np.ndarray, weights: Optional[np.ndarray] = None) -> float:
-    mask = ~np.isnan(values)
-    if not np.any(mask):
-        return float("nan")
-    if weights is None:
-        return float(np.mean(values[mask]))
-    w = np.asarray(weights)[mask]
-    v = values[mask]
-    if w.sum() == 0:
-        return float("nan")
-    return float(np.sum(w * v) / np.sum(w))
-
-
 def _compute_block_indices(
     n_snps: int,
     size: int = 5000,
@@ -56,9 +37,10 @@ def _compute_block_indices(
         block_labels = np.asarray(block_labels)
         if block_labels.shape[0] != n_snps:
             raise ValueError("'block_labels' must have length n_snps")
-        # Reindex to 0..B-1 while preserving original order of appearance
-        _, inverse, counts = np.unique(block_labels, return_inverse=True, return_counts=True)
-        return inverse.astype(np.int32), counts.astype(np.int32)
+        # Reindex to 0..B-1 preserving first appearance order
+        codes, uniques = pd.factorize(block_labels, sort=False)
+        counts = np.bincount(codes, minlength=len(uniques))
+        return codes.astype(np.int32), counts.astype(np.int32)
 
     size = max(1, int(size))
     block_ids = np.arange(n_snps) // size
@@ -78,7 +60,8 @@ def _jackknife_ratio_from_block_sums(
     num_block_sums = np.asarray(num_block_sums, dtype=float)
     den_block_sums = np.asarray(den_block_sums, dtype=float)
 
-    mask = (den_block_sums > 0) & np.isfinite(num_block_sums) & np.isfinite(den_block_sums)
+    # Keep negative denominators, drop only non-finite and exactly-zero denominators
+    mask = (den_block_sums != 0) & np.isfinite(num_block_sums) & np.isfinite(den_block_sums)
     if not np.any(mask):
         return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), 0, 0)
 
@@ -99,11 +82,11 @@ def _jackknife_ratio_from_block_sums(
     est_loo = est_loo[valid_loo]
     nb2 = est_loo.size
     if nb2 == 0:
-        return BlockJackknifeResult(est, 0.0, float("inf"), 0.0, nb, int(np.sum(den_b)))
+        return BlockJackknifeResult(est, 0.0, float("nan"), float("nan"), nb, int(np.sum(den_b)))
     # standard jackknife variance
     se = float(np.sqrt((nb2 - 1) / nb2 * np.sum((est_loo - est) ** 2)))
-    z = float(est / se) if se > 0 else float("inf")
-    p = float(2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))) if np.isfinite(z) else 0.0
+    z = float(est / se) if se > 0 else float("nan")
+    p = float(math.erfc(abs(z) / math.sqrt(2))) if np.isfinite(z) else float("nan")
     return BlockJackknifeResult(est, se, z, p, nb, int(np.sum(den_b)))
 
 
@@ -182,8 +165,12 @@ def _aggregate_to_pop_allele_freq(
         g = gt.astype(float)
         missing = g < 0
         g[missing] = np.nan
-        max_val = np.nanmax(g)
-        if max_val <= 1:
+        all_nan = np.all(np.isnan(g))
+        max_val = np.nan if all_nan else np.nanmax(g)
+        if all_nan:
+            hap_count_per_sample = np.zeros_like(g)
+            alt_counts_per_sample = np.zeros_like(g)
+        elif max_val <= 1:
             hap_count_per_sample = np.where(np.isnan(g), 0.0, 1.0)
             alt_counts_per_sample = np.where(np.isnan(g), 0.0, g)
         else:
@@ -267,6 +254,7 @@ def f2(
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    include_self: bool = False,
 ) -> pd.DataFrame:
     """
     Compute f2-statistics with block-jackknife standard errors.
@@ -274,9 +262,13 @@ def f2(
     Args:
         data: Either a SNPObject or a tuple (afs, counts, pops), where `afs` and `counts` are arrays of
               shape (n_snps, n_pops). If a SNPObject is provided, `sample_labels` are used to aggregate samples to populations.
-        pop1, pop2: Populations to compute f2 for. If None, compute all pairs (pop, pop2>=pop1) with pop1 <= pop2 order.
+        pop1, pop2: Populations to compute f2 for. 
+            If None:
+                - with include_self=False (default), compute only off-diagonal pairs i<j.
+                - with include_self=True, compute all pairs including diagonals (i<=j).
         sample_labels: Population label per sample (aligned with SNPObject.samples) when `data` is a SNPObject.
         apply_correction: Apply small-sample correction p*(1-p)/(n-1) per population.
+            When True, SNPs with n<=1 in either population are excluded at that SNP.
         block_size: Number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
         blocks: Optional explicit block id per SNP. If provided, overrides `block_size`.
         ancestry: Optional ancestry code to mask genotypes to a specific ancestry before aggregation. Requires LAI.
@@ -291,7 +283,10 @@ def f2(
     n_blocks = block_lengths.size
 
     if pop1 is None and pop2 is None:
-        pop_pairs = [(pops[i], pops[j]) for i in range(n_pops) for j in range(i, n_pops)]
+        if include_self:
+            pop_pairs = [(pops[i], pops[j]) for i in range(n_pops) for j in range(i, n_pops)]
+        else:
+            pop_pairs = [(pops[i], pops[j]) for i in range(n_pops) for j in range(i + 1, n_pops)]
     else:
         if pop1 is None or pop2 is None:
             raise ValueError("Both pop1 and pop2 must be provided when one is provided")
@@ -313,19 +308,23 @@ def f2(
         n_i = counts[:, i].astype(float)
         n_j = counts[:, j].astype(float)
 
-        # per-SNP f2 numerator and denominator (den=1 means SNP contributes)
-        with np.errstate(invalid="ignore"):
+        # per-SNP f2 with optional small-sample correction.
+        # If apply_correction is True, SNPs with n<=1 for either population are excluded.
+        with np.errstate(divide="ignore", invalid="ignore"):
             num = (p_i - p_j) ** 2
             if apply_correction:
-                denom_i = np.maximum(1.0, n_i - 1.0)
-                denom_j = np.maximum(1.0, n_j - 1.0)
-                num = num - (p_i * (1.0 - p_i)) / denom_i - (p_j * (1.0 - p_j)) / denom_j
-        # Mask SNPs with missing AFs or zero counts
-        snp_mask = np.isfinite(num) & (n_i > 0) & (n_j > 0)
+                corr_i = np.where(n_i > 1, (p_i * (1.0 - p_i)) / (n_i - 1.0), np.nan)
+                corr_j = np.where(n_j > 1, (p_j * (1.0 - p_j)) / (n_j - 1.0), np.nan)
+                num = num - corr_i - corr_j
+        # SNPs contribute only if the correction was defined (finite) and AFs present
+        if apply_correction:
+            snp_mask = np.isfinite(num)
+        else:
+            snp_mask = np.isfinite(num) & (n_i > 0) & (n_j > 0)
 
-        # Aggregate per block: sums of num and counts
-        num_block_sums = np.zeros(n_blocks, dtype=float)
-        den_block_sums = np.zeros(n_blocks, dtype=float)
+        # Aggregate per block: sums of num and counts. Use NaN to mark empty blocks.
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
         for b, idx in enumerate(block_bins):
             if idx.size == 0:
                 continue
@@ -358,6 +357,7 @@ def f3(
     ref1: Optional[Sequence[str]] = None,
     ref2: Optional[Sequence[str]] = None,
     sample_labels: Optional[Sequence[str]] = None,
+    apply_correction: bool = True,
     block_size: int = 5000,
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
@@ -369,6 +369,8 @@ def f3(
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `target`, `ref1`, and `ref2` are all None, compute f3 for all combinations where each role can be any population.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+    - If `apply_correction` is True, subtract the finite sample term p_t*(1-p_t)/(n_t-1) from the per-SNP product.
+        When True, SNPs with n_t<=1 are excluded.
     """
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
     n_snps, _ = afs.shape
@@ -399,12 +401,19 @@ def f3(
         n1 = counts[:, i1].astype(float)
         n2 = counts[:, i2].astype(float)
 
-        with np.errstate(invalid="ignore"):
+        with np.errstate(invalid="ignore", divide="ignore"):
             num = (pt - p1) * (pt - p2)
-        snp_mask = np.isfinite(num) & (nt > 0) & (n1 > 0) & (n2 > 0)
+            if apply_correction:
+                corr_t = np.where(nt > 1, (pt * (1.0 - pt)) / (nt - 1.0), np.nan)
+                num = num - corr_t
+        if apply_correction:
+            # Require a valid correction on the target, references can be n>0
+            snp_mask = np.isfinite(num) & (n1 > 0) & (n2 > 0)
+        else:
+            snp_mask = np.isfinite(num) & (nt > 0) & (n1 > 0) & (n2 > 0)
 
-        num_block_sums = np.zeros(n_blocks, dtype=float)
-        den_block_sums = np.zeros(n_blocks, dtype=float)
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
         for b, idx in enumerate(block_bins):
             if idx.size == 0:
                 continue
@@ -487,8 +496,8 @@ def f4(
             num = (A - B) * (C - D)
         snp_mask = np.isfinite(num) & (na > 0) & (nb > 0) & (nc > 0) & (nd > 0)
 
-        num_block_sums = np.zeros(n_blocks, dtype=float)
-        den_block_sums = np.zeros(n_blocks, dtype=float)
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
         for b_idx, idx in enumerate(block_bins):
             if idx.size == 0:
                 continue
@@ -530,7 +539,9 @@ def d_stat(
     laiobj: Optional[Any] = None,
 ) -> pd.DataFrame:
     """
-    Compute D-statistics D(a, b; c, d) = f4 / E[(a+b-2ab)(c+d-2cd)] with block-jackknife SE.
+    Compute D-statistics D(a, b; c, d) as ratio of sums:
+        D = sum_l (A-B)(C-D)  /  sum_l (A+B-2AB)(C+D-2CD)
+    with delete-one block jackknife SE.
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
@@ -574,8 +585,9 @@ def d_stat(
 
         snp_mask = np.isfinite(num) & np.isfinite(den) & (na > 0) & (nb > 0) & (nc > 0) & (nd > 0)
 
-        num_block_sums = np.zeros(n_blocks, dtype=float)
-        den_block_sums = np.zeros(n_blocks, dtype=float)
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        ct_block_sums = np.zeros(n_blocks, dtype=int)
         for b_idx, idx in enumerate(block_bins):
             if idx.size == 0:
                 continue
@@ -583,8 +595,11 @@ def d_stat(
             if idx2.size == 0:
                 continue
             num_block_sums[b_idx] = float(np.nansum(num[idx2]))
-            den_block_sums[b_idx] = float(np.nansum(den[idx2]))
-
+            # drop near-zero denominators within a block for stability
+            block_den = float(np.nansum(den[idx2]))
+            den_block_sums[b_idx] = block_den if abs(block_den) > 1e-12 else np.nan
+            ct_block_sums[b_idx] = int(idx2.size)
+            
         res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
         rows.append(
             {
@@ -597,7 +612,7 @@ def d_stat(
                 "z": res.z,
                 "p": res.p,
                 "n_blocks": res.n_blocks,
-                "n_snps": res.n_snps,
+                "n_snps": int(ct_block_sums.sum()),
             }
         )
 
@@ -652,8 +667,9 @@ def f4_ratio(
         mask_den = np.isfinite(den_snp) & (nE > 0) & (nF > 0) & (nG > 0) & (nH > 0)
         mask_both = mask_num & mask_den
 
-        num_block_sums = np.zeros(n_blocks, dtype=float)
-        den_block_sums = np.zeros(n_blocks, dtype=float)
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        ct_block_sums = np.zeros(n_blocks, dtype=int)
         for b_idx, idx in enumerate(block_bins):
             if idx.size == 0:
                 continue
@@ -661,8 +677,10 @@ def f4_ratio(
             if idx2.size == 0:
                 continue
             num_block_sums[b_idx] = float(np.nansum(num_snp[idx2]))
-            den_block_sums[b_idx] = float(np.nansum(den_snp[idx2]))
-
+            block_den = float(np.nansum(den_snp[idx2]))
+            den_block_sums[b_idx] = block_den if abs(block_den) > 1e-12 else np.nan
+            ct_block_sums[b_idx] = int(idx2.size)
+            
         res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
         rows.append(
             {
@@ -673,7 +691,7 @@ def f4_ratio(
                 "z": res.z,
                 "p": res.p,
                 "n_blocks": res.n_blocks,
-                "n_snps": res.n_snps,
+                "n_snps": int(ct_block_sums.sum()),
             }
         )
 

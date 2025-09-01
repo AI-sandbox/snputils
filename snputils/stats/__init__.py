@@ -6,5 +6,5 @@ __all__ = [
     "f4",
     "d_stat",
     "f4_ratio",
-    "fst"
+    "fst",
 ]

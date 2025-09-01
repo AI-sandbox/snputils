@@ -95,7 +95,7 @@ Our benchmark demonstrates superior performance compared to existing tools:
 
 *Reading performance comparison for chromosome 22 data across different tools. See the [benchmark directory](https://github.com/AI-sandbox/snputils/tree/main/benchmark) for detailed methodology and results.*
 
-The **snputils** package is continuously updated with new features and improvements. Future releases will include support for statistical computations, admixture simulations, command-line tools, and more.
+The **snputils** package is continuously updated with new features and improvements.
 
 ## Documentation & Support
 

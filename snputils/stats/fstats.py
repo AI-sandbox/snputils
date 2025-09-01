@@ -740,13 +740,14 @@ def fst(
       * For WC we use expected heterozygosity h_i = 2 p_i (1 - p_i) from allele freqs.
       * SNPs with n<=1 in either pop or with invalid denominators are ignored.
     """
-    method = str(method).strip().lower()
+    method = str(method).strip().lower().replace(" ", "_").replace("-", "_")
     if method in ("wc", "weir", "weir_cockerham", "weir-cockerham"):
         method = "weir_cockerham"
     elif method in ("h", "hudson", "bhatia", "ratio", "ratio_of_averages", "ratio-of-averages"):
         method = "hudson"
     elif method not in ("hudson", "weir_cockerham"):
-        raise ValueError("Unknown method for fst: {method!r}")
+        # only raise if it's neither a known alias nor a canonical name
+        raise ValueError(f"Unknown method for fst: {method!r}")
 
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
     n_snps, n_pops = afs.shape

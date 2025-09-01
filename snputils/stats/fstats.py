@@ -745,8 +745,7 @@ def fst(
         method = "weir_cockerham"
     elif method in ("h", "hudson", "bhatia", "ratio", "ratio_of_averages", "ratio-of-averages"):
         method = "hudson"
-    elif method not in ("hudson", "weir_cockerham"):
-        raise ValueError("Unknown method for fst: {method!r}")
+        raise ValueError(f"Unknown method for fst: {method!r}")
 
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
     n_snps, n_pops = afs.shape

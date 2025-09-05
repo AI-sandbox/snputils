@@ -358,3 +358,26 @@ def test_fst_weir_cockerham_identical_populations_expected_bias():
     est = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=2).est.iloc[0]
     expected = -0.5 / (40.0 - 1.0)   # = -1/(2*39)
     assert np.isclose(est, expected, atol=1e-12)
+
+
+def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
+    afs, counts, pops = _toy_data()
+    # Use A and B from toy; all counts are 20 so masks align
+    pop1 = ["A"]
+    pop2 = ["B"]
+    # Fst (Hudson)
+    fst_row = fst((afs, counts, pops), pop1=pop1, pop2=pop2, method="hudson", block_size=2).iloc[0]
+    # f2 sums: corrected (numerator) and uncorrected (part of denominator)
+    f2_corr_row = f2((afs, counts, pops), pop1=pop1, pop2=pop2, apply_correction=True, block_size=2).iloc[0]
+    f2_unc_row = f2((afs, counts, pops), pop1=pop1, pop2=pop2, apply_correction=False, block_size=2).iloc[0]
+    num_sum = f2_corr_row.est * f2_corr_row.n_snps
+    f2_unc_sum = f2_unc_row.est * f2_unc_row.n_snps
+    # Within-pop expected heterozygosities (per-snp p(1-p) terms sum to 0.5*(2p(1-p)) per pop)
+    i = pops.index(pop1[0])
+    j = pops.index(pop2[0])
+    p_i = afs[:, i]
+    p_j = afs[:, j]
+    within_sum = np.sum(p_i * (1.0 - p_i) + p_j * (1.0 - p_j))
+    den_sum = f2_unc_sum + within_sum
+    expected = num_sum / den_sum
+    assert np.isclose(fst_row.est, expected, rtol=1e-12, atol=1e-12)

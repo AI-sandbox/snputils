@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from snputils.stats import f2, f3, f4, d_stat, f4_ratio
+from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
 
 
 def _toy_data():
@@ -244,3 +244,140 @@ def test_all_snps_invalid_returns_nan():
     res = f4((afs, counts2, pops), a=["A"], b=["B"], c=["C"], d=["D"]).iloc[0]
     assert np.isnan(res.est) and np.isnan(res.se) and np.isnan(res.z) and np.isnan(res.p)
     assert res.n_blocks == 0 and res.n_snps == 0
+
+
+def test_fst_hudson_basic():
+    afs, counts, pops = _toy_data()
+    res = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="hudson", block_size=2)
+    assert res.shape[0] == 1
+    row = res.iloc[0]
+    assert row.method == "hudson"
+    assert np.isfinite(row.est)
+    assert row.n_blocks == 3
+    assert row.n_snps == 6
+
+
+def test_fst_weir_cockerham_basic():
+    afs, counts, pops = _toy_data()
+    res = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2)
+    assert res.shape[0] == 1
+    row = res.iloc[0]
+    assert row.method == "weir_cockerham"
+    assert np.isfinite(row.est)
+    assert row.n_blocks == 3
+    assert row.n_snps == 6
+
+
+def test_fst_all_pairs_default():
+    afs, counts, pops = _toy_data()
+    res = fst((afs, counts, pops), method="hudson", block_size=2)
+    # 4 pops → 6 unordered pairs
+    assert res.shape[0] == 6
+    assert set(res.method.unique()) == {"hudson"}
+
+
+def test_fst_invalid_method_raises():
+    afs, counts, pops = _toy_data()
+    try:
+        fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="not-a-method")
+        assert False, "expected ValueError"
+    except ValueError:
+        assert True
+
+
+def test_fst_ignores_snp_with_too_small_n():
+    afs, counts, pops = _toy_data()
+    counts2 = counts.copy()
+    # Make first SNP invalid in A (n=1) so it is dropped for both methods
+    counts2[0, pops.index("A")] = 1
+    r_h = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="hudson", block_size=2).iloc[0]
+    r_w = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2).iloc[0]
+    assert r_h.n_snps < 6 and r_w.n_snps < 6
+    assert np.isfinite(r_h.est) and np.isfinite(r_w.est)
+
+
+def test_fst_blocks_with_labels_invariant():
+    afs, counts, pops = _toy_data()
+    n = afs.shape[0]
+    labels = np.array([0,0,1,1,2,2])
+    base = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="hudson", blocks=labels).est.iloc[0]
+    perm = np.random.permutation(n)
+    alt  = fst((afs[perm], counts[perm], pops), pop1=["A"], pop2=["B"], method="hudson", blocks=labels[perm]).est.iloc[0]
+    assert np.isclose(base, alt, atol=1e-15)
+
+def test_fst_weir_cockerham_matches_manual_ratio_of_sums():
+    afs = np.array([[0.10, 0.90],
+                    [0.25, 0.75],
+                    [0.40, 0.60]], dtype=float)
+    counts = np.array([[40, 30],
+                       [40, 30],
+                       [40, 30]], dtype=float)
+    pops = ["X", "Y"]
+
+    p1, p2 = afs[:, 0], afs[:, 1]
+    n1, n2 = counts[:, 0], counts[:, 1]
+    n = n1 + n2
+    n_bar = n / 2.0
+    p_bar = (n1 * p1 + n2 * p2) / n
+    s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
+    h1 = 2 * p1 * (1 - p1)
+    h2 = 2 * p2 * (1 - p2)
+    h_bar = 0.5 * (h1 + h2)
+    n_c = n - (n1 * n1 + n2 * n2) / n  # == 2*n1*n2/n for r=2
+
+    a = (n_bar / n_c) * (s2 - (p_bar * (1 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1))
+    b = (n_bar / (n_bar - 1)) * (p_bar * (1 - p_bar) - 0.5 * s2 - ((2 * n_bar - 1) / (4 * n_bar)) * h_bar)
+    c = 0.5 * h_bar
+
+    expected = np.nansum(a) / np.nansum(a + b + c)
+
+    res = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=3).est.iloc[0]
+    assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
+
+def test_fst_hudson_identical_populations_expected_bias():
+    # Two identical pops across SNPs; equal haplotype counts per pop (n=40)
+    afs = np.array([[0.1, 0.1],
+                    [0.3, 0.3],
+                    [0.7, 0.7]], dtype=float)
+    counts = np.full_like(afs, 40.0)  # haplotype counts, equal across SNPs
+    pops = ["X", "Y"]
+
+    est = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="hudson", block_size=2).est.iloc[0]
+    expected = -1.0 / (40.0 - 1.0)   # = -1/39
+    assert np.isclose(est, expected, atol=1e-12)
+
+
+def test_fst_weir_cockerham_identical_populations_expected_bias():
+    # Same setup; WC has half the finite-sample bias of Hudson in this scenario
+    afs = np.array([[0.1, 0.1],
+                    [0.3, 0.3],
+                    [0.7, 0.7]], dtype=float)
+    counts = np.full_like(afs, 40.0)
+    pops = ["X", "Y"]
+
+    est = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=2).est.iloc[0]
+    expected = -0.5 / (40.0 - 1.0)   # = -1/(2*39)
+    assert np.isclose(est, expected, atol=1e-12)
+
+
+def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
+    afs, counts, pops = _toy_data()
+    # Use A and B from toy; all counts are 20 so masks align
+    pop1 = ["A"]
+    pop2 = ["B"]
+    # Fst (Hudson)
+    fst_row = fst((afs, counts, pops), pop1=pop1, pop2=pop2, method="hudson", block_size=2).iloc[0]
+    # f2 sums: corrected (numerator) and uncorrected (part of denominator)
+    f2_corr_row = f2((afs, counts, pops), pop1=pop1, pop2=pop2, apply_correction=True, block_size=2).iloc[0]
+    f2_unc_row = f2((afs, counts, pops), pop1=pop1, pop2=pop2, apply_correction=False, block_size=2).iloc[0]
+    num_sum = f2_corr_row.est * f2_corr_row.n_snps
+    f2_unc_sum = f2_unc_row.est * f2_unc_row.n_snps
+    # Within-pop expected heterozygosities (per-snp p(1-p) terms sum to 0.5*(2p(1-p)) per pop)
+    i = pops.index(pop1[0])
+    j = pops.index(pop2[0])
+    p_i = afs[:, i]
+    p_j = afs[:, j]
+    within_sum = np.sum(p_i * (1.0 - p_i) + p_j * (1.0 - p_j))
+    den_sum = f2_unc_sum + within_sum
+    expected = num_sum / den_sum
+    assert np.isclose(fst_row.est, expected, rtol=1e-12, atol=1e-12)

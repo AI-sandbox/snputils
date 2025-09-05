@@ -698,12 +698,160 @@ def f4_ratio(
     return pd.DataFrame(rows)
 
 
+def fst(
+    data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
+    pop1: Optional[Sequence[str]] = None,
+    pop2: Optional[Sequence[str]] = None,
+    *,
+    method: str = "hudson",
+    sample_labels: Optional[Sequence[str]] = None,
+    block_size: int = 5000,
+    blocks: Optional[np.ndarray] = None,
+    ancestry: Optional[Union[str, int]] = None,
+    laiobj: Optional[Any] = None,
+    include_self: bool = False,
+) -> pd.DataFrame:
+    """
+    Pairwise F_ST with delete-one block jackknife SE.
+
+    Methods:
+      - 'hudson' (a.k.a. "ratio of averages" following Hudson 1992 / Bhatia 2013):
+            per-SNP num = d_xy - 0.5*(pi_x + pi_y)
+            per-SNP den = d_xy
+        where d_xy = p_x*(1-p_y) + p_y*(1-p_x) and
+              pi_x = 2*p_x*(1-p_x) * n_x/(n_x - 1) (unbiased within-pop diversity on haplotypes).
+      - 'weir_cockerham' (Weir & Cockerham 1984; θ):
+            compute per-SNP variance components a,b,c (for r=2) from allele freqs and haplotype counts:
+                n1, n2 = haplotype counts; p1, p2 = allele freqs
+                n  = n1 + n2
+                n_bar = n / 2
+                p_bar = (n1*p1 + n2*p2) / n
+                s2    = (n1*(p1 - p_bar)**2 + n2*(p2 - p_bar)**2) / n_bar
+                h1, h2 = 2*p1*(1-p1), 2*p2*(1-p2)
+                h_bar = 0.5*(h1 + h2)
+                n_c   = (n - (n1**2 + n2**2)/n)  # equals 2*n1*n2/n for r=2
+                a = (n_bar / n_c) * (s2 - (p_bar*(1 - p_bar) - 0.5*s2 - 0.25*h_bar) / (n_bar - 1))
+                b = (n_bar / (n_bar - 1)) * (p_bar*(1 - p_bar) - 0.5*s2 - ((2*n_bar - 1)/(4*n_bar))*h_bar)
+                c = 0.5 * h_bar
+            and use num=a, den=(a+b+c), then ratio-of-sums jackknife.
+
+    Notes:
+      * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
+      * For WC we use expected heterozygosity h_i = 2 p_i (1 - p_i) from allele freqs.
+      * SNPs with n<=1 in either pop or with invalid denominators are ignored.
+    """
+    method = str(method).strip().lower().replace(" ", "_").replace("-", "_")
+    if method in ("wc", "weir", "weir_cockerham", "weir-cockerham"):
+        method = "weir_cockerham"
+    elif method in ("h", "hudson", "bhatia", "ratio", "ratio_of_averages", "ratio-of-averages"):
+        method = "hudson"
+    elif method not in ("hudson", "weir_cockerham"):
+        # only raise if it's neither a known alias nor a canonical name
+        raise ValueError(f"Unknown method for fst: {method!r}")
+
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    n_snps, n_pops = afs.shape
+    block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
+    n_blocks = block_lengths.size
+
+    if pop1 is None and pop2 is None:
+        if include_self:
+            pairs = [(pops[i], pops[j]) for i in range(n_pops) for j in range(i, n_pops)]
+        else:
+            pairs = [(pops[i], pops[j]) for i in range(n_pops) for j in range(i + 1, n_pops)]
+    else:
+        if pop1 is None or pop2 is None or len(pop1) != len(pop2):
+            raise ValueError("pop1 and pop2 must both be provided and of equal length")
+        pairs = list(zip(pop1, pop2))
+
+    name_to_idx = {p: i for i, p in enumerate(pops)}
+    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
+
+    out_rows: List[Dict[str, Union[str, float, int]]] = []
+
+    for pA, pB in pairs:
+        i = name_to_idx[pA]
+        j = name_to_idx[pB]
+        p1 = afs[:, i].astype(float)
+        p2 = afs[:, j].astype(float)
+        n1 = counts[:, i].astype(float)
+        n2 = counts[:, j].astype(float)
+
+        valid = np.isfinite(p1) & np.isfinite(p2)
+
+        if method == "hudson":
+            # d_xy and within-pop diversities (unbiased, haplotype-based)
+            d_xy = p1 * (1.0 - p2) + p2 * (1.0 - p1)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pi1 = 2.0 * p1 * (1.0 - p1) * (n1 / (n1 - 1.0))
+                pi2 = 2.0 * p2 * (1.0 - p2) * (n2 / (n2 - 1.0))
+            num_snp = d_xy - 0.5 * (pi1 + pi2)
+            den_snp = d_xy
+            snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
+        else:
+            # Weir-Cockerham θ components (r=2)
+            n = n1 + n2
+            with np.errstate(divide="ignore", invalid="ignore"):
+                n_bar = n / 2.0
+                p_bar = np.where(n > 0, (n1 * p1 + n2 * p2) / n, np.nan)
+                s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
+                h1 = 2.0 * p1 * (1.0 - p1)
+                h2 = 2.0 * p2 * (1.0 - p2)
+                h_bar = 0.5 * (h1 + h2)
+                n_c = n - (n1 * n1 + n2 * n2) / np.where(n > 0, n, np.nan)  # == 2*n1*n2/n
+                # components
+                a = (n_bar / n_c) * (s2 - (p_bar * (1.0 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1.0))
+                b = (n_bar / (n_bar - 1.0)) * (p_bar * (1.0 - p_bar) - 0.5 * s2 - ((2.0 * n_bar - 1.0) / (4.0 * n_bar)) * h_bar)
+                c = 0.5 * h_bar
+                num_snp = a
+                den_snp = a + b + c
+            # Need at least 2 haplotypes per pop and well-defined denominators
+            snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
+
+        # Aggregate by blocks
+        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
+        ct_block_sums = np.zeros(n_blocks, dtype=int)
+
+        for b_idx, idx in enumerate(block_bins):
+            if idx.size == 0:
+                continue
+            idx2 = idx[snp_mask[idx]]
+            if idx2.size == 0:
+                continue
+            ns = float(np.nansum(num_snp[idx2]))
+            ds = float(np.nansum(den_snp[idx2]))
+            # drop numerically-zero denominators for stability
+            den_block_sums[b_idx] = ds if abs(ds) > 1e-12 else np.nan
+            num_block_sums[b_idx] = ns
+            ct_block_sums[b_idx] = int(idx2.size)
+
+        res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+        out_rows.append(
+            {
+                "pop1": pA,
+                "pop2": pB,
+                "method": method,
+                "est": res.est,
+                "se": res.se,
+                "z": res.z,
+                "p": res.p,
+                "n_blocks": res.n_blocks,
+                "n_snps": int(ct_block_sums.sum()),
+            }
+        )
+
+    return pd.DataFrame(out_rows)
+
+
+
 __all__ = [
     "f2",
     "f3",
     "f4",
     "d_stat",
     "f4_ratio",
+    "fst",
 ]
 
 

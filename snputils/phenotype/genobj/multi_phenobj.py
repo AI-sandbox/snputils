@@ -88,6 +88,7 @@ class MultiPhenotypeObject():
             samples: Optional[Union[str, Sequence[str], np.ndarray]] = None, 
             indexes: Optional[Union[int, Sequence[int], np.ndarray]] = None, 
             include: bool = True, 
+            reorder: bool = False, 
             inplace: bool = False
         ) -> Optional['MultiPhenotypeObject']:
         """
@@ -96,7 +97,8 @@ class MultiPhenotypeObject():
         This method allows you to include or exclude specific samples by their names,
         indexes, or both. When both samples and indexes are provided, the union of
         the specified samples is used. Negative indexes are supported and follow NumPy's indexing 
-        conventions. It updates the `lai`, `samples`, and `haplotypes` attributes accordingly.
+        conventions. Set `reorder=True` to match the ordering of the provided `samples` and/or
+        `indexes` lists when including.
 
         Args:
             samples (str or array_like of str, optional): 
@@ -124,7 +126,7 @@ class MultiPhenotypeObject():
 
         # Create mask based on sample names
         if samples is not None:
-            samples = np.atleast_1d(samples)
+            samples = np.asarray(samples).ravel()
             # Extract sample names from the DataFrame
             sample_names = self.__phen_df.iloc[:, 0].values
             # Create mask for samples belonging to specified names
@@ -134,7 +136,7 @@ class MultiPhenotypeObject():
 
         # Create mask based on sample indexes
         if indexes is not None:
-            indexes = np.atleast_1d(indexes)
+            indexes = np.asarray(indexes).ravel()
             # Adjust negative indexes
             indexes = np.mod(indexes, n_samples)
             if np.any((indexes < 0) | (indexes >= n_samples)):
@@ -152,11 +154,49 @@ class MultiPhenotypeObject():
             # Invert mask if excluding samples
             mask_combined = ~mask_combined
 
+        # If requested, compute an ordering of selected rows that follows the provided lists
+        ordered_indices = None
+        if include and reorder:
+            sel_indices = np.where(mask_combined)[0]
+            sample_names = self.__phen_df.iloc[:, 0].values
+            ordered_list = []
+            added = np.zeros(n_samples, dtype=bool)
+
+            # Respect the order provided in `samples` (supports duplicate sample names)
+            if samples is not None:
+                for s in samples:
+                    matches = np.where(sample_names == s)[0]
+                    for idx in matches:
+                        if mask_combined[idx] and not added[idx]:
+                            ordered_list.append(int(idx))
+                            added[idx] = True
+
+            # Then respect the order in `indexes`
+            if indexes is not None:
+                adj_idx = np.mod(np.atleast_1d(indexes), n_samples)
+                for idx in adj_idx:
+                    if mask_combined[idx] and not added[idx]:
+                        ordered_list.append(int(idx))
+                        added[idx] = True
+
+            # Finally, append any remaining selected rows in their original order
+            for idx in sel_indices:
+                if not added[idx]:
+                    ordered_list.append(int(idx))
+
+            ordered_indices = np.asarray(ordered_list, dtype=int)
+
         # Filter the phenotype DataFrame
         if inplace:
-            self['phen_df'] = self['phen_df'][mask_combined].reset_index(drop=True)
+            if ordered_indices is not None:
+                self['phen_df'] = self['phen_df'].iloc[ordered_indices].reset_index(drop=True)
+            else:
+                self['phen_df'] = self['phen_df'][mask_combined].reset_index(drop=True)
             return None
         else:
             phen_obj = self.copy()
-            phen_obj['phen_df'] = phen_obj['phen_df'][mask_combined].reset_index(drop=True)
+            if ordered_indices is not None:
+                phen_obj['phen_df'] = phen_obj['phen_df'].iloc[ordered_indices].reset_index(drop=True)
+            else:
+                phen_obj['phen_df'] = phen_obj['phen_df'][mask_combined].reset_index(drop=True)
             return phen_obj

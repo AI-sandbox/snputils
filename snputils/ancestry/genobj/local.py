@@ -398,6 +398,7 @@ class LocalAncestryObject(AncestryObject):
         samples: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
         indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
         include: bool = True,
+        reorder: bool = False,
         inplace: bool = False
     ) -> Optional['LocalAncestryObject']:
         """
@@ -405,7 +406,8 @@ class LocalAncestryObject(AncestryObject):
 
         This method updates the `lai`, `haplotypes`, and `samples` attributes to include or exclude the specified 
         samples. Each sample is associated with two haplotypes, which are included or excluded together.
-        The order of the samples is preserved.
+        The order of the samples is preserved. Set `reorder=True` to match the ordering of the
+        provided `samples` and/or `indexes` lists when including.
 
         If both samples and indexes are provided, any sample matching either a name in samples or an index in 
         indexes will be included or excluded.
@@ -440,7 +442,7 @@ class LocalAncestryObject(AncestryObject):
 
         # Create mask based on sample names
         if samples is not None:
-            samples = np.atleast_1d(samples)
+            samples = np.asarray(samples).ravel()
             # Extract sample names from haplotype identifiers
             haplotype_ids = np.array(self['haplotypes'])
             sample_names = np.array([hap.split('.')[0] for hap in haplotype_ids])
@@ -451,7 +453,7 @@ class LocalAncestryObject(AncestryObject):
 
         # Create mask based on sample indexes
         if indexes is not None:
-            indexes = np.atleast_1d(indexes)
+            indexes = np.asarray(indexes).ravel()
 
             # Validate indexes, allowing negative indexes
             out_of_bounds_indexes = indexes[(indexes < -n_samples) | (indexes >= n_samples)]
@@ -475,15 +477,59 @@ class LocalAncestryObject(AncestryObject):
         if not include:
             mask_combined = ~mask_combined
 
-        # Filter `lai`
-        filtered_lai = self['lai'][:, mask_combined]
-
-        # Filter `haplotypes`
-        filtered_haplotypes = np.array(self['haplotypes'])[mask_combined].tolist()
-
-        # Filter `samples`, checking if they are None before filtering
+        # Optionally compute an ordering of selected samples that follows the provided lists
+        ordered_sample_indices = None
         sample_mask = mask_combined.reshape(-1, 2).any(axis=1)
-        filtered_samples = np.array(self['samples'])[sample_mask].tolist() if self['samples'] is not None else None
+        if include and reorder:
+            sel_sample_indices = np.where(sample_mask)[0]
+            ordered_list: List[int] = []
+            added = np.zeros(self.n_samples, dtype=bool)
+
+            # Source of sample names for ordering logic
+            haplotype_ids = np.array(self['haplotypes'])
+            sample_names_by_sample = np.array([hap.split('.')[0] for hap in haplotype_ids])[::2]
+
+            # Respect the order in `samples`
+            if samples is not None:
+                for s in np.atleast_1d(samples):
+                    # Find the sample index by name (first occurrence)
+                    matches = np.where(sample_names_by_sample == s)[0]
+                    for idx in matches:
+                        if sample_mask[idx] and not added[idx]:
+                            ordered_list.append(int(idx))
+                            added[idx] = True
+
+            # Then respect the order in `indexes`
+            if indexes is not None:
+                adj_idx = np.mod(np.atleast_1d(indexes), self.n_samples)
+                for idx in adj_idx:
+                    if sample_mask[idx] and not added[idx]:
+                        ordered_list.append(int(idx))
+                        added[idx] = True
+
+            # Append any remaining selected samples in their original order
+            for idx in sel_sample_indices:
+                if not added[idx]:
+                    ordered_list.append(int(idx))
+
+            ordered_sample_indices = np.asarray(ordered_list, dtype=int)
+
+        # Filter / reorder arrays
+        if ordered_sample_indices is not None:
+            hap_idx = np.concatenate([2*ordered_sample_indices, 2*ordered_sample_indices + 1])
+            filtered_lai = self['lai'][:, hap_idx]
+            filtered_haplotypes = np.array(self['haplotypes'])[hap_idx].tolist()
+            filtered_samples = (
+                np.array(self['samples'])[ordered_sample_indices].tolist()
+                if self['samples'] is not None else None
+            )
+        else:
+            # Filter `lai`
+            filtered_lai = self['lai'][:, mask_combined]
+            # Filter `haplotypes`
+            filtered_haplotypes = np.array(self['haplotypes'])[mask_combined].tolist()
+            # Filter `samples`, checking if they are None before filtering
+            filtered_samples = np.array(self['samples'])[sample_mask].tolist() if self['samples'] is not None else None
 
         if inplace:
             self['haplotypes'] = filtered_haplotypes

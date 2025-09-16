@@ -28,9 +28,9 @@ class IBDObject:
         """
         Args:
             sample_id_1 (array of shape (n_segments,)): Sample identifiers for the first individual.
-            haplotype_id_1 (array of shape (n_segments,)): Haplotype identifiers for the first individual (values in {1, 2}).
+            haplotype_id_1 (array of shape (n_segments,)): Haplotype identifiers for the first individual (values in {1, 2}, or -1 if unknown).
             sample_id_2 (array of shape (n_segments,)): Sample identifiers for the second individual.
-            haplotype_id_2 (array of shape (n_segments,)): Haplotype identifiers for the second individual (values in {1, 2}).
+            haplotype_id_2 (array of shape (n_segments,)): Haplotype identifiers for the second individual (values in {1, 2}, or -1 if unknown).
             chrom (array of shape (n_segments,)): Chromosome identifier for each IBD segment.
             start (array of shape (n_segments,)): Start physical position (1-based, bp) for each IBD segment.
             end (array of shape (n_segments,)): End physical position (1-based, bp) for each IBD segment.

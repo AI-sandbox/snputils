@@ -1,4 +1,3 @@
-import gzip
 import logging
 from io import StringIO
 from pathlib import Path
@@ -82,13 +81,7 @@ class AncIBDReader(IBDBaseReader):
         }
 
         for f in files:
-            is_gz = str(f).endswith(".gz")
-            if is_gz:
-                with gzip.open(f, "rt") as fh:
-                    text = fh.read()
-                frame = pl.read_csv(StringIO(text), separator="\t", has_header=True, schema_overrides=schema_overrides)
-            else:
-                frame = pl.read_csv(str(f), separator="\t", has_header=True, schema_overrides=schema_overrides)
+            frame = pl.read_csv(str(f), separator="\t", has_header=True, schema_overrides=schema_overrides)
             frames.append(frame)
 
         df = pl.concat(frames, how="vertical") if len(frames) > 1 else frames[0]

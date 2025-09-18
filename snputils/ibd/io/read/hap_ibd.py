@@ -74,43 +74,22 @@ class HapIBDReader(IBDBaseReader):
                 },
             )
         else:
-            if is_gz:
-                # Read decompressed content into memory and let polars parse it
-                with gzip.open(self.file, 'rt') as f:
-                    text = f.read()
-                df = pl.read_csv(
-                    source=StringIO(text),
-                    has_header=False,
-                    separator=separator,
-                    new_columns=col_names,
-                    schema_overrides={
-                        'sample_id_1': pl.Utf8,
-                        'haplotype_id_1': pl.Int8,
-                        'sample_id_2': pl.Utf8,
-                        'haplotype_id_2': pl.Int8,
-                        'chrom': pl.Utf8,
-                        'start': pl.Int64,
-                        'end': pl.Int64,
-                        'length_cm': pl.Float64,
-                    },
-                )
-            else:
-                df = pl.read_csv(
-                    source=str(self.file),
-                    has_header=False,
-                    separator=separator,
-                    new_columns=col_names,
-                    schema_overrides={
-                        'sample_id_1': pl.Utf8,
-                        'haplotype_id_1': pl.Int8,
-                        'sample_id_2': pl.Utf8,
-                        'haplotype_id_2': pl.Int8,
-                        'chrom': pl.Utf8,
-                        'start': pl.Int64,
-                        'end': pl.Int64,
-                        'length_cm': pl.Float64,
-                    },
-                )
+            df = pl.read_csv(
+                source=str(self.file),
+                has_header=False,
+                separator=separator,
+                new_columns=col_names,
+                schema_overrides={
+                    'sample_id_1': pl.Utf8,
+                    'haplotype_id_1': pl.Int8,
+                    'sample_id_2': pl.Utf8,
+                    'haplotype_id_2': pl.Int8,
+                    'chrom': pl.Utf8,
+                    'start': pl.Int64,
+                    'end': pl.Int64,
+                    'length_cm': pl.Float64,
+                },
+            )
 
         ibdobj = IBDObject(
             sample_id_1=df['sample_id_1'].to_numpy(),

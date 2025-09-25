@@ -343,9 +343,10 @@ class IBDObject:
         min_bp: Optional[int] = None,
         min_cm: Optional[float] = None,
         inplace: bool = False,
+        method: str = 'clip',
     ) -> Optional['IBDObject']:
         """
-        Trim IBD segments to intervals where both individuals carry the specified ancestry
+        Filter and/or trim IBD segments to intervals where both individuals carry the specified ancestry
         according to a `LocalAncestryObject`.
 
         This performs an interval intersection per segment against ancestry tracts:
@@ -355,11 +356,14 @@ class IBDObject:
           considered present for an individual if at least one of their haplotypes matches
           the requested ancestry (unless `require_both_haplotypes=True`).
 
-        Resulting subsegments are clipped to LAI window boundaries and original IBD start/end,
-        with optional length filtering by bp or cM. If `laiobj.centimorgan_pos` is available,
-        genetic lengths are approximated by distributing window cM length proportionally to
-        base-pair overlap; otherwise, length is scaled from the original segment by bp fraction
-        when available, or set to None.
+        Method 'strict':
+            Drop entire IBD segments if ANY overlapping LAI window contains non-target ancestry
+            for either individual. No trimming occurs - segments are kept whole or dropped completely.
+
+        Method 'clip':
+            Trim IBD segments to contiguous regions where both individuals have the target ancestry.
+            Resulting subsegments are clipped to LAI window boundaries and original IBD start/end,
+            with optional length filtering by bp or cM.
 
         Args:
             laiobj: LocalAncestryObject containing 2D `lai` of shape (n_windows, n_haplotypes),
@@ -368,14 +372,19 @@ class IBDObject:
             require_both_haplotypes: If True, require both haplotypes of each individual to have
                 the target ancestry within a window. When haplotypes are known per segment, this
                 only affects cases with unknown haplotypes (== -1) or IBD2 segments.
-            min_bp: Minimum base-pair length to retain a trimmed subsegment.
-            min_cm: Minimum centiMorgan length to retain a trimmed subsegment (applied after bp).
+            min_bp: Minimum base-pair length to retain a segment (strict) or subsegment (clip).
+            min_cm: Minimum centiMorgan length to retain a segment (strict) or subsegment (clip).
             inplace: If True, replace `self` with the restricted object; else return a new object.
+            method: Method to use for filtering. 'strict' drops entire segments that overlap with
+                non-target ancestry. 'clip' trims segments to target ancestry regions.
 
         Returns:
             Optional[IBDObject]: A restricted IBDObject if `inplace=False`. If `inplace=True`,
                 returns None.
         """
+        if method not in ['strict', 'clip']:
+            raise ValueError(f"Method must be 'strict' or 'clip', got '{method}'")
+
         # Basic LAI shape/metadata checks
         lai = getattr(laiobj, 'lai', None)
         physical_pos = getattr(laiobj, 'physical_pos', None)
@@ -497,58 +506,86 @@ class IBDObject:
                     s2_mask = (lai_rows[:, s2_a] == anc_str) | (lai_rows[:, s2_b] == anc_str)
 
             keep = overlaps & s1_mask & s2_mask
-            if not np.any(keep):
-                continue
 
-            # Identify contiguous windows where keep=True
-            idx_keep = np.where(keep)[0]
-            # Split into runs of consecutive indices
-            breaks = np.where(np.diff(idx_keep) > 1)[0]
-            run_starts = np.r_[0, breaks + 1]
-            run_ends = np.r_[breaks, idx_keep.size - 1]
+            if method == 'strict':
+                # In strict mode, ALL overlapping windows must have target ancestry
+                if not np.array_equal(overlaps, keep):
+                    continue  # Drop entire segment
 
-            # Create subsegments for each contiguous run
-            for rs, re in zip(run_starts, run_ends):
-                i0 = idx_keep[rs]
-                i1 = idx_keep[re]
-                sub_start = int(max(seg_start, int(lai_st[i0])))
-                sub_end = int(min(seg_end, int(lai_en[i1])))
-                if sub_end < sub_start:
+                # Apply length filters to original segment
+                if min_bp is not None and (seg_end - seg_start + 1) < int(min_bp):
                     continue
 
-                # Length filters: bp first
-                if min_bp is not None and (sub_end - sub_start + 1) < int(min_bp):
-                    continue
+                # In strict mode, preserve original length_cm
+                cm_len = float(self.__length_cm[i]) if self.__length_cm is not None else None
 
-                # Compute cM length if possible, else approximate or None
-                cm_len = _approx_cm_len(idx_chr, sub_start, sub_end)
-                if cm_len is None and self.__length_cm is not None:
-                    # Scale the original segment length by bp fraction
-                    total_bp = max(1, int(seg_end - seg_start + 1))
-                    frac_bp = float(sub_end - sub_start + 1) / float(total_bp)
-                    try:
-                        cm_len = float(self.__length_cm[i]) * frac_bp
-                    except Exception:
-                        cm_len = None
-
-                # Apply cM filter if requested (treat None as 0)
                 if min_cm is not None:
                     if cm_len is None or cm_len < float(min_cm):
                         continue
 
-                # Append trimmed segment
+                # Keep entire original segment
                 out_sample_id_1.append(s1)
                 out_sample_id_2.append(s2)
                 out_haplotype_id_1.append(h1)
                 out_haplotype_id_2.append(h2)
                 out_chrom.append(chrom)
-                out_start.append(sub_start)
-                out_end.append(sub_end)
-                # Always append a cM value aligned with segment count (NaN if unknown)
+                out_start.append(seg_start)
+                out_end.append(seg_end)
                 out_length_cm.append(float(cm_len) if cm_len is not None else float('nan'))
-                # Segment type carried over if available
                 if out_segment_type is not None:
                     out_segment_type.append(str(self.__segment_type[i]))  # type: ignore
+
+            else:  # method == 'clip'
+                if not np.any(keep):
+                    continue
+
+                # Identify contiguous windows where keep=True
+                idx_keep = np.where(keep)[0]
+                # Split into runs of consecutive indices
+                breaks = np.where(np.diff(idx_keep) > 1)[0]
+                run_starts = np.r_[0, breaks + 1]
+                run_ends = np.r_[breaks, idx_keep.size - 1]
+
+                # Create subsegments for each contiguous run
+                for rs, re in zip(run_starts, run_ends):
+                    i0 = idx_keep[rs]
+                    i1 = idx_keep[re]
+                    sub_start = int(max(seg_start, int(lai_st[i0])))
+                    sub_end = int(min(seg_end, int(lai_en[i1])))
+                    if sub_end < sub_start:
+                        continue
+
+                    # Length filters: bp first
+                    if min_bp is not None and (sub_end - sub_start + 1) < int(min_bp):
+                        continue
+
+                    # Compute cM length if possible, else approximate or None
+                    cm_len = _approx_cm_len(idx_chr, sub_start, sub_end)
+                    if cm_len is None and self.__length_cm is not None:
+                        # Scale the original segment length by bp fraction
+                        total_bp = max(1, int(seg_end - seg_start + 1))
+                        frac_bp = float(sub_end - sub_start + 1) / float(total_bp)
+                        try:
+                            cm_len = float(self.__length_cm[i]) * frac_bp
+                        except Exception:
+                            cm_len = None
+
+                    # Apply cM filter if requested (treat None as 0)
+                    if min_cm is not None:
+                        if cm_len is None or cm_len < float(min_cm):
+                            continue
+
+                    # Append trimmed segment
+                    out_sample_id_1.append(s1)
+                    out_sample_id_2.append(s2)
+                    out_haplotype_id_1.append(h1)
+                    out_haplotype_id_2.append(h2)
+                    out_chrom.append(chrom)
+                    out_start.append(sub_start)
+                    out_end.append(sub_end)
+                    out_length_cm.append(float(cm_len) if cm_len is not None else float('nan'))
+                    if out_segment_type is not None:
+                        out_segment_type.append(str(self.__segment_type[i]))  # type: ignore
 
         # If nothing remains, return empty object with zero segments
         if len(out_start) == 0:
@@ -636,5 +673,4 @@ class IBDObject:
         valid_values = np.array([1, 2, -1])
         if not np.isin(self.__haplotype_id_1, valid_values).all() or not np.isin(self.__haplotype_id_2, valid_values).all():
             raise ValueError("Haplotype identifiers must be in {1, 2} or -1 if unknown.")
-
 

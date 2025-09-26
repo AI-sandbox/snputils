@@ -92,7 +92,7 @@ jobs:
       # Build documentation and verify it builds correctly
       # DOC_ALLOW_EXEC=1 allows executing code examples in docstrings
       - name: Build documentation
-        run: DOC_ALLOW_EXEC=1 pdoc --docformat google -o docs/ snputils
+        run: DOC_ALLOW_EXEC=1 pdoc --docformat google --favicon https://snputils.org/su_favicon.png -o docs/ snputils
 
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact

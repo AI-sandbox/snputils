@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 
 from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
 

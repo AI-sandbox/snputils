@@ -18,7 +18,7 @@ bash benchmark/run.sh --data-dir $DATA_DIR
 ```
 The `--data-dir` argument specifies the directory where the data is stored. If the argument is not provided, it is stored in the `data` directory in the root of the repository. If the data is not found in the directory, it is downloaded from the internet.
 
-Python 3.12 is used since some of the libraries are not yet compatible with Python 3.13 (not the case with snputils).
+Python 3.12 is used since some of the libraries are not yet compatible with Python 3.13 or 3.14 (not the case with snputils).
 
 After running the benchmark, use the provided `plot.py` script to visualize the results:
 

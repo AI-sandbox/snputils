@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.13']  # Test on limit versions (3.8 and latest)
+        python-version: ['3.8', '3.14']  # Test on limit versions (3.8 and latest)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'  # Ensure this is the latest Python version so the cached deps are used
+          python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
 
       - name: Install package with docs dependencies
@@ -90,9 +90,9 @@ jobs:
           python -m pip install '.[docs]'
 
       # Build documentation and verify it builds correctly
-      # DOC_ALLOW_EXEC=1 allows executing code examples in docstrings
+      # PDOC_ALLOW_EXEC=1 allows executing code examples in docstrings
       - name: Build documentation
-        run: DOC_ALLOW_EXEC=1 pdoc --docformat google --favicon https://snputils.org/su_favicon.png -o docs/ snputils
+        run: PDOC_ALLOW_EXEC=1 pdoc --docformat google --favicon https://snputils.org/su_favicon.png -o docs/ snputils
 
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact
@@ -126,7 +126,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'  # Ensure this is the latest Python version so the cached deps are used
+          python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
 
       - name: Install build dependencies

@@ -595,13 +595,15 @@ class SNPObject:
             samples: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
             indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
             include: bool = True,
+            reorder: bool = False,
             inplace: bool = False
         ) -> Optional['SNPObject']:
         """
         Filter samples based on specified names or indexes.
 
         This method updates the `samples` and `calldata_gt` attributes to include or exclude the specified 
-        samples. The order of the samples is preserved.
+        samples. The order of the samples is preserved. Set `reorder=True` to match the ordering of the
+        provided `samples` and/or `indexes` lists when including.
 
         If both samples and indexes are provided, any sample matching either a name in samples or an index in 
         indexes will be included or excluded.
@@ -638,7 +640,7 @@ class SNPObject:
 
         # Create mask based on sample names
         if samples is not None:
-            samples = np.atleast_1d(samples)
+            samples = np.asarray(samples).ravel()
             mask_samples = np.isin(sample_names, samples)
             missing_samples = samples[~np.isin(samples, sample_names)]
             if missing_samples.size > 0:
@@ -648,7 +650,7 @@ class SNPObject:
 
         # Create mask based on sample indexes
         if indexes is not None:
-            indexes = np.atleast_1d(indexes)
+            indexes = np.asarray(indexes).ravel()
 
             # Validate indexes, allowing negative indexes
             out_of_bounds_indexes = indexes[(indexes < -n_samples) | (indexes >= n_samples)]
@@ -669,6 +671,37 @@ class SNPObject:
         if not include:
             mask_combined = ~mask_combined
 
+        # If requested, compute an ordering of selected samples that follows the provided lists.
+        ordered_indices = None
+        if include and reorder:
+            sel_indices = np.where(mask_combined)[0]
+            ordered_list: List[int] = []
+            added = np.zeros(n_samples, dtype=bool)
+
+            # Prioritize the order in `samples`
+            if samples is not None:
+                name_to_idx = {name: idx for idx, name in enumerate(sample_names)}
+                for s in samples:
+                    idx = name_to_idx.get(s)
+                    if idx is not None and mask_combined[idx] and not added[idx]:
+                        ordered_list.append(idx)
+                        added[idx] = True
+
+            # Then respect the order in `indexes`
+            if indexes is not None:
+                adj_idx = np.mod(np.atleast_1d(indexes), n_samples)
+                for idx in adj_idx:
+                    if mask_combined[idx] and not added[idx]:
+                        ordered_list.append(int(idx))
+                        added[idx] = True
+
+            # Finally, append any remaining selected samples in their original order
+            for idx in sel_indices:
+                if not added[idx]:
+                    ordered_list.append(int(idx))
+
+            ordered_indices = np.asarray(ordered_list, dtype=int)
+
         # Define keys to filter
         keys = ['samples', 'calldata_gt', 'calldata_lai']
 
@@ -676,10 +709,21 @@ class SNPObject:
         if inplace:
             for key in keys:
                 if self[key] is not None:
-                    if self[key].ndim > 1:
-                        self[key] = np.asarray(self[key])[:, mask_combined, ...]
+                    arr = np.asarray(self[key])
+                    if ordered_indices is not None:
+                        if key == 'calldata_lai' and arr.ndim == 2:
+                            # Haplotype-aware reordering for 2D LAI (n_snps, n_samples*2)
+                            hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
+                            self[key] = arr[:, hap_idx]
+                        elif arr.ndim > 1:
+                            self[key] = arr[:, ordered_indices, ...]
+                        else:
+                            self[key] = arr[ordered_indices]
                     else:
-                        self[key] = np.asarray(self[key])[mask_combined]
+                        if arr.ndim > 1:
+                            self[key] = arr[:, mask_combined, ...]
+                        else:
+                            self[key] = arr[mask_combined]
 
             return None
         else:
@@ -687,10 +731,20 @@ class SNPObject:
             snpobj = self.copy()
             for key in keys:
                 if snpobj[key] is not None:
-                    if snpobj[key].ndim > 1:
-                        snpobj[key] = np.asarray(snpobj[key])[:, mask_combined, ...]
+                    arr = np.asarray(snpobj[key])
+                    if ordered_indices is not None:
+                        if key == 'calldata_lai' and arr.ndim == 2:
+                            hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
+                            snpobj[key] = arr[:, hap_idx]
+                        elif arr.ndim > 1:
+                            snpobj[key] = arr[:, ordered_indices, ...]
+                        else:
+                            snpobj[key] = arr[ordered_indices]
                     else:
-                        snpobj[key] = np.asarray(snpobj[key])[mask_combined]
+                        if arr.ndim > 1:
+                            snpobj[key] = arr[:, mask_combined, ...]
+                        else:
+                            snpobj[key] = arr[mask_combined]
             return snpobj
 
     def detect_chromosome_format(self) -> str:

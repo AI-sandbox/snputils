@@ -1,2 +1,2 @@
-from .genobj import MultiPhenotypeObject, UKBPhenotypeObject
-from .io import MultiPhenTabularReader, UKBPhenReader
+from .genobj import MultiPhenotypeObject, PhenotypeObject
+from .io import MultiPhenReader, PhenotypeReader

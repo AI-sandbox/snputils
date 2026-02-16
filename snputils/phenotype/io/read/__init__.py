@@ -1,2 +1,2 @@
-from .ukbPhenReader import UKBPhenReader
-from .multiPhenTabular import MultiPhenTabularReader
+from .phenotypeReader import PhenotypeReader
+from .multiPhenReader import MultiPhenReader

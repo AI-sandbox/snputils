@@ -103,7 +103,7 @@ class AdmixtureMappingVCFWriter:
         - `ALT`: Alternate allele for each variant.
         - `QUAL`: Phred-scaled quality score for each variant.
         - `FILTER`: Status indicating whether each SNP passed control checks.
-        - `INFO`: Additional information field. Defaults to `'.'` indicating no extra metadata.
+        - `INFO`: When physical positions are available, contains `END=<end_pos>` for the segment end; otherwise `'.'`.
         - `FORMAT`: Genotype format. Set to `'GT'`, representing the genotype as phased alleles.
         - `<SampleID>`: One column per sample, containing the genotype data (`1|0`, `0|1`, etc.).
 
@@ -133,11 +133,12 @@ class AdmixtureMappingVCFWriter:
             if output_file.exists():
                 warnings.warn(f"File '{output_file}' already exists and will be overwritten.")
 
-            # Format start and end positions for the VCF file
             if self.laiobj.physical_pos is not None:
-                pos_list = [f"{val1}_{val2}" for val1, val2 in self.laiobj.physical_pos]
+                pos_list = np.array([val1 for val1, _ in self.laiobj.physical_pos], dtype=np.int64)
+                variants_info = [f"END={val2}" for _, val2 in self.laiobj.physical_pos]
             else:
                 pos_list = None
+                variants_info = None
 
             # Modify LAI data values to simulate a SNP file
             # The positions in LAI corresponding to the current ancestry key are mapped to 1, and the rest to 0
@@ -172,9 +173,8 @@ class AdmixtureMappingVCFWriter:
             # Log the start of the VCF file writing process
             log.info(f"Writing VCF file for ancestry '{anc_string}' to '{output_file}'...")
 
-            # Write the VCF file
             vcf_writer = VCFWriter(variant_data_obj, output_file)
-            vcf_writer.write()
+            vcf_writer.write(variants_info=variants_info)
 
             log.info(f"Finished writing VCF file for ancestry '{anc_string}' to '{output_file}'.")
 

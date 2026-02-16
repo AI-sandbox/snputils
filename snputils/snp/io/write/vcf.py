@@ -1,7 +1,9 @@
 import logging
 import joblib
-from typing import Union
 from pathlib import Path
+from typing import Optional, Sequence, Union
+
+import numpy as np
 
 from snputils.snp.genobj import SNPObject
 
@@ -36,11 +38,12 @@ class VCFWriter:
         self.__phased = phased
 
     def write(
-            self, 
+            self,
             chrom_partition: bool = False,
-            rename_missing_values: bool = True, 
-            before: Union[int, float, str] = -1, 
-            after: Union[int, float, str] = '.'
+            rename_missing_values: bool = True,
+            before: Union[int, float, str] = -1,
+            after: Union[int, float, str] = '.',
+            variants_info: Optional[Sequence[str]] = None,
         ):
         """
         Writes the SNP data to VCF file(s).
@@ -50,13 +53,16 @@ class VCFWriter:
                 If True, individual VCF files are generated for each chromosome.
                 If False, a single VCF file containing data for all chromosomes is created. Defaults to False.
             rename_missing_values (bool, optional):
-                If True, renames potential missing values in `snpobj.calldata_gt` before writing. 
+                If True, renames potential missing values in `snpobj.calldata_gt` before writing.
                 Defaults to True.
-            before (int, float, or str, default=-1): 
+            before (int, float, or str, default=-1):
                 The current representation of missing values in `calldata_gt`. Common values might be -1, '.', or NaN.
                 Default is -1.
-            after (int, float, or str, default='.'): 
+            after (int, float, or str, default='.'):
                 The value that will replace `before`. Default is '.'.
+            variants_info (sequence of str, optional):
+                Per-variant INFO column values (e.g. ``["END=2000", "END=3000"]``). Length must match variant count.
+                When provided, a ##INFO header line for END is written if any value contains ``END=``.
         """
         self.__chrom_partition = chrom_partition
 
@@ -77,67 +83,64 @@ class VCFWriter:
             chroms = data.unique_chrom
 
             for chrom in chroms:
-                # Filter to include the data for the chromosome in particular
                 data_chrom = data.filter_variants(chrom=chrom, inplace=False)
-
+                if variants_info is not None:
+                    mask = data.variants_chrom == chrom
+                    info_chrom = [variants_info[i] for i in np.where(mask)[0]]
+                else:
+                    info_chrom = None
                 log.debug(f'Storing chromosome {chrom}')
-                self._write_chromosome_data(chrom, data_chrom)
+                self._write_chromosome_data(chrom, data_chrom, info_chrom)
         else:
-            self._write_chromosome_data("All", data)
+            self._write_chromosome_data("All", data, variants_info)
 
-    def _write_chromosome_data(self, chrom, data_chrom):
+    def _write_chromosome_data(
+        self, chrom, data_chrom, variants_info: Optional[Sequence[str]] = None
+    ):
         """
         Writes the SNP data for a specific chromosome to a VCF file.
 
         Args:
             chrom: The chromosome name.
             data_chrom: The SNPObject instance containing the data for the chromosome.
+            variants_info: Optional per-variant INFO strings; length must match variant count.
         """
-        # Obtain npy matrix with SNPs
-        npy3 = data_chrom.calldata_gt  # shape: (n_windows, n_samples, 2)
+        npy3 = data_chrom.calldata_gt
         n_windows, n_samples, _ = npy3.shape
 
-        # Keep sample names if appropriate
-        data_samples = data_chrom.samples if len(data_chrom.samples) == n_samples else [get_name() for _ in range(n_samples)]
-
-        # Format output file
         if chrom == "All":
             file = self.__filename.with_suffix(self.__file_extension)
         else:
             file = self.__filename.parent / f"{self.__filename.stem}_{chrom}{self.__file_extension}"
 
-        # Write VCF file
-        out = open(self.__filename.with_suffix(self.__file_extension), "w")
-        # --- write VCF header ---
+        out = open(file, "w")
         out.write("##fileformat=VCFv4.1\n")
         out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n')
-        
+        if variants_info is not None and any("END=" in s for s in variants_info):
+            out.write('##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the segment">\n')
         for c in set(data_chrom.variants_chrom):
             out.write(f"##contig=<ID={c}>\n")
         cols = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT"] + list(data_chrom.samples)
         out.write("\t".join(cols) + "\n")
-        
+
         sep = "|" if self.__phased else "/"
         for i in range(n_windows):
-            chrom = data_chrom.variants_chrom[i]
+            chrom_val = data_chrom.variants_chrom[i]
             pos = data_chrom.variants_pos[i]
             vid = data_chrom.variants_id[i]
             ref = data_chrom.variants_ref[i]
             alt = data_chrom.variants_alt[i]
-        
-            # build genotype list per sample, one small array at a time
-            row = npy3[i]  # shape: (n_samples, 2)
+            info_str = variants_info[i] if variants_info is not None else "."
+            row = npy3[i]
             genotypes = [
                 f"{row[s,0]}{sep}{row[s,1]}"
                 for s in range(n_samples)
             ]
-        
             line = "\t".join([
-                str(chrom), str(pos), vid, ref, alt,
-                ".", "PASS", ".", "GT", *genotypes
+                str(chrom_val), str(pos), vid, ref, alt,
+                ".", "PASS", info_str, "GT", *genotypes
             ])
             out.write(line + "\n")
-        
         out.close()
 
 

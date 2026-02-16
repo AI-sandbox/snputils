@@ -1,4 +1,4 @@
 from .multi_phenobj import MultiPhenotypeObject
-from .ukb_phenobj import UKBPhenotypeObject
+from .phenobj import PhenotypeObject
 
-__all__ = ['MultiPhenotypeObject', 'UKBPhenotypeObject']
+__all__ = ['MultiPhenotypeObject', 'PhenotypeObject']

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union
 
 from snputils.phenotype.genobj import MultiPhenotypeObject
-from snputils.phenotype.genobj import UKBPhenotypeObject
+from snputils.phenotype.genobj import PhenotypeObject
 
 
 class PhenotypeBaseReader(abc.ABC):
@@ -14,13 +14,14 @@ class PhenotypeBaseReader(abc.ABC):
         self._file = file
     
     @abc.abstractmethod
-    def read(self) -> Union['MultiPhenotypeObject', 'UKBPhenotypeObject']:
+    def read(self) -> Union['MultiPhenotypeObject', 'PhenotypeObject']:
         """
         Abstract method to read data from the provided `file`.
 
-        Subclasses must implement this method to read and parse the data. 
-        The implementation should construct an instance of `snputils.phenotype.genobj.MultiPhenotypeObject` or 
-        `snputils.phenotype.genobj.UKBPhenotypeObject` based on the read data.
+        Subclasses must implement this method to read and parse the data.
+        The implementation should construct an instance of
+        `snputils.phenotype.genobj.MultiPhenotypeObject` or
+        `snputils.phenotype.genobj.PhenotypeObject` based on the read data.
         """
         pass
     
@@ -32,4 +33,4 @@ class PhenotypeBaseReader(abc.ABC):
         Returns:
             pathlib.Path: Path to the file containing phenotype data.
         """
-        return self.__file
+        return Path(self._file)

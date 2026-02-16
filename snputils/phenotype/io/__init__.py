@@ -1,4 +1,4 @@
-from .read import UKBPhenReader
-from .read import MultiPhenTabularReader
+from .read import PhenotypeReader
+from .read import MultiPhenReader
 
-__all__ = ['UKBPhenReader', 'MultiPhenTabularReader']
+__all__ = ['PhenotypeReader', 'MultiPhenReader']

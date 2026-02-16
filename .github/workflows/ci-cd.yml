@@ -6,10 +6,9 @@
 # 2. For Pre-releases:
 #    - Runs all tests
 #    - Builds documentation
-#    - Deploys documentation to GitHub Pages
 #    - Publishes package to PyPI
-#    - If everything passes:
-#      - Updates the release to a full release (removes pre-release status)
+#    - Updates the release to a full release (removes pre-release status) and marks latest
+#    - Deploys documentation to GitHub Pages (at the end; non-blocking)
 
 name: Test, Docs & Publish
 
@@ -101,19 +100,11 @@ jobs:
         with:
           path: docs/
 
-  deploy:
+  publish:
     needs: [test, build-docs]
     if: needs.build-docs.result == 'success' && github.event_name == 'release' && github.event.release.prerelease == true
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # Deploy documentation to GitHub Pages
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
       # Build and publish to PyPI
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -150,3 +141,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release edit ${{ github.event.release.tag_name }} --prerelease=false --latest
+
+  deploy-pages:
+    needs: [build-docs, publish]
+    if: needs.build-docs.result == 'success' && needs.publish.result == 'success' && github.event_name == 'release' && github.event.release.prerelease == true
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Deploy documentation to GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

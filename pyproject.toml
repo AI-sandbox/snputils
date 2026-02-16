@@ -7,14 +7,13 @@ name = "snputils"
 dynamic = ["version"]  # Version is set by setuptools_scm and determined by the latest git tag
 description = "Process genomes with ease"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "BSD 3-Clause License"}
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: BSD License",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -66,17 +65,17 @@ include = ["snputils*"]
 [tool.setuptools_scm]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 ignore_missing_imports = true
 
 [tool.tox]
 legacy_tox_ini = """
 [tox]
-envlist = py38, py314
+envlist = py39, py314
 isolated_build=true
 [gh-actions]
 python =
-    3.8: py38
+    3.9: py39
     3.14: py314
 [testenv]
 passenv =

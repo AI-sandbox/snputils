@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.14']  # Test on limit versions (3.8 and latest)
+        python-version: ['3.9', '3.14']  # Test on limit versions (3.9 and latest)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

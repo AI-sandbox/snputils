@@ -99,14 +99,26 @@ class BEDReader(SNPBaseReader):
             file_num_variants = bim.height
 
             if variant_ids is not None:
-                variant_idxs = bim.filter(pl.col("ID").is_in(variant_ids)).select("index").to_series().to_numpy()
+                variant_id_values = [str(v) for v in np.atleast_1d(variant_ids)]
+                variant_id_or_pos = (
+                    pl.col("ID").is_in(variant_id_values)
+                    | pl.concat_str(
+                        [pl.col("#CHROM"), pl.lit(":"), pl.col("POS").cast(pl.String)]
+                    ).is_in(variant_id_values)
+                )
+                variant_idxs = (
+                    bim.filter(variant_id_or_pos)
+                    .select("index")
+                    .to_series()
+                    .to_numpy()
+                )
 
             if variant_idxs is None:
                 num_variants = file_num_variants
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
             else:
-                num_variants = np.size(variant_idxs)
                 variant_idxs = np.array(variant_idxs, dtype=np.uint32)
+                num_variants = np.size(variant_idxs)
                 bim = bim.filter(pl.col("index").is_in(variant_idxs))
 
             log.info(f"Reading {filename_noext}.fam")

@@ -141,27 +141,38 @@ class PGENReader(SNPBaseReader):
             else:
                 pvar = pl.scan_csv(pvar_filename, **pvar_reading_args)
 
-            # We need to track row positions of variants but doing this with lazy operations would
-            # defeat predicate pushdown optimization and force loading the entire DataFrame.
-            # Solution: We only materialize the ID column with indices, keeping memory usage minimal
-            # while maintaining the ability to map between variant IDs and their file positions.
-            variant_id_idxs = pvar.select("ID").with_row_index().collect()
-
-            file_num_variants = variant_id_idxs.height
+            # We need to map requested IDs to row positions before reading genotypes.
+            variant_meta = pvar.select(["ID", "#CHROM", "POS"]).with_row_index().collect()
+            file_num_variants = variant_meta.height
 
             if variant_ids is not None:
-                num_variants = np.size(variant_ids)
-                pvar = pvar.filter(pl.col("ID").is_in(variant_ids)).collect()
-                variant_idxs = variant_id_idxs.filter(pl.col("ID").is_in(variant_ids)).select("index").to_series().to_numpy()
-            elif variant_idxs is not None:
-                num_variants = np.size(variant_idxs)
-                variant_idxs = np.array(variant_idxs, dtype=np.uint32)
-                variant_ids = variant_id_idxs.filter(pl.col("index").is_in(variant_idxs)).select("ID")
-                pvar = pvar.filter(pl.col("ID").is_in(variant_ids)).collect()
-            else:
+                variant_id_values = [str(v) for v in np.atleast_1d(variant_ids)]
+                variant_id_or_pos = (
+                    pl.col("ID").is_in(variant_id_values)
+                    | pl.concat_str(
+                        [pl.col("#CHROM"), pl.lit(":"), pl.col("POS").cast(pl.String)]
+                    ).is_in(variant_id_values)
+                )
+                variant_idxs = (
+                    variant_meta.filter(variant_id_or_pos)
+                    .select("index")
+                    .to_series()
+                    .to_numpy()
+                )
+
+            if variant_idxs is None:
                 num_variants = file_num_variants
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
                 pvar = pvar.collect()
+            else:
+                variant_idxs = np.array(variant_idxs, dtype=np.uint32)
+                num_variants = np.size(variant_idxs)
+                pvar = (
+                    pvar.with_row_index()
+                    .filter(pl.col("index").is_in(variant_idxs))
+                    .drop("index")
+                    .collect()
+                )
 
             log.info(f"Reading {filename_noext}.psam")
 
@@ -184,9 +195,9 @@ class PGENReader(SNPBaseReader):
             file_num_samples = psam.height
 
             if sample_ids is not None:
-                num_samples = np.size(sample_ids)
                 psam = psam.filter(pl.col("IID").is_in(sample_ids))
                 sample_idxs = psam.select("index").to_series().to_numpy()
+                num_samples = np.size(sample_idxs)
             elif sample_idxs is not None:
                 num_samples = np.size(sample_idxs)
                 sample_idxs = np.array(sample_idxs, dtype=np.uint32)

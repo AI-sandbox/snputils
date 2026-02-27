@@ -1,7 +1,10 @@
 import pathlib
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from snputils.snp.genobj import SNPObject
+
+if TYPE_CHECKING:
+    from snputils.snp.genobj.grgobj import GRGObject
 
 
 def read_snp(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
@@ -64,3 +67,24 @@ def read_vcf(filename: Union[str, pathlib.Path],
     else:
         print(f"Reading {filename} with scikit-allel backend")
         return VCFReader(filename).read(**kwargs)
+
+
+def read_grg(filename: Union[str, pathlib.Path], **kwargs) -> "GRGObject":
+    """
+    Read a GRG file into a GRGObject.
+
+    Args:
+        filename: Filename of the GRG file to read.
+        **kwargs: Additional arguments passed to the reader method.
+    """
+    try:
+        from snputils.snp.io.read.grg import GRGReader
+    except ModuleNotFoundError as exc:
+        if exc.name == "pygrgl":
+            raise ImportError(
+                "GRG support requires the optional dependency 'pygrgl'. "
+                "Install it with: pip install pygrgl"
+            ) from exc
+        raise
+
+    return GRGReader(filename).read(**kwargs)

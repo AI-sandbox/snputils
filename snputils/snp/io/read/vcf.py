@@ -8,7 +8,6 @@ import allel
 import numpy as np
 import time # TODO remove
 import polars as pl
-import pygrgl as pyg
 import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
@@ -27,7 +26,7 @@ class VCFReader(SNPBaseReader):
         super().__init__(filename)
         self._igd_path : Union[str, pathlib.Path] = None
         self._grg_path : Union[str, pathlib.Path] = None
-        self.debug : bool = True # no more debugging required
+        self.debug : bool = False
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -125,9 +124,8 @@ class VCFReader(SNPBaseReader):
         if not exists(self.filename):
             raise FileNotFoundError(f"File {self.filename} does not exist")
 
-        # TODO use ITE
-        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "a")
-        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "a")
+        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
+        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
         # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
         # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
         # split extension twice
@@ -135,15 +133,23 @@ class VCFReader(SNPBaseReader):
         name, _ext2 = splitext(name)
         # may use _ext later. not sure. 
         _ext = _ext1 + _ext2
-        if igd_file is None: self._igd_path : pathlib.Path = pathlib.Path(name + ".igd") 
-        else: self._igd_path : pathlib.Path = pathlib.Path(igd_file) 
-        
+        if igd_file is None:
+            self._igd_path = pathlib.Path(name + ".igd")
+        else:
+            self._igd_path = pathlib.Path(igd_file)
 
-        subprocess.run(["grg", "convert", abspath(self.filename), abspath(self._igd_path)], stdout=lf_o, stderr=lf_e)
-        if not isinstance(lf_o, int):
-            lf_o.close()
-        if not isinstance(lf_e, int):
-            lf_e.close()
+        try:
+            subprocess.run(
+                ["grg", "convert", abspath(str(self.filename)), abspath(str(self._igd_path))],
+                stdout=lf_o,
+                stderr=lf_e,
+                check=True,
+            )
+        finally:
+            if not isinstance(lf_o, int):
+                lf_o.close()
+            if not isinstance(lf_e, int):
+                lf_e.close()
             
     def to_grg(self,
                range : Optional[str] = None,
@@ -193,14 +199,14 @@ class VCFReader(SNPBaseReader):
         self.to_igd(igd_file, logfile_out, logfile_err)
         if self.debug:
             end = time.time()
-            print("vcf -> igd ", end - start)
-        name, _ext = splitext(self._igd_path)
-        self._grg_path = name + ".grg"
+            log.debug("vcf -> igd %.4fs", end - start)
+        name, _ext = splitext(str(self._igd_path))
+        self._grg_path = pathlib.Path(out_file) if out_file is not None else pathlib.Path(name + ".grg")
 
         # set logfiles 
         # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
-        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_out, "a")
-        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out == None else open(logfile_err, "a")
+        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
+        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
         if self.debug:
             start = time.time()
         args = ["grg", "construct"]
@@ -214,28 +220,29 @@ class VCFReader(SNPBaseReader):
         args += self._setarg(shape_lf_filter, "--shape-lf-filter", None)
         args += self._setarg(population_ids, "--population-ids", None)
         args += self._setarg(bs_triplet, "--bs_triplet", None)
-        args += self._setarg(out_file, "--out-file", self._grg_path)
+        args += self._setarg(str(self._grg_path), "--out-file", None)
         args += self._setarg(verbose, "-v", None)
         args += self._setarg(no_merge, "--no-merge", None)
         # finally, add the infile
-        args += [f"{self._igd_path}"]
-        print(args)
-        subprocess.run(args, stdout=lf_o, stderr=lf_e)
+        args += [str(self._igd_path)]
+        log.debug("Running grg construct command: %s", args)
+        try:
+            subprocess.run(args, stdout=lf_o, stderr=lf_e, check=True)
+        finally:
+            if not isinstance(lf_o, int):
+                lf_o.close()
+            if not isinstance(lf_e, int):
+                lf_e.close()
         
         if self.debug:
             end = time.time()
-            print("igd -> grg ", end - start)
-
-        # cleanup
-     
-        if not isinstance(lf_o, int):
-            lf_o.close()
-        if not isinstance(lf_e, int): 
-            lf_e.close()
+            log.debug("igd -> grg %.4fs", end - start)
        
      
 
     def _setarg(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
+        if isinstance(x, bool):
+            return [flag] if x else []
         if x is None and default_arg is not None:
             return [flag, f"{default_arg}"] 
         elif x is not None:

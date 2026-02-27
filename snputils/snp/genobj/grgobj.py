@@ -1,18 +1,15 @@
 from __future__ import annotations
 import logging
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import copy
-import warnings
-import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional
 import pygrgl as pyg
 import subprocess
 log = logging.getLogger(__name__)
 import tempfile
 
-GRGType = Union[pyg.GRG | pyg.MutableGRG]
+GRGType = Union[pyg.GRG, pyg.MutableGRG]
 class GRGObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data.
@@ -86,14 +83,14 @@ class GRGObject:
         return self.__filename
 
     @filename.setter
-    def calldata_gt(self, x: str):
+    def filename(self, x: str):
         """
-        Update `calldata_gt`.
+        Update `filename`.
         """
         self.__filename = x
     
     @property
-    def mutable(self, x:bool):
+    def mutable(self) -> Optional[bool]:
         return self.__mutable
 
     def allele_freq(self) -> np.ndarray:
@@ -105,27 +102,32 @@ class GRGObject:
         return pyg.dot_product(self.calldata_gt, array, traversal_direction)
     
     # TODO: consider moving this elsewhere.
-    def allele_freq_from_file(self, filename : Optional[str]) -> pd.DataFrame:
+    def allele_freq_from_file(self, filename: Optional[str] = None) -> pd.DataFrame:
         newfile = filename if filename is not None else self.__filename
-        assert newfile is not None, "Either pass in a filename, or store an existing GRG's filename."
+        if newfile is None:
+            raise ValueError("Either pass in a filename, or store an existing GRG filename.")
 
         with tempfile.NamedTemporaryFile() as fp:
-
-            subprocess.run(["grg", "process", "freq", f"{filename}"], stdout=fp)
+            subprocess.run(["grg", "process", "freq", f"{newfile}"], stdout=fp, check=True)
             fp.seek(0) # set the file cursor
             return pd.read_csv(fp.name, sep="\t")
         
         
     def gwas(self, genotype_file: str, filename: str) -> pd.DataFrame:
         with tempfile.NamedTemporaryFile() as fp:
-            subprocess.run(["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"], stdout=fp)
+            subprocess.run(
+                ["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"],
+                stdout=fp,
+                check=True,
+            )
             fp.seek(0) # set the file cursor
             return pd.read_csv(fp.name, sep="\t")
     
     def merge(self, combineNodes : bool = False, *args) -> Optional[GRGType]:
         # assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
         for arg in args:
-            assert isinstance(arg, str), "argument must be string"
+            if not isinstance(arg, str):
+                raise TypeError("All merge inputs must be strings.")
         # list of files, and combineNodes 
         self.__calldata_gt.merge(list(args), combineNodes)
         #pep8 be damned
@@ -136,7 +138,7 @@ class GRGObject:
         """
         Get number of samples from GRG. Diploid by default. 
         """
-        return self.__calldata_gt.num_samples / ploidy
+        return int(self.__calldata_gt.num_samples / ploidy)
     
     def n_snps(self) -> int:
         return self.__calldata_gt.num_mutations

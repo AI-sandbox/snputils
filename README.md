@@ -15,7 +15,7 @@
 
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and more collaborators worldwide.
 
-This is an early access release, parts of the code are likely to change significantly in the upcoming weeks.
+*Note: **snputils** is under active development. While the core API is stabilizing, we are continuously adding features, optimizing performance, and expanding format support.*
 
 ## Installation
 
@@ -54,18 +54,27 @@ Working with ancestry files, performing processing operations, and creating visu
 - **Local Ancestry**: Handle `.msp` local ancestry format
 - **Admixture**: Read and write `.Q` and `.P` files
 
-### Processing Tools
+### Processing & Analysis Tools
 - **Basic Data Manipulation**
-  - Filter variants and samples
-  - Correct SNP flips
-  - Filter out ambiguous SNPs
+  - Filter variants and samples, correct SNP flips, and filter out ambiguous SNPs
+  - Standardized querying across genotype, local ancestry, global ancestry, and IBD data
 
 - **Dimensionality Reduction**
   - Standard PCA with optional GPU acceleration
-  - Missing-DNA PCA (mdPCA)
+  - Missing-data PCA (mdPCA)
   - Multi-array ancestry-specific MDS (maasMDS)
 
-- **Admixture Mapping**
+- **Population Genetic Statistics**
+  - Compute $D$, $f_2$, $f_3$, $f_4$, the $f_4$-ratio, and $F_{ST}$ (Hudson and Weir-Cockerham)
+  - Includes block jackknife standard errors and optional ancestry masking
+
+- **Identity-by-Descent (IBD) & Relatedness**
+  - Read `hap-IBD` and `ancIBD` outputs into a unified format
+  - Fast filtering and ancestry-restricted segment trimming using local ancestry
+
+- **Admixture Analysis & Simulation**
+  - **Admixture Mapping:** Locus-by-locus regression of local ancestry dosage on traits
+  - **Simulation:** Lightweight haplotype-based simulation of admixed mosaics from real founder haplotypes
 
 ### Visualization
 - Interactive global ancestry bar plots
@@ -99,9 +108,9 @@ The **snputils** package is continuously updated with new features and improveme
 
 ## Documentation & Support
 
-- **API Reference**: Visit our comprehensive documentation at [docs.snputils.org](https://docs.snputils.org).
-- **Tutorials & Examples**: Check out our demos in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
-- **Issues & Support**: [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
+- **Documentation**: Comprehensive API reference at [docs.snputils.org](https://docs.snputils.org).
+- **Examples & Tutorials**: Check out our interactive notebooks in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
+- **Issues & Community**: Report bugs, ask questions, or request features via [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
 
 ## Acknowledgments
 
@@ -114,3 +123,5 @@ If you use **snputils** in your research, please cite:
 > Bonet, D.\*, Comajoan Cara, M.\*, Barrabés, M.\*, Smeriglio, R., Agrawal, D., Dominguez Mantes, A., López, C., Thomassin, C., Calafell, A., Luis, A., Saurina, J., Franquesa, M., Perera, M., Geleta, M., Jaras, A., Sabat, B. O., Abante, J., Moreno-Grau, S., Mas Montserrat, D., Ioannidis, A. G., snputils: A Python library for processing diverse genomes. Annual Meeting of The American Society of Human Genetics, November 2024, Denver, Colorado, USA. \*Equal contribution.
 
 Journal paper coming soon!
+
+

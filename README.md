@@ -108,8 +108,8 @@ The **snputils** package is continuously updated with new features and improveme
 
 ## Documentation & Support
 
-- **Documentation & Tutorials**: Comprehensive API reference and step-by-step tutorials are available at [snputils.org](https://snputils.org).
-- **Examples**: Check out our interactive notebooks in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
+- **Documentation**: Comprehensive API reference at [docs.snputils.org](https://docs.snputils.org).
+- **Examples & Tutorials**: Check out our interactive notebooks in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
 - **Issues & Community**: Report bugs, ask questions, or request features via [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
 
 ## Acknowledgments
@@ -123,4 +123,5 @@ If you use **snputils** in your research, please cite:
 > Bonet, D.\*, Comajoan Cara, M.\*, Barrabés, M.\*, Smeriglio, R., Agrawal, D., Dominguez Mantes, A., López, C., Thomassin, C., Calafell, A., Luis, A., Saurina, J., Franquesa, M., Perera, M., Geleta, M., Jaras, A., Sabat, B. O., Abante, J., Moreno-Grau, S., Mas Montserrat, D., Ioannidis, A. G., snputils: A Python library for processing diverse genomes. Annual Meeting of The American Society of Human Genetics, November 2024, Denver, Colorado, USA. \*Equal contribution.
 
 Journal paper coming soon!
+
 

@@ -1,22 +1,19 @@
 import logging
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 from pathlib import Path
 import gzip
 import csv
 
 import allel
 import numpy as np
-import time # TODO remove
 import polars as pl
 import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from os.path import splitext, exists, abspath
-import os 
 import subprocess
 from io import TextIOWrapper
 import pathlib 
-from typing import Union
 log = logging.getLogger(__name__)
 
 
@@ -24,8 +21,8 @@ log = logging.getLogger(__name__)
 class VCFReader(SNPBaseReader):
     def __init__(self, filename: Union[str, pathlib.Path]):
         super().__init__(filename)
-        self._igd_path : Union[str, pathlib.Path] = None
-        self._grg_path : Union[str, pathlib.Path] = None
+        self._igd_path: Optional[pathlib.Path] = None
+        self._grg_path: Optional[pathlib.Path] = None
         self.debug : bool = False
     def read(
         self,
@@ -129,7 +126,7 @@ class VCFReader(SNPBaseReader):
         # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
         # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
         # split extension twice
-        name, _ext1 = splitext(self.filename)
+        name, _ext1 = splitext(str(self.filename))
         name, _ext2 = splitext(name)
         # may use _ext later. not sure. 
         _ext = _ext1 + _ext2
@@ -152,79 +149,63 @@ class VCFReader(SNPBaseReader):
                 lf_e.close()
             
     def to_grg(self,
-               range : Optional[str] = None,
-               parts : Optional[int] = None,
-               jobs  : Optional[int] = None,
-               trees : Optional[int] = None,
-               binmuts : Optional[bool] = None,
-               no_file_cleanup : Optional[bool] = None,
-               maf_flip : Optional[bool] = None,
-               shape_lf_filter : Optional[float] = None,
-               population_ids : Optional[str] = None,
-               bs_triplet : Optional[int] = None,
-               igd_file : Optional[str] = None,
-               out_file : Optional[str] = None,
-               verbose : Optional[bool] = None,
-               no_merge : Optional[bool] = None,
-               logfile_out : Optional[str] = None,
-               logfile_err : Optional[str] = None
+               range: Optional[str] = None,
+               parts: Optional[int] = None,
+               jobs: Optional[int] = None,
+               trees: Optional[int] = None,
+               binmuts: Optional[bool] = None,
+               no_file_cleanup: Optional[bool] = None,
+               maf_flip: Optional[bool] = None,
+               population_ids: Optional[str] = None,
+               mutation_batch_size: Optional[int] = None,
+               igd_file: Optional[str] = None,
+               out_file: Optional[str] = None,
+               verbose: Optional[bool] = None,
+               no_merge: Optional[bool] = None,
+               force: Optional[bool] = None,
+               logfile_out: Optional[str] = None,
+               logfile_err: Optional[str] = None
                ) -> None:
         """
-        Converts the VCF file to a GRG file using an IGD intermediary. All of these parameters are passed into the grg command-line tool.
-        The main difference is in parts and trees, which are designed for large files.
-        Args:
-            range: Restrict to the given range. Can be absolute (in base-pairs) or relative (0.0 to 1.0).
-            parts: The number of parts to split the sequence into; Unlike grgl's default of 8, we default to 50.
-            jobs: Number of jobs (threads/cores) to use. Defaults to 1.
-            trees: Number of trees to use during shape construction. Unlike grgl, defaults to 16. 
-            binary_muts: Use binary mutations (don't track specific alternate alleles).
-            no_file_cleanup: Do not cleanup intermediate files (for debugging, e.g.).
-            maf_flip: Switch the reference allele with the major allele when they differ
-            shape_lf_filter: During shape construction ignore mutations with counts less than this.
-                If value is <1.0 then it is treated as a frequency. Defaults to 10 (count).
-            population_ids: Format: "filename:fieldname". Read population ids from the given 
-                tab-separate file, using the given fieldname.
-            bs_triplet: Run the triplet algorithm for this many iterations in BuildShape
-            out_file: Specify an output file. If none is supplied, the default name is <current_vcf_name>.grg.
-            verbose:Verbose output, including timing information.
-            no_merge: Do not merge the resulting GRGs (so if you specified "parts = C" there will be C GRGs).
-            logfile_out: The file to log standard output to. If None (default), no output will be logged (i.e., piped to dev null).
-            logfile_err: The file to log standard error to. If None (default), no error will be logged (i.e., piped to dev null).
+        Convert VCF input to a GRG file via `grg construct`.
 
+        If `igd_file` exists, it is used as construct input. If it does not
+        exist, it is first created via `to_igd` and then used for construction.
         """
+        input_file = pathlib.Path(self.filename).resolve()
+        if igd_file is not None:
+            candidate_igd = pathlib.Path(igd_file)
+            if candidate_igd.exists():
+                self._igd_path = candidate_igd.resolve()
+            else:
+                self.to_igd(igd_file, logfile_out, logfile_err)
+            input_file = pathlib.Path(self._igd_path).resolve()
 
-        # for debugging only 
-        if self.debug:
-            start = time.time()
-        self.to_igd(igd_file, logfile_out, logfile_err)
-        if self.debug:
-            end = time.time()
-            log.debug("vcf -> igd %.4fs", end - start)
-        name, _ext = splitext(str(self._igd_path))
-        self._grg_path = pathlib.Path(out_file) if out_file is not None else pathlib.Path(name + ".grg")
+        if out_file is not None:
+            self._grg_path = pathlib.Path(out_file)
+        else:
+            default_stem = splitext(str(input_file))[0]
+            if default_stem.endswith(".vcf"):
+                default_stem = splitext(default_stem)[0]
+            self._grg_path = pathlib.Path(default_stem + ".grg")
 
-        # set logfiles 
-        # should I use subprocess.devnull? probably. I don't want to to keep the open call's type consistent
-        lf_o : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
-        lf_e : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
-        if self.debug:
-            start = time.time()
+        lf_o: Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
+        lf_e: Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
         args = ["grg", "construct"]
         args += self._setarg(range, "-r", None)
         args += self._setarg(parts, "-p", 50)
-        args += self._setarg(jobs,  "-j", f"{multiprocessing.cpu_count()}")
+        args += self._setarg(jobs, "-j", multiprocessing.cpu_count())
         args += self._setarg(trees, "-t", 16)
-        args += self._setarg(binmuts, "-b", None)
-        args += self._setarg(no_file_cleanup, "-c", None)
+        args += self._setarg(binmuts, "--binary-muts", None)
+        args += self._setarg(no_file_cleanup, "--no-file-cleanup", None)
         args += self._setarg(maf_flip, "--maf-flip", None)
-        args += self._setarg(shape_lf_filter, "--shape-lf-filter", None)
         args += self._setarg(population_ids, "--population-ids", None)
-        args += self._setarg(bs_triplet, "--bs_triplet", None)
+        args += self._setarg(mutation_batch_size, "--mutation-batch-size", None)
         args += self._setarg(str(self._grg_path), "--out-file", None)
-        args += self._setarg(verbose, "-v", None)
+        args += self._setarg(verbose, "--verbose", None)
         args += self._setarg(no_merge, "--no-merge", None)
-        # finally, add the infile
-        args += [str(self._igd_path)]
+        args += self._setarg(force, "--force", None)
+        args += [str(input_file)]
         log.debug("Running grg construct command: %s", args)
         try:
             subprocess.run(args, stdout=lf_o, stderr=lf_e, check=True)
@@ -233,12 +214,6 @@ class VCFReader(SNPBaseReader):
                 lf_o.close()
             if not isinstance(lf_e, int):
                 lf_e.close()
-        
-        if self.debug:
-            end = time.time()
-            log.debug("igd -> grg %.4fs", end - start)
-       
-     
 
     def _setarg(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
         if isinstance(x, bool):

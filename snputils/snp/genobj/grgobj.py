@@ -113,14 +113,22 @@ class GRGObject:
             return pd.read_csv(fp.name, sep="\t")
         
         
-    def gwas(self, genotype_file: str, filename: str) -> pd.DataFrame:
-        with tempfile.NamedTemporaryFile() as fp:
-            subprocess.run(
-                ["grg", "process", "gwas", f"{filename}", "--phenotype", f"{genotype_file}"],
-                stdout=fp,
-                check=True,
-            )
-            fp.seek(0) # set the file cursor
+    def gwas(self, phenotype_file: str, filename: Optional[str] = None) -> pd.DataFrame:
+        grg_file = filename if filename is not None else self.__filename
+        if grg_file is None:
+            raise ValueError("Either pass in a GRG filename, or store an existing GRG filename.")
+
+        with tempfile.NamedTemporaryFile(suffix=".tsv") as fp:
+            try:
+                subprocess.run(
+                    ["grapp", "assoc", "-p", f"{phenotype_file}", "-o", fp.name, f"{grg_file}"],
+                    check=True,
+                )
+            except FileNotFoundError as exc:
+                raise ImportError(
+                    "GWAS support requires the optional dependency 'grapp'. "
+                    "Install it with: pip install grapp"
+                ) from exc
             return pd.read_csv(fp.name, sep="\t")
     
     def merge(self, combineNodes : bool = False, *args) -> Optional[GRGType]:

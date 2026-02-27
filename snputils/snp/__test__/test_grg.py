@@ -1,5 +1,3 @@
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -89,8 +87,11 @@ def test_grg_object_cli_wrappers_use_expected_arguments(monkeypatch):
 
     def fake_run(cmd, stdout=None, **_kwargs):
         calls.append(cmd)
-        if stdout is not None:
+        if cmd[:3] == ["grg", "process", "freq"] and stdout is not None:
             stdout.write(b"a\tb\n1\t2\n")
+        if cmd[:2] == ["grapp", "assoc"]:
+            out_idx = cmd.index("-o") + 1
+            Path(cmd[out_idx]).write_text("a\tb\n1\t2\n")
 
     monkeypatch.setattr("snputils.snp.genobj.grgobj.subprocess.run", fake_run)
 
@@ -100,7 +101,11 @@ def test_grg_object_cli_wrappers_use_expected_arguments(monkeypatch):
     assert list(freq.columns) == ["a", "b"]
 
     gwas = obj.gwas("/tmp/pheno.tsv", "/tmp/input.grg")
-    assert calls[1] == ["grg", "process", "gwas", "/tmp/input.grg", "--phenotype", "/tmp/pheno.tsv"]
+    assert calls[1][0] == "grapp"
+    assert calls[1][1] == "assoc"
+    assert "-p" in calls[1] and "/tmp/pheno.tsv" in calls[1]
+    assert "-o" in calls[1]
+    assert calls[1][-1] == "/tmp/input.grg"
     assert isinstance(gwas, pd.DataFrame)
     assert list(gwas.columns) == ["a", "b"]
 
@@ -203,13 +208,9 @@ def test_grg_writer_full_and_subset_paths(monkeypatch, tmp_path):
 def test_vcf_to_grg_builds_expected_construct_command(monkeypatch):
     calls = []
 
-    def fake_to_igd(self, igd_file=None, logfile_out=None, logfile_err=None):
-        self._igd_path = Path(igd_file or "/tmp/input.igd")
-
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
 
-    monkeypatch.setattr(VCFReader, "to_igd", fake_to_igd)
     monkeypatch.setattr("snputils.snp.io.read.vcf.subprocess.run", fake_run)
 
     reader = VCFReader("/tmp/input.vcf.gz")
@@ -222,12 +223,12 @@ def test_vcf_to_grg_builds_expected_construct_command(monkeypatch):
         binmuts=True,
         no_file_cleanup=True,
         maf_flip=True,
-        shape_lf_filter=0.2,
-        population_ids="/tmp/pops.tsv:POP",
-        bs_triplet=7,
+        population_ids="/tmp/pops.tsv:SAMPLE:POP",
+        mutation_batch_size=128,
         out_file="/tmp/out.grg",
         verbose=True,
         no_merge=True,
+        force=True,
     )
 
     cmd, kwargs = calls[-1]
@@ -236,16 +237,16 @@ def test_vcf_to_grg_builds_expected_construct_command(monkeypatch):
     assert "-p" in cmd and "4" in cmd
     assert "-j" in cmd and "3" in cmd
     assert "-t" in cmd and "2" in cmd
-    assert "-b" in cmd
-    assert "-c" in cmd
+    assert "--binary-muts" in cmd
+    assert "--no-file-cleanup" in cmd
     assert "--maf-flip" in cmd
-    assert "--shape-lf-filter" in cmd and "0.2" in cmd
-    assert "--population-ids" in cmd and "/tmp/pops.tsv:POP" in cmd
-    assert "--bs_triplet" in cmd and "7" in cmd
+    assert "--population-ids" in cmd and "/tmp/pops.tsv:SAMPLE:POP" in cmd
+    assert "--mutation-batch-size" in cmd and "128" in cmd
     assert "--out-file" in cmd and "/tmp/out.grg" in cmd
-    assert "-v" in cmd
+    assert "--verbose" in cmd
     assert "--no-merge" in cmd
-    assert cmd[-1] == "/tmp/input.igd"
+    assert "--force" in cmd
+    assert cmd[-1].endswith("/tmp/input.vcf.gz")
     assert kwargs["check"] is True
 
 
@@ -269,15 +270,9 @@ def test_read_grg_functional_entrypoint(tmp_path):
     assert obj.calldata_gt.num_mutations == 5
 
 
-@pytest.mark.integration
 def test_vcf_to_grg_cli_integration(tmp_path):
-    if shutil.which("grg") is None:
-        pytest.skip("grg CLI not available")
-
-    pysam = pytest.importorskip("pysam", reason="pysam is required to create tabix-indexed VCFs")
-
-    raw_vcf = tmp_path / "tiny.vcf"
-    raw_vcf.write_text(
+    vcf = tmp_path / "tiny.vcf"
+    vcf.write_text(
         "##fileformat=VCFv4.2\n"
         "##contig=<ID=1>\n"
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
@@ -285,19 +280,11 @@ def test_vcf_to_grg_cli_integration(tmp_path):
         "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|1\t1|1\n"
     )
 
-    gz_vcf = tmp_path / "tiny.vcf.gz"
-    pysam.tabix_compress(str(raw_vcf), str(gz_vcf), force=True)
-    pysam.tabix_index(str(gz_vcf), preset="vcf", force=True)
-
     out_grg = tmp_path / "tiny.grg"
-    reader = VCFReader(gz_vcf)
+    reader = VCFReader(vcf)
     reader.debug = False
-
-    try:
-        reader.to_grg(parts=1, jobs=1, trees=1, out_file=str(out_grg))
-    except subprocess.CalledProcessError as exc:
-        pytest.skip(f"grg CLI conversion failed in this environment: {exc}")
+    reader.to_grg(parts=1, jobs=1, trees=1, force=True, out_file=str(out_grg))
 
     assert out_grg.exists()
     loaded = pyg.load_immutable_grg(str(out_grg), True)
-    assert loaded.num_mutations >= 1
+    assert loaded.num_samples == 4

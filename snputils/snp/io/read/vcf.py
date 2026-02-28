@@ -394,7 +394,7 @@ class VCFReaderPolars(SNPBaseReader):
                 has_header=False,
                 separator=separator,
                 columns=selected_column_idxs,
-                dtypes=col_dtypes
+                schema_overrides=col_dtypes
             )
 
             log.debug("vcf polars read")

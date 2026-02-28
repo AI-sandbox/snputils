@@ -74,6 +74,44 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
     assert components.shape == (2, 2)
 
 
+def test_main_pca_sklearn_allows_one_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    matplotlib.use("Agg", force=True)
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+
+    vcf_path = tmp_path / "tiny_1comp.vcf"
+    fig_path = tmp_path / "pca_1comp.png"
+    npy_path = tmp_path / "components_1comp.npy"
+    _write_tiny_vcf(vcf_path)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "pca",
+            "--snp-path",
+            str(vcf_path),
+            "--fig-path",
+            str(fig_path),
+            "--npy-path",
+            str(npy_path),
+            "--backend",
+            "sklearn",
+            "--n-components",
+            "1",
+        ],
+    )
+
+    assert main() == 0
+    assert fig_path.exists()
+    assert npy_path.exists()
+
+    components = np.load(npy_path)
+    assert components.shape == (2, 1)
+
+
 def test_main_pca_sklearn_smoke_with_pgen_auto_reader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -123,10 +123,21 @@ def run_pca_command(args: argparse.Namespace) -> int:
 
     import matplotlib.pyplot as plt
 
+    if components.ndim != 2 or components.shape[1] < 1:
+        raise ValueError("PCA produced an invalid component matrix.")
+
+    x = components[:, 0]
+    if components.shape[1] >= 2:
+        y = components[:, 1]
+        y_label = "Principal Component 2"
+    else:
+        y = np.zeros_like(x)
+        y_label = "Constant (0)"
+
     plt.figure(figsize=(10, 8))
-    plt.scatter(components[:, 0], components[:, 1], linewidth=0, alpha=0.5)
+    plt.scatter(x, y, linewidth=0, alpha=0.5)
     plt.xlabel("Principal Component 1", fontsize=20)
-    plt.ylabel("Principal Component 2", fontsize=20)
+    plt.ylabel(y_label, fontsize=20)
     plt.tight_layout()
 
     plt.savefig(args.fig_path)

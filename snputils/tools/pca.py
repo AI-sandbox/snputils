@@ -1,12 +1,9 @@
-import sys
-import torch
 import argparse
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Tuple, Union
+from typing import List
 
-from ..processing import PCA
 from snputils.snp.io.read import VCFReader
 
 log = logging.getLogger(__name__)
@@ -31,10 +28,35 @@ def plot_and_save_pca(argv: List[str]):
     reader = VCFReader(args.vcf_file)
     snpobj = reader.read()
 
-    pca = PCA(backend=args.backend, n_components=2)
-    components = pca.fit_transform(snpobj)
     if args.backend == "pytorch":
+        try:
+            import torch  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "PCA backend 'pytorch' requires optional dependency 'torch'. "
+                "Install it with `pip install snputils[gpu]` or `pip install torch`."
+            ) from exc
+
+        from ..processing import PCA
+
+        pca = PCA(backend=args.backend, n_components=2)
+        components = pca.fit_transform(snpobj)
         components = components.cpu().numpy()
+    elif args.backend == "sklearn":
+        from sklearn.decomposition import PCA as SklearnPCA
+
+        if snpobj.calldata_gt.ndim == 2:
+            X = np.transpose(snpobj.calldata_gt.astype(float), (1, 0))
+        elif snpobj.calldata_gt.ndim == 3:
+            X = np.transpose(snpobj.calldata_gt.astype(float), (1, 0, 2))
+            X = np.mean(X, axis=2)
+        else:
+            raise ValueError(
+                f"Invalid shape for calldata_gt: expected 2D or 3D, got {snpobj.calldata_gt.ndim}D."
+            )
+        components = SklearnPCA(n_components=2).fit_transform(X)
+    else:
+        raise ValueError("Unknown backend for PCA. Use 'sklearn' or 'pytorch'.")
 
     plt.figure(figsize=(10, 8))
     plt.scatter(components[:,0], components[:,1], linewidth=0, alpha=0.5)

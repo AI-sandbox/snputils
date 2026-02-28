@@ -11,6 +11,13 @@ class _Command:
     run: Callable[[argparse.Namespace], int]
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("Value must be a positive integer.")
+    return parsed
+
+
 def _run_pca(args: argparse.Namespace) -> int:
     from . import pca as pca_module
 
@@ -25,11 +32,11 @@ def _run_admixture_map(args: argparse.Namespace) -> int:
 
 def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--vcf-file",
-        dest="vcf_file",
+        "--snp-path",
+        dest="snp_path",
         required=True,
         type=str,
-        help="Path to an input VCF file.",
+        help="Path to genotype input (VCF, BED, or PGEN fileset).",
     )
     parser.add_argument(
         "--fig-path",
@@ -50,6 +57,26 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         choices=("sklearn", "pytorch"),
         default="sklearn",
         help="PCA backend to use.",
+    )
+    parser.add_argument(
+        "--n-components",
+        dest="n_components",
+        default=2,
+        type=_positive_int,
+        help="Number of principal components to compute.",
+    )
+    parser.add_argument(
+        "--sum-strands",
+        dest="sum_strands",
+        action="store_true",
+        help="Read diploid genotypes as per-individual summed strand counts.",
+    )
+    parser.add_argument(
+        "--vcf-backend",
+        dest="vcf_backend",
+        choices=("polars", "scikit-allel"),
+        default="polars",
+        help="VCF reader backend (used only when input is VCF).",
     )
 
 
@@ -116,8 +143,8 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         help="Print progress updates.",
     )
     parser.add_argument(
-        "--covar",
-        dest="covar",
+        "--covar-path",
+        dest="covar_path",
         default=None,
         type=str,
         help="Path to covariate file.",
@@ -149,15 +176,15 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         help="Add Bonferroni and Benjamini-Hochberg FDR p-values.",
     )
     parser.add_argument(
-        "--keep",
-        dest="keep",
+        "--keep-path",
+        dest="keep_path",
         default=None,
         type=str,
         help="Path to keep file (FID IID or IID per line).",
     )
     parser.add_argument(
-        "--remove",
-        dest="remove",
+        "--remove-path",
+        dest="remove_path",
         default=None,
         type=str,
         help="Path to remove file (FID IID or IID per line).",

@@ -6,6 +6,7 @@ import matplotlib
 import numpy as np
 import pytest
 
+from snputils.ancestry.io.local.read.__test__.fixtures import make_synthetic_dataset, write_msp
 from snputils.tools.main import main
 
 
@@ -19,6 +20,14 @@ def _write_tiny_vcf(path: Path) -> None:
         "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t0|0\t0|1\n",
         encoding="utf-8",
     )
+
+
+def _write_binary_phe(path: Path, sample_ids, y_binary: np.ndarray) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("#FID IID PHENO\n")
+        for sid, yi in zip(sample_ids, y_binary):
+            status = 2 if int(yi) == 1 else 1
+            handle.write(f"{sid} {sid} {status}\n")
 
 
 def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,7 +53,7 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
         [
             "snputils",
             "pca",
-            "--vcf-file",
+            "--snp-path",
             str(vcf_path),
             "--fig-path",
             str(fig_path),
@@ -52,6 +61,8 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
             str(npy_path),
             "--backend",
             "sklearn",
+            "--n-components",
+            "2",
         ],
     )
 
@@ -61,6 +72,81 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
 
     components = np.load(npy_path)
     assert components.shape == (2, 2)
+
+
+def test_main_pca_sklearn_smoke_with_pgen_auto_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    matplotlib.use("Agg", force=True)
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+
+    fig_path = tmp_path / "pca_pgen.png"
+    npy_path = tmp_path / "components_pgen.npy"
+    pgen_path = Path(__file__).resolve().parents[3] / "data" / "pgen" / "subset.pgen"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "pca",
+            "--snp-path",
+            str(pgen_path),
+            "--fig-path",
+            str(fig_path),
+            "--npy-path",
+            str(npy_path),
+            "--backend",
+            "sklearn",
+            "--sum-strands",
+        ],
+    )
+
+    assert main() == 0
+    assert fig_path.exists()
+    assert npy_path.exists()
+
+    components = np.load(npy_path)
+    assert components.ndim == 2
+    assert components.shape[1] == 2
+
+
+def test_main_admixture_map_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
+        n_samples=24,
+        n_windows=12,
+        seed=77,
+    )
+    phe_path = tmp_path / "toy.phe"
+    msp_path = tmp_path / "toy.msp"
+    out_dir = tmp_path / "out"
+    _write_binary_phe(phe_path, sample_ids, y)
+    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "admixture-map",
+            "--phe-id",
+            "toy",
+            "--phe-path",
+            str(phe_path),
+            "--msp-path",
+            str(msp_path),
+            "--results-path",
+            str(out_dir),
+            "--batch-size",
+            "8",
+            "--keep-hla",
+        ],
+    )
+
+    assert main() == 0
+    output_file = out_dir / "toy_admixmap.tsv.gz"
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0
 
 
 def test_main_without_command_prints_help_and_exits_1(

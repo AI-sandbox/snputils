@@ -104,15 +104,15 @@ class VCFReader(SNPBaseReader):
 
         log.info(f"Finished reading {self.filename}")
         return snpobj
-    # for now, I'm gonna do this in a bit of a hacky way
     def to_igd(self,
                 igd_file : Optional[str] = None,
                 logfile_out : Optional[str] = None,
                 logfile_err : Optional[str] = None) -> None:
         """
-        Converts the VCF file to an IGD file. Do not call this.
+        Convert the current VCF input file to IGD via `grg convert`.
+
         Args:
-            These are shared with to_grg.
+            igd_file: Output IGD file path. Defaults to `<vcf_stem>.igd`.
             logfile_out: The file to log standard output to. If None (default), no output will be logged (i.e., piped to dev null).
             logfile_err: The file to log standard error to. If None (default), no error will be logged (i.e., piped to dev null).
 
@@ -123,13 +123,8 @@ class VCFReader(SNPBaseReader):
 
         lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
         lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
-        # lf_o : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_out, "w"))
-        # lf_e : TextIOWrapper  = ITE((logfile_out == None), open(os.devnull, "w"), open(logfile_err, "w"))
-        # split extension twice
         name, _ext1 = splitext(str(self.filename))
         name, _ext2 = splitext(name)
-        # may use _ext later. not sure. 
-        _ext = _ext1 + _ext2
         if igd_file is None:
             self._igd_path = pathlib.Path(name + ".igd")
         else:

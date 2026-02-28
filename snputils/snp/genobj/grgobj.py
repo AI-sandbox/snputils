@@ -10,6 +10,8 @@ log = logging.getLogger(__name__)
 import tempfile
 
 GRGType = Union[pyg.GRG, pyg.MutableGRG]
+
+
 class GRGObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data.
@@ -150,6 +152,134 @@ class GRGObject:
     
     def n_snps(self) -> int:
         return self.__calldata_gt.num_mutations
+
+    def _sample_ids(self, n_samples: int, sample_prefix: str) -> np.ndarray:
+        default_ids = [f"{sample_prefix}_{idx}" for idx in range(n_samples)]
+        if self.__calldata_gt is None:
+            return np.asarray(default_ids, dtype=object)
+
+        has_individual_ids = bool(getattr(self.__calldata_gt, "has_individual_ids", False))
+        num_individuals = int(getattr(self.__calldata_gt, "num_individuals", 0))
+        if has_individual_ids and n_samples == num_individuals:
+            ids = []
+            for idx in range(n_samples):
+                try:
+                    sample_id = str(self.__calldata_gt.get_individual_id(idx))
+                except RuntimeError:
+                    sample_id = ""
+                ids.append(sample_id if sample_id else default_ids[idx])
+        else:
+            ids = default_ids
+
+        # Keep IDs unique for downstream writers.
+        seen = {}
+        unique_ids = []
+        for idx, sample_id in enumerate(ids):
+            count = seen.get(sample_id, 0)
+            unique_ids.append(sample_id if count == 0 else f"{sample_id}_{count}")
+            seen[sample_id] = count + 1
+
+        return np.asarray(unique_ids, dtype=object)
+
+    def to_snpobject(
+        self,
+        sum_strands: bool = False,
+        chrom: str = ".",
+        sample_prefix: str = "sample",
+    ):
+        """
+        Convert the GRG to a dense SNPObject.
+
+        Notes:
+            - This materializes the full genotype matrix, so memory usage scales with
+              `num_mutations * num_samples`.
+            - For diploid GRGs and `sum_strands=False`, output has shape
+              `(n_snps, n_samples, 2)`.
+            - For `sum_strands=True`, output has shape `(n_snps, n_samples)` with
+              per-individual allele counts.
+        """
+        from snputils.snp.genobj.snpobj import SNPObject
+
+        if self.__calldata_gt is None:
+            raise ValueError("Cannot convert to SNPObject: `calldata_gt` is None.")
+
+        grg = self.__calldata_gt
+        n_mutations = int(grg.num_mutations)
+        n_haplotypes = int(grg.num_samples)
+        ploidy = int(getattr(grg, "ploidy", 2))
+
+        if ploidy <= 0:
+            raise ValueError(f"Invalid ploidy in GRG: {ploidy}")
+        if n_haplotypes % ploidy != 0:
+            raise ValueError(
+                f"GRG has {n_haplotypes} haplotypes, not divisible by ploidy {ploidy}."
+            )
+
+        n_individuals = n_haplotypes // ploidy
+        chrom = str(chrom)
+
+        def _empty(shape):
+            return np.empty(shape, dtype=np.int8)
+
+        if sum_strands:
+            if n_mutations == 0:
+                calldata_gt = _empty((0, n_individuals))
+            elif ploidy == 1:
+                mutation_eye = np.eye(n_mutations, dtype=np.float64)
+                hap_matrix = pyg.matmul(grg, mutation_eye, pyg.TraversalDirection.DOWN)
+                calldata_gt = np.rint(hap_matrix).astype(np.int8, copy=False)
+            else:
+                mutation_eye = np.eye(n_mutations, dtype=np.float64)
+                diploid_matrix = pyg.matmul(
+                    grg, mutation_eye, pyg.TraversalDirection.DOWN, by_individual=True
+                )
+                calldata_gt = np.rint(diploid_matrix).astype(np.int8, copy=False)
+            sample_ids = self._sample_ids(n_individuals, sample_prefix)
+        else:
+            if ploidy != 2:
+                raise ValueError(
+                    "Phased SNPObject output requires diploid GRGs. "
+                    "Use `sum_strands=True` for non-diploid data."
+                )
+            if n_mutations == 0:
+                calldata_gt = _empty((0, n_individuals, ploidy))
+            else:
+                mutation_eye = np.eye(n_mutations, dtype=np.float64)
+                hap_matrix = pyg.matmul(grg, mutation_eye, pyg.TraversalDirection.DOWN)
+                hap_matrix = np.rint(hap_matrix).astype(np.int8, copy=False)
+                calldata_gt = hap_matrix.reshape(n_mutations, n_individuals, ploidy)
+            sample_ids = self._sample_ids(n_individuals, sample_prefix)
+
+        variants_ref = np.empty(n_mutations, dtype=object)
+        variants_alt = np.empty(n_mutations, dtype=object)
+        variants_pos = np.empty(n_mutations, dtype=np.int64)
+        variants_id = np.empty(n_mutations, dtype=object)
+
+        for mut_id in range(n_mutations):
+            mutation = grg.get_mutation_by_id(mut_id)
+            position = int(round(float(mutation.position)))
+            ref = str(mutation.ref_allele) if str(mutation.ref_allele) else "."
+            alt = str(mutation.allele) if str(mutation.allele) else "."
+            variants_pos[mut_id] = position
+            variants_ref[mut_id] = ref
+            variants_alt[mut_id] = alt
+            variants_id[mut_id] = f"{chrom}:{position}"
+
+        variants_chrom = np.full(n_mutations, chrom, dtype=object)
+        variants_filter_pass = np.full(n_mutations, "PASS", dtype=object)
+        variants_qual = np.full(n_mutations, np.nan, dtype=np.float32)
+
+        return SNPObject(
+            calldata_gt=calldata_gt,
+            samples=sample_ids,
+            variants_ref=variants_ref,
+            variants_alt=variants_alt,
+            variants_chrom=variants_chrom,
+            variants_filter_pass=variants_filter_pass,
+            variants_id=variants_id,
+            variants_pos=variants_pos,
+            variants_qual=variants_qual,
+        )
 
     def copy(self) -> GRGObject:
         """

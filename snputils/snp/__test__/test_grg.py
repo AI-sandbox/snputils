@@ -6,11 +6,14 @@ import pygrgl as pyg
 import pytest
 
 from snputils.snp.genobj.grgobj import GRGObject
+from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io import GRGWriter
+from snputils.snp.io.read.pgen import PGENReader
 from snputils.snp.io.read.auto import SNPReader
 from snputils.snp.io.read.functional import read_grg
 from snputils.snp.io.read.grg import GRGReader
 from snputils.snp.io.read.vcf import VCFReader
+from snputils.snp.io.write.pgen import PGENWriter
 
 
 def _build_toy_grg() -> pyg.MutableGRG:
@@ -79,6 +82,62 @@ def test_grg_object_to_grg_writes_loadable_file(tmp_path):
     loaded = pyg.load_immutable_grg(str(out), True)
     assert loaded.num_mutations == 5
     assert loaded.num_samples == 6
+
+
+def test_grg_object_to_snpobject_preserves_genotypes_and_metadata():
+    obj = GRGObject(calldata_gt=_build_toy_grg())
+    snp = obj.to_snpobject(chrom="22", sum_strands=False)
+
+    assert isinstance(snp, SNPObject)
+    assert snp.calldata_gt.shape == (5, 3, 2)
+    assert snp.samples.tolist() == ["sample_0", "sample_1", "sample_2"]
+    assert snp.variants_chrom.tolist() == ["22"] * 5
+    assert snp.variants_pos.tolist() == [100, 110, 120, 130, 140]
+    assert snp.variants_id.tolist() == [
+        "22:100",
+        "22:110",
+        "22:120",
+        "22:130",
+        "22:140",
+    ]
+
+    # Mutation(100, G, A) means ALT=G, REF=A for this API.
+    assert snp.variants_ref.tolist() == ["A", "C", "G", "T", "T"]
+    assert snp.variants_alt.tolist() == ["G", "T", "C", "A", "G"]
+
+    expected = np.array(
+        [
+            [[1, 1], [1, 1], [1, 1]],  # root mutation
+            [[1, 1], [1, 0], [0, 0]],  # left branch
+            [[0, 0], [0, 1], [1, 1]],  # right branch
+            [[1, 0], [0, 0], [0, 0]],  # sample 0
+            [[0, 0], [0, 0], [0, 1]],  # sample 5
+        ],
+        dtype=np.int8,
+    )
+    np.testing.assert_array_equal(snp.calldata_gt, expected)
+
+
+def test_grg_object_to_snpobject_sum_strands_matches_phased_sum():
+    obj = GRGObject(calldata_gt=_build_toy_grg())
+    phased = obj.to_snpobject(chrom="22", sum_strands=False)
+    summed = obj.to_snpobject(chrom="22", sum_strands=True)
+
+    assert summed.calldata_gt.shape == (5, 3)
+    np.testing.assert_array_equal(summed.calldata_gt, phased.calldata_gt.sum(axis=2))
+
+
+def test_grg_object_to_snpobject_allows_pgen_roundtrip(tmp_path):
+    obj = GRGObject(calldata_gt=_build_toy_grg())
+    snp = obj.to_snpobject(chrom="22", sum_strands=False)
+
+    out = tmp_path / "from_grg"
+    PGENWriter(snp, str(out)).write(vzs=False, rename_missing_values=False)
+
+    loaded = PGENReader(out).read(sum_strands=False)
+    assert loaded.calldata_gt.shape == (5, 3, 2)
+    np.testing.assert_array_equal(loaded.calldata_gt, snp.calldata_gt)
+    np.testing.assert_array_equal(loaded.variants_pos, snp.variants_pos)
 
 
 def test_grg_object_cli_wrappers_use_expected_arguments(monkeypatch):

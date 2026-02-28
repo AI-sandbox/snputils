@@ -44,21 +44,18 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
         [
             "snputils",
             "pca",
-            "--vcf_file",
+            "--vcf-file",
             str(vcf_path),
-            "--fig_path",
+            "--fig-path",
             str(fig_path),
-            "--npy_path",
+            "--npy-path",
             str(npy_path),
             "--backend",
             "sklearn",
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        main()
-
-    assert exc_info.value.code == 0
+    assert main() == 0
     assert fig_path.exists()
     assert npy_path.exists()
 
@@ -71,15 +68,11 @@ def test_main_without_command_prints_help_and_exits_1(
 ) -> None:
     monkeypatch.setattr(sys, "argv", ["snputils"])
 
-    with pytest.raises(SystemExit) as exc_info:
-        main()
-
-    assert exc_info.value.code == 1
+    assert main() == 1
     captured = capsys.readouterr()
-    assert "Usage:" in captured.err
-    assert "Available commands:" in captured.err
+    assert "usage:" in captured.err
     assert "pca" in captured.err
-    assert "admixture_mapping" in captured.err
+    assert "admixture-map" in captured.err
 
 
 def test_main_help_flag_prints_help_and_exits_0(
@@ -92,5 +85,5 @@ def test_main_help_flag_prints_help_and_exits_0(
 
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
-    assert "Usage:" in captured.out
-    assert "Available commands:" in captured.out
+    assert "usage:" in captured.out
+    assert "admixture-map" in captured.out

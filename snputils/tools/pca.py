@@ -23,8 +23,7 @@ def parse_pca_args(argv):
     return parser.parse_args(argv)
 
 
-def plot_and_save_pca(argv: List[str]):
-    args = parse_pca_args(argv)
+def run_pca_command(args: argparse.Namespace) -> int:
     reader = VCFReader(args.vcf_file)
     snpobj = reader.read()
 
@@ -59,7 +58,7 @@ def plot_and_save_pca(argv: List[str]):
         raise ValueError("Unknown backend for PCA. Use 'sklearn' or 'pytorch'.")
 
     plt.figure(figsize=(10, 8))
-    plt.scatter(components[:,0], components[:,1], linewidth=0, alpha=0.5)
+    plt.scatter(components[:, 0], components[:, 1], linewidth=0, alpha=0.5)
     plt.xlabel("Principal Component 1", fontsize=20)
     plt.ylabel("Principal Component 2", fontsize=20)
     plt.tight_layout()
@@ -67,6 +66,11 @@ def plot_and_save_pca(argv: List[str]):
     # Save plot
     plt.savefig(args.fig_path)
 
-    # Save components in .npy format    
+    # Save components in .npy format
     np.save(args.npy_path, components)
     return 0
+
+
+def plot_and_save_pca(argv: List[str]):
+    args = parse_pca_args(argv)
+    return run_pca_command(args)

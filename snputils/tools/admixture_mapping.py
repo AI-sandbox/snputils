@@ -1847,11 +1847,19 @@ def run_admixture_mapping(
 
 def admixmap(argv: Sequence[str]):
     args = parse_admixmap_args(argv)
+    return run_admixmap_command(args)
+
+
+def run_admixmap_command(args: argparse.Namespace) -> int:
+    phe_id = getattr(args, "phe_id", None)
+    if phe_id is None:
+        phe_id = getattr(args, "pheID")
+
     run_admixture_mapping(
         phe_path=args.phe_path,
         msp_path=args.msp_path,
         results_path=args.results_path,
-        phe_id=args.pheID,
+        phe_id=phe_id,
         batch_size=args.batch_size,
         keep_hla=args.keep_hla,
         memory=args.memory,
@@ -1866,4 +1874,4 @@ def admixmap(argv: Sequence[str]):
         keep_path=args.keep,
         remove_path=args.remove,
     )
-    return None
+    return 0

@@ -41,7 +41,7 @@ class GRGObject:
         """
         try:
             return getattr(self, key)
-        except:
+        except AttributeError:
             raise KeyError(f'Invalid key: {key}.')
 
     def __setitem__(self, key: str, value: Any):
@@ -51,7 +51,7 @@ class GRGObject:
         """
         try:
             setattr(self, key, value)
-        except:
+        except AttributeError:
             raise KeyError(f'Invalid key: {key}.')
 
     @property

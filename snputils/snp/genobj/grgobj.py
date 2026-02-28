@@ -133,13 +133,13 @@ class GRGObject:
                 ) from exc
             return pd.read_csv(fp.name, sep="\t")
     
-    def merge(self, combineNodes : bool = False, *args) -> Optional[GRGType]:
+    def merge(self, combine_nodes: bool = False, *args) -> None:
         # assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
         for arg in args:
             if not isinstance(arg, str):
                 raise TypeError("All merge inputs must be strings.")
-        # list of files, and combineNodes 
-        self.__calldata_gt.merge(list(args), combineNodes)
+        # list of files, and combine_nodes
+        self.__calldata_gt.merge(list(args), combine_nodes)
         #pep8 be damned
         # if inplace: self.__calldata_gt = merged_data
         # else      : return merged_data

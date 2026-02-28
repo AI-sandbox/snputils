@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from snputils.ancestry.io.local.read.__test__.fixtures import make_synthetic_dataset, write_msp
-from snputils.tools.main import main
+from snputils.tools.cli import main
 
 
 def _write_tiny_vcf(path: Path) -> None:

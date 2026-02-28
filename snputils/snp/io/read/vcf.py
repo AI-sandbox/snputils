@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List
+from typing import Optional, List, Any, Union
 from pathlib import Path
 import gzip
 import csv
@@ -7,15 +7,23 @@ import csv
 import allel
 import numpy as np
 import polars as pl
-
+import multiprocessing
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
-
+from os.path import splitext, exists, abspath
+import subprocess
+from io import TextIOWrapper
+import pathlib 
 log = logging.getLogger(__name__)
 
 
 @SNPBaseReader.register
 class VCFReader(SNPBaseReader):
+    def __init__(self, filename: Union[str, pathlib.Path]):
+        super().__init__(filename)
+        self._igd_path: Optional[pathlib.Path] = None
+        self._grg_path: Optional[pathlib.Path] = None
+        self.debug : bool = False
     def read(
         self,
         fields: Optional[List[str]] = None,
@@ -96,6 +104,123 @@ class VCFReader(SNPBaseReader):
 
         log.info(f"Finished reading {self.filename}")
         return snpobj
+    def to_igd(self,
+                igd_file : Optional[str] = None,
+                logfile_out : Optional[str] = None,
+                logfile_err : Optional[str] = None) -> None:
+        """
+        Convert the current VCF input file to IGD via `grg convert`.
+
+        Args:
+            igd_file: Output IGD file path. Defaults to `<vcf_stem>.igd`.
+            logfile_out: The file to log standard output to. If None (default), no output will be logged (i.e., piped to dev null).
+            logfile_err: The file to log standard error to. If None (default), no error will be logged (i.e., piped to dev null).
+
+        """
+
+        if not exists(self.filename):
+            raise FileNotFoundError(f"File {self.filename} does not exist")
+
+        lf_o  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
+        lf_e  : Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
+        name, _ext1 = splitext(str(self.filename))
+        name, _ext2 = splitext(name)
+        if igd_file is None:
+            self._igd_path = pathlib.Path(name + ".igd")
+        else:
+            self._igd_path = pathlib.Path(igd_file)
+
+        try:
+            subprocess.run(
+                ["grg", "convert", abspath(str(self.filename)), abspath(str(self._igd_path))],
+                stdout=lf_o,
+                stderr=lf_e,
+                check=True,
+            )
+        finally:
+            if not isinstance(lf_o, int):
+                lf_o.close()
+            if not isinstance(lf_e, int):
+                lf_e.close()
+            
+    def to_grg(self,
+               range: Optional[str] = None,
+               parts: Optional[int] = None,
+               jobs: Optional[int] = None,
+               trees: Optional[int] = None,
+               binmuts: Optional[bool] = None,
+               no_file_cleanup: Optional[bool] = None,
+               maf_flip: Optional[bool] = None,
+               population_ids: Optional[str] = None,
+               mutation_batch_size: Optional[int] = None,
+               igd_file: Optional[str] = None,
+               out_file: Optional[str] = None,
+               verbose: Optional[bool] = None,
+               no_merge: Optional[bool] = None,
+               force: Optional[bool] = None,
+               logfile_out: Optional[str] = None,
+               logfile_err: Optional[str] = None
+               ) -> None:
+        """
+        Convert VCF input to a GRG file via `grg construct`.
+
+        If `igd_file` exists, it is used as construct input. If it does not
+        exist, it is first created via `to_igd` and then used for construction.
+        """
+        input_file = pathlib.Path(self.filename).resolve()
+        if igd_file is not None:
+            candidate_igd = pathlib.Path(igd_file)
+            if candidate_igd.exists():
+                self._igd_path = candidate_igd.resolve()
+            else:
+                self.to_igd(igd_file, logfile_out, logfile_err)
+            input_file = pathlib.Path(self._igd_path).resolve()
+
+        if out_file is not None:
+            self._grg_path = pathlib.Path(out_file)
+        else:
+            default_stem = splitext(str(input_file))[0]
+            if default_stem.endswith(".vcf"):
+                default_stem = splitext(default_stem)[0]
+            self._grg_path = pathlib.Path(default_stem + ".grg")
+
+        lf_o: Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_out is None else open(logfile_out, "a")
+        lf_e: Union[int, TextIOWrapper] = subprocess.DEVNULL if logfile_err is None else open(logfile_err, "a")
+        args = ["grg", "construct"]
+        args += self._setarg(range, "-r", None)
+        args += self._setarg(parts, "-p", 50)
+        args += self._setarg(jobs, "-j", multiprocessing.cpu_count())
+        args += self._setarg(trees, "-t", 16)
+        args += self._setarg(binmuts, "--binary-muts", None)
+        args += self._setarg(no_file_cleanup, "--no-file-cleanup", None)
+        args += self._setarg(maf_flip, "--maf-flip", None)
+        args += self._setarg(population_ids, "--population-ids", None)
+        args += self._setarg(mutation_batch_size, "--mutation-batch-size", None)
+        args += self._setarg(str(self._grg_path), "--out-file", None)
+        args += self._setarg(verbose, "--verbose", None)
+        args += self._setarg(no_merge, "--no-merge", None)
+        args += self._setarg(force, "--force", None)
+        args += [str(input_file)]
+        log.debug("Running grg construct command: %s", args)
+        try:
+            subprocess.run(args, stdout=lf_o, stderr=lf_e, check=True)
+        finally:
+            if not isinstance(lf_o, int):
+                lf_o.close()
+            if not isinstance(lf_e, int):
+                lf_e.close()
+
+    def _setarg(self, x: Optional[Any], flag: str, default_arg: Optional[Any] = None) -> List[str]:
+        if isinstance(x, bool):
+            return [flag] if x else []
+        if x is None and default_arg is not None:
+            return [flag, f"{default_arg}"] 
+        elif x is not None:
+            return [flag, f"{x}"]
+        else:
+            return []
+        
+
 
 
 def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):

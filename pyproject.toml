@@ -39,6 +39,7 @@ dependencies = [
     "nbformat",
     "adjustText",
     "zstandard",
+    "pygrgl"
 ]
 
 [project.optional-dependencies]

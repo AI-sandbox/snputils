@@ -55,7 +55,7 @@ class GRGObject:
             raise KeyError(f'Invalid key: {key}.')
 
     @property
-    def calldata_gt(self) -> np.ndarray:
+    def calldata_gt(self) -> Optional[GRGType]:
         """
         Retrieve `calldata_gt`.
 

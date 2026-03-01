@@ -36,17 +36,10 @@ class _RegressionResult:
     errcode: str
 
 
-def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="admixture_mapping", description="Admixture Mapping.")
+def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--plot",
-        required=False,
-        default=False,
-        type=bool,
-        help="Plot Admixture Mapping Results {True, *False*}",
-    )
-    parser.add_argument(
-        "--batch_size",
+        "--batch-size",
+        dest="batch_size",
         required=False,
         default=32768,
         type=int,
@@ -54,19 +47,22 @@ def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--memory",
+        dest="memory",
         required=False,
         default=None,
         type=int,
         help="Peak RSS-delta memory cap in MiB for internal chunked processing.",
     )
     parser.add_argument(
-        "--keep_hla",
+        "--keep-hla",
+        dest="keep_hla",
         required=False,
         action="store_true",
         help="Keep chr6 HLA windows (default is to remove them).",
     )
     parser.add_argument(
         "--quantitative",
+        dest="quantitative",
         required=False,
         action="store_true",
         default=None,
@@ -74,12 +70,14 @@ def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--verbose",
+        dest="verbose",
         required=False,
         action="store_true",
         help="Print progress (windows processed, elapsed time, rate) during admixture mapping.",
     )
     parser.add_argument(
-        "--covar",
+        "--covar-path",
+        dest="covar_path",
         required=False,
         type=str,
         default=None,
@@ -87,6 +85,7 @@ def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--covar-col-nums",
+        dest="covar_col_nums",
         required=False,
         type=str,
         default=None,
@@ -94,12 +93,14 @@ def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--covar-variance-standardize",
+        dest="covar_variance_standardize",
         required=False,
         action="store_true",
         help="Center and variance-standardize selected covariates.",
     )
     parser.add_argument(
         "--ci",
+        dest="ci",
         required=False,
         type=float,
         default=None,
@@ -107,41 +108,51 @@ def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--adjust",
+        dest="adjust",
         required=False,
         action="store_true",
         help="Add Bonferroni and Benjamini-Hochberg FDR adjusted p-values.",
     )
     parser.add_argument(
-        "--keep",
+        "--keep-path",
+        dest="keep_path",
         required=False,
         type=str,
         default=None,
         help="Path to keep file (FID IID or IID per line) for sample inclusion.",
     )
     parser.add_argument(
-        "--remove",
+        "--remove-path",
+        dest="remove_path",
         required=False,
         type=str,
         default=None,
         help="Path to remove file (FID IID or IID per line) for sample exclusion.",
     )
     required_argv = parser.add_argument_group("required arguments")
-    required_argv.add_argument("--pheID", required=True, type=str, help="Phenotype ID.")
+    required_argv.add_argument("--phe-id", dest="phe_id", required=True, type=str, help="Phenotype ID.")
     required_argv.add_argument(
-        "--phe_path",
+        "--phe-path",
+        dest="phe_path",
         required=True,
         type=str,
         help="Path to phenotype file (headered text with IID column and one phenotype column; e.g. .txt, .phe, .pheno).",
     )
     required_argv.add_argument(
-        "--msp_path", required=True, type=str, help="Path of the .msp file (include file)."
+        "--msp-path", dest="msp_path", required=True, type=str, help="Path of the .msp file (include file)."
     )
     required_argv.add_argument(
-        "--results_path",
+        "--results-path",
+        dest="results_path",
         required=True,
         type=str,
         help="Path used to save resulting data in compressed .tsv file.",
     )
+
+
+def parse_admixmap_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="admixture-map", description="Admixture Mapping.")
+    add_admixmap_arguments(parser)
     return parser.parse_args(argv)
 
 
@@ -1847,23 +1858,27 @@ def run_admixture_mapping(
 
 def admixmap(argv: Sequence[str]):
     args = parse_admixmap_args(argv)
+    return run_admixmap_command(args)
+
+
+def run_admixmap_command(args: argparse.Namespace) -> int:
     run_admixture_mapping(
         phe_path=args.phe_path,
         msp_path=args.msp_path,
         results_path=args.results_path,
-        phe_id=args.pheID,
+        phe_id=args.phe_id,
         batch_size=args.batch_size,
         keep_hla=args.keep_hla,
         memory=args.memory,
         return_results=False,
         quantitative=args.quantitative,
         verbose=args.verbose,
-        covar_path=args.covar,
+        covar_path=args.covar_path,
         covar_col_nums=args.covar_col_nums,
         covar_variance_standardize=args.covar_variance_standardize,
         ci=args.ci,
         adjust=args.adjust,
-        keep_path=args.keep,
-        remove_path=args.remove,
+        keep_path=args.keep_path,
+        remove_path=args.remove_path,
     )
-    return None
+    return 0

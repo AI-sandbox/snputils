@@ -245,13 +245,28 @@ def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):
     else:
         raise ValueError(f"Unsupported file extension: {vcf_path.suffixes}")
 
+    col_names = None
     with open_func(vcf_path, mode) as file:
         for line in file:
-            if line.startswith("#CHROM"):
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith("##"):
+                continue
+            if stripped_line.startswith("#CHROM") or stripped_line.startswith("CHROM"):
                 if separator is None:
-                    separator = csv.Sniffer().sniff(file.readline()).delimiter
-                col_names = [x.strip() for x in line.split(separator)]
+                    if "\t" in stripped_line:
+                        separator = "\t"
+                    else:
+                        try:
+                            separator = csv.Sniffer().sniff(stripped_line).delimiter
+                        except csv.Error:
+                            separator = "\t"
+                col_names = [x.strip() for x in stripped_line.split(separator)]
                 break
+
+    if col_names is None:
+        raise ValueError(
+            "Could not find VCF header line. Expected a line starting with 'CHROM' or '#CHROM'."
+        )
 
     return col_names, separator
 
@@ -267,8 +282,12 @@ def _infer_col_data_types(names: List):
         col_dtypes: Dictionary mapping column names to data types.
     """
     col_dtypes = {name: pl.Utf8 for name in names}
-    col_dtypes['POS'] = pl.Int32
-    col_dtypes['#CHROM'] = pl.String
+    if 'POS' in col_dtypes:
+        col_dtypes['POS'] = pl.Int32
+    if '#CHROM' in col_dtypes:
+        col_dtypes['#CHROM'] = pl.String
+    if 'CHROM' in col_dtypes:
+        col_dtypes['CHROM'] = pl.String
 
     return col_dtypes
 
@@ -295,19 +314,29 @@ def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[s
     """
 
     # Define standard field names in a VCF file
-    field_names = ['#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']
+    field_names = ['#CHROM', 'CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']
 
     # Find the index of the first column that is not a standard field name
-    first_sample_idx = next(i for i, col in enumerate(names) if col not in field_names)
+    first_sample_idx = next((i for i, col in enumerate(names) if col not in field_names), len(names))
 
     # Identify field columns as all columns before the first sample column
     field_columns = names[:first_sample_idx]
 
     if fields != '*' and fields is not None:
         # Filter field columns to contain those in `fields`
-        field_columns = list(set(field_columns).intersection(set(fields)))
+        selected_fields = set(fields)
+        if 'CHROM' in selected_fields and '#CHROM' in names:
+            selected_fields.add('#CHROM')
+        if '#CHROM' in selected_fields and 'CHROM' in names:
+            selected_fields.add('CHROM')
+        field_columns = [col for col in field_columns if col in selected_fields]
     elif fields == '*' and exclude_fields is not None:
-        field_columns = list(set(field_columns) - set(exclude_fields))
+        excluded_fields = set(exclude_fields)
+        if 'CHROM' in excluded_fields and '#CHROM' in names:
+            excluded_fields.add('#CHROM')
+        if '#CHROM' in excluded_fields and 'CHROM' in names:
+            excluded_fields.add('CHROM')
+        field_columns = [col for col in field_columns if col not in excluded_fields]
 
     # Sample columns are all columns starting from the first sample column
     sample_columns = names[first_sample_idx:]
@@ -318,7 +347,8 @@ def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[s
         elif type(samples[0]) is int:
             sample_columns = list(np.array(sample_columns)[samples])
         else:
-            sample_columns = list(set(sample_columns).intersection(set(samples)))
+            selected_samples = set(samples)
+            sample_columns = [col for col in sample_columns if col in selected_samples]
 
     # Create a dictionary mapping column names to their indices
     column_idx_map = {name: index for index, name in enumerate(names)}
@@ -353,11 +383,12 @@ class VCFReaderPolars(SNPBaseReader):
         Args:
             fields: Fields to extract data for. This parameter specifies which data fields
                 from the VCF file should be included in the result. Available options include
-                '#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', and 'FORMAT'.
+                'CHROM'/'#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', and
+                'FORMAT'.
                 To extract all fields, provide just the string '*' or the default None.
             exclude_fields: Fields to exclude for use in combination with fields='*'.
-                Available options include '#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER',
-                'INFO', and 'FORMAT'.
+                Available options include 'CHROM'/'#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL',
+                'FILTER', 'INFO', and 'FORMAT'.
             region: Genomic region to extract variants for. If provided, it should be a
                 tabix-style region string, specifying a chromosome name and optionally
                 beginning and end coordinates (e.g., '2L:100000-200000'). TODO
@@ -390,11 +421,11 @@ class VCFReaderPolars(SNPBaseReader):
             # Read the VCF file into a Polars DataFrame
             vcf = pl.read_csv(
                 self._filename,
-                comment_prefix='#',
-                has_header=False,
+                comment_prefix='##',
+                has_header=True,
                 separator=separator,
                 columns=selected_column_idxs,
-                dtypes=col_dtypes
+                schema_overrides=col_dtypes
             )
 
             log.debug("vcf polars read")
@@ -431,13 +462,24 @@ class VCFReaderPolars(SNPBaseReader):
                 if sum_strands:
                     genotypes = genotypes.sum(axis=2, dtype=np.int8)
 
+            if '#CHROM' in vcf.columns:
+                chrom_column = '#CHROM'
+            elif 'CHROM' in vcf.columns:
+                chrom_column = 'CHROM'
+            else:
+                chrom_column = None
+
             # Create a SNPObject with the processed data
             snpobj = SNPObject(
                 calldata_gt=genotypes,
                 samples=np.array(samples),
                 variants_ref=vcf['REF'].to_numpy() if 'REF' in fields else np.array([]),
                 variants_alt=vcf['ALT'].to_numpy() if 'ALT' in fields else np.array([]),
-                variants_chrom=vcf['#CHROM'].to_numpy() if '#CHROM' in fields else np.array([]),
+                variants_chrom=(
+                    vcf[chrom_column].to_numpy()
+                    if chrom_column is not None and chrom_column in fields
+                    else np.array([])
+                ),
                 variants_filter_pass=vcf['FILTER'].to_numpy() if 'FILTER' in fields else np.array([]),
                 variants_id=vcf['ID'].to_numpy() if 'ID' in fields else np.array([]),
                 variants_pos=vcf['POS'].to_numpy() if 'POS' in fields else np.array([]),
@@ -449,7 +491,10 @@ class VCFReaderPolars(SNPBaseReader):
             return snpobj
 
         except Exception as e:
-            print(f"An error occurred: {e}.")
+            log.warning(
+                "Polars VCF parsing failed (%s). Falling back to scikit-allel reader.",
+                e,
+            )
             from snputils.snp.io.read import VCFReader
 
             # Instantiate a VCFReader object and read SNP data

@@ -112,16 +112,23 @@ The **snputils** package is continuously updated with new features and improveme
 - **Examples & Tutorials**: Check out our interactive notebooks in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
 - **Issues & Community**: Report bugs, ask questions, or request features via [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
 
-## Acknowledgments
-
-We would like to thank the open-source Python packages that make **snputils** possible: matplotlib, NumPy, pandas, Pgenlib, polars, pong, PyTorch, scikit-allel, scikit-learn, Tagore.
-
 ## Citation
 
 If you use **snputils** in your research, please cite:
 
-> Bonet, D.\*, Comajoan Cara, M.\*, Barrabés, M.\*, Smeriglio, R., Agrawal, D., Dominguez Mantes, A., López, C., Thomassin, C., Calafell, A., Luis, A., Saurina, J., Franquesa, M., Perera, M., Geleta, M., Jaras, A., Sabat, B. O., Abante, J., Moreno-Grau, S., Mas Montserrat, D., Ioannidis, A. G., snputils: A Python library for processing diverse genomes. Annual Meeting of The American Society of Human Genetics, November 2024, Denver, Colorado, USA. \*Equal contribution.
+```bibtex
+@article {snputils2026,
+  author = {Bonet, David and Comajoan Cara, Marçal and Barrabés, Míriam and Smeriglio, Riccardo and Agrawal, Devang and Aounallah, Khaled and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Shanks, Cole and Huang, Edward C. and Franquesa Monés, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and López, Cayetana and Sabat, Benet Oriol and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
+  title = {snputils: A High-Performance {Python} Library for Genetic Variation and Population Structure},
+  year = {2026},
+  month = feb,
+  doi = {10.64898/2026.02.28.708618},
+  url = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
+  journal = {bioRxiv},
+  publisher = {Cold Spring Harbor Laboratory},
+}
+```
 
-Journal paper coming soon!
+## Acknowledgments
 
-
+We would like to thank the open-source packages that make **snputils** possible.

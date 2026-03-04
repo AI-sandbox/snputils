@@ -123,8 +123,8 @@ If you use **snputils** in your research, please cite:
   year = {2026},
   month = feb,
   doi = {10.64898/2026.02.28.708618},
-  URL = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
-  journal = {bioRxiv}
+  url = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
+  journal = {bioRxiv},
   publisher = {Cold Spring Harbor Laboratory},
 }
 ```

@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import Iterator, List, Optional
 import os
 import csv
 
@@ -165,14 +165,15 @@ class PGENReader(SNPBaseReader):
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
                 pvar = pvar.collect()
             else:
-                variant_idxs = np.array(variant_idxs, dtype=np.uint32)
-                num_variants = np.size(variant_idxs)
                 pvar = (
                     pvar.with_row_index()
-                    .filter(pl.col("index").is_in(variant_idxs))
-                    .drop("index")
+                    .filter(pl.col("index").is_in(np.asarray(variant_idxs, dtype=np.uint32).ravel()))
                     .collect()
                 )
+                variant_idxs = pvar.select("index").to_series().to_numpy()
+                variant_idxs = np.asarray(variant_idxs, dtype=np.uint32)
+                num_variants = np.size(variant_idxs)
+                pvar = pvar.drop("index")
 
             log.info(f"Reading {filename_noext}.psam")
 
@@ -248,3 +249,153 @@ class PGENReader(SNPBaseReader):
 
         log.info("Finished constructing SNPObject")
         return snpobj
+
+    def _resolve_variant_idxs_for_iter(
+        self,
+        *,
+        variant_ids: Optional[np.ndarray],
+        variant_idxs: Optional[np.ndarray],
+        separator: str = None,
+    ) -> np.ndarray:
+        """
+        Resolve variant selectors to canonical file-order row indices.
+        """
+        filename_noext = str(self.filename)
+        for ext in [".pgen", ".pvar", ".pvar.zst", ".psam"]:
+            if filename_noext.endswith(ext):
+                filename_noext = filename_noext[:-len(ext)]
+                break
+
+        pvar_filename = None
+        for ext in [".pvar", ".pvar.zst"]:
+            candidate = filename_noext + ext
+            if os.path.exists(candidate):
+                pvar_filename = candidate
+                break
+        if pvar_filename is None:
+            raise FileNotFoundError(f"No .pvar or .pvar.zst file found for {filename_noext}")
+
+        local_separator = separator
+
+        def open_textfile(filename):
+            if filename.endswith(".zst"):
+                import zstandard as zstd
+
+                return zstd.open(filename, "rt")
+            return open(filename, "rt")
+
+        pvar_has_header = True
+        pvar_header_line_num = 0
+        with open_textfile(pvar_filename) as file:
+            for line_num, line in enumerate(file):
+                if line.startswith("##"):
+                    continue
+                if local_separator is None:
+                    local_separator = csv.Sniffer().sniff(file.readline()).delimiter
+                if line.startswith("#CHROM"):
+                    pvar_header_line_num = line_num
+                    header = line.strip().split()
+                    break
+                if not line.startswith("#"):
+                    pvar_has_header = False
+                    cols_in_pvar = len(line.strip().split(local_separator))
+                    if cols_in_pvar == 5:
+                        header = ["#CHROM", "ID", "POS", "ALT", "REF"]
+                    elif cols_in_pvar == 6:
+                        header = ["#CHROM", "ID", "CM", "POS", "ALT", "REF"]
+                    else:
+                        raise ValueError(f"{pvar_filename} is not a valid pvar file.")
+                    break
+
+        pvar_reading_args = {
+            "separator": local_separator,
+            "skip_rows": pvar_header_line_num,
+            "has_header": pvar_has_header,
+            "new_columns": None if pvar_has_header else header,
+            "schema_overrides": {
+                "#CHROM": pl.String,
+                "POS": pl.UInt32,
+                "ID": pl.String,
+                "REF": pl.String,
+                "ALT": pl.String,
+            },
+            "null_values": ["NA"],
+        }
+        if pvar_filename.endswith(".zst"):
+            pvar = pl.read_csv(pvar_filename, **pvar_reading_args)
+        else:
+            pvar = pl.scan_csv(pvar_filename, **pvar_reading_args).collect()
+
+        variant_meta = pvar.select(["ID", "#CHROM", "POS"]).with_row_index()
+
+        if variant_ids is not None:
+            variant_id_values = [str(v) for v in np.atleast_1d(variant_ids)]
+            variant_id_or_pos = (
+                pl.col("ID").is_in(variant_id_values)
+                | pl.concat_str([pl.col("#CHROM"), pl.lit(":"), pl.col("POS").cast(pl.String)]).is_in(
+                    variant_id_values
+                )
+            )
+            resolved = (
+                variant_meta.filter(variant_id_or_pos)
+                .select("index")
+                .to_series()
+                .to_numpy()
+            )
+            return np.asarray(resolved, dtype=np.uint32)
+
+        if variant_idxs is not None:
+            requested = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+            resolved = (
+                variant_meta.filter(pl.col("index").is_in(requested))
+                .select("index")
+                .to_series()
+                .to_numpy()
+            )
+            return np.asarray(resolved, dtype=np.uint32)
+
+        return np.arange(variant_meta.height, dtype=np.uint32)
+
+    def iter_read(
+        self,
+        fields: Optional[List[str]] = None,
+        exclude_fields: Optional[List[str]] = None,
+        sample_ids: Optional[np.ndarray] = None,
+        sample_idxs: Optional[np.ndarray] = None,
+        variant_ids: Optional[np.ndarray] = None,
+        variant_idxs: Optional[np.ndarray] = None,
+        sum_strands: bool = False,
+        separator: str = None,
+        chunk_size: int = 10_000,
+    ) -> Iterator[SNPObject]:
+        """
+        Stream the PGEN fileset in variant chunks.
+
+        This yields a sequence of SNPObject chunks along the SNP axis.
+        """
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1.")
+        if sample_idxs is not None and sample_ids is not None:
+            raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
+        if variant_idxs is not None and variant_ids is not None:
+            raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
+
+        selectors = self._resolve_variant_idxs_for_iter(
+            variant_ids=variant_ids,
+            variant_idxs=variant_idxs,
+            separator=separator,
+        )
+
+        n_selectors = int(selectors.size)
+        for start in range(0, n_selectors, int(chunk_size)):
+            stop = min(start + int(chunk_size), n_selectors)
+            selector_chunk = np.asarray(selectors[start:stop], dtype=np.uint32)
+            yield self.read(
+                fields=fields,
+                exclude_fields=exclude_fields,
+                sample_ids=sample_ids,
+                sample_idxs=sample_idxs,
+                variant_idxs=selector_chunk,
+                sum_strands=sum_strands,
+                separator=separator,
+            )

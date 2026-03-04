@@ -8,6 +8,8 @@ import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECKING
 from scipy.stats import mode
 
+from snputils._utils.allele_freq import aggregate_pop_allele_freq
+
 if TYPE_CHECKING:
     from snputils.ancestry.genobj.local import LocalAncestryObject
 
@@ -418,6 +420,99 @@ class SNPObject:
                 for easier reference to public attributes in the instance.
         """
         return [attr.replace('_SNPObject__', '') for attr in vars(self)]
+
+    def allele_freq(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        return_counts: bool = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP alternate allele frequencies from `calldata_gt`.
+
+        Args:
+            sample_labels (sequence, optional):
+                Population label per sample. If None, computes cohort-level frequencies.
+            ancestry (str or int, optional):
+                If provided, compute ancestry-masked frequencies using SNP-level LAI.
+            laiobj (LocalAncestryObject, optional):
+                Optional LAI object used when `self.calldata_lai` is not set.
+            return_counts (bool, default=False):
+                If True, also return called-allele counts with the same shape as frequencies.
+            as_dataframe (bool, default=False):
+                If True, return pandas DataFrame output.
+
+        Returns:
+            Frequencies as a NumPy array (or DataFrame if `as_dataframe=True`).
+            If `return_counts=True`, returns `(freq, counts)`.
+        """
+        if self.calldata_gt is None:
+            raise ValueError("Genotype data `calldata_gt` is None.")
+
+        gt = np.asarray(self.calldata_gt)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'calldata_gt' must be 2D or 3D array")
+
+        n_samples = gt.shape[1]
+
+        grouped_output = sample_labels is not None
+        if sample_labels is None:
+            labels = np.repeat("__all__", n_samples)
+        else:
+            labels = np.asarray(sample_labels)
+            if labels.ndim != 1:
+                labels = labels.ravel()
+            if labels.shape[0] != n_samples:
+                raise ValueError(
+                    "'sample_labels' must have length equal to the number of samples in `calldata_gt`."
+                )
+
+        calldata_lai = None
+        if ancestry is not None:
+            if self.calldata_lai is not None:
+                calldata_lai = self.calldata_lai
+            elif laiobj is not None:
+                try:
+                    converted_lai = laiobj.convert_to_snp_level(snpobject=self, lai_format="3D")
+                    calldata_lai = getattr(converted_lai, "calldata_lai", None)
+                except Exception:
+                    calldata_lai = None
+
+            if calldata_lai is None:
+                raise ValueError(
+                    "Ancestry-specific masking requires SNP-level LAI "
+                    "(provide a LocalAncestryObject via 'laiobj' or ensure 'self.calldata_lai' is set)."
+                )
+
+        afs, counts, pops = aggregate_pop_allele_freq(
+            calldata_gt=gt,
+            sample_labels=labels,
+            ancestry=ancestry,
+            calldata_lai=calldata_lai,
+        )
+
+        if grouped_output:
+            freq_out = afs
+            count_out = counts
+            if as_dataframe:
+                import pandas as pd
+
+                freq_out = pd.DataFrame(afs, columns=pops)
+                count_out = pd.DataFrame(counts, columns=pops)
+        else:
+            freq_out = afs[:, 0]
+            count_out = counts[:, 0]
+            if as_dataframe:
+                import pandas as pd
+
+                freq_out = pd.DataFrame({"allele_freq": freq_out})
+                count_out = pd.DataFrame({"called_alleles": count_out})
+
+        if return_counts:
+            return freq_out, count_out
+        return freq_out
 
     def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
         """

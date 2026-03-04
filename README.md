@@ -119,7 +119,7 @@ If you use **snputils** in your research, please cite:
 ```bibtex
 @article {snputils2026,
   author = {Bonet, David and Comajoan Cara, Marçal and Barrabés, Míriam and Smeriglio, Riccardo and Agrawal, Devang and Aounallah, Khaled and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Shanks, Cole and Huang, Edward C. and Franquesa Monés, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and López, Cayetana and Sabat, Benet Oriol and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
-  title = {snputils: A High-Performance {Python} Library for Genetic Variation and Population Structure},
+  title = {{snputils}: A High-Performance {Python} Library for Genetic Variation and Population Structure},
   year = {2026},
   month = feb,
   doi = {10.64898/2026.02.28.708618},
@@ -132,3 +132,4 @@ If you use **snputils** in your research, please cite:
 ## Acknowledgments
 
 We would like to thank the open-source packages that make **snputils** possible.
+

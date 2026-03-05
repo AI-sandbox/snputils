@@ -7,6 +7,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from snputils._utils.allele_freq import aggregate_pop_allele_freq
+
 
 ArrayLike = Union[np.ndarray, Sequence[float]]
 
@@ -100,95 +102,31 @@ def _aggregate_to_pop_allele_freq(
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Convert sample-level genotypes into per-population allele frequency and count matrices.
-
-    Genotype encoding supported:
-        - 3D (n_snps, n_samples, 2): haplotype calls in {0,1}, missing as negative or NaN
-        - 2D (n_snps, n_samples): diploid dosages in {0,1,2} or haploid in {0,1}; missing as negative or NaN
-
-    Returns:
-        afs: float array (n_snps, n_pops)
-        counts: int array (n_snps, n_pops) of called haplotypes per SNP and population
-        pops: list of population names in column order
     """
-    gt = np.asarray(calldata_gt)
-    if gt.ndim not in (2, 3):
-        raise ValueError("'calldata_gt' must be 2D or 3D array")
-
-    sample_labels = np.asarray(sample_labels)
-    pops, pop_indices = np.unique(sample_labels, return_inverse=True)
-    n_snps = gt.shape[0]
-    n_pops = pops.size
-
-    # Optional ancestry mask (requires haplotype-level genotypes)
+    calldata_lai = None
     if ancestry is not None:
-        laj = None
         if snpobj is not None and getattr(snpobj, "calldata_lai", None) is not None:
-            laj = snpobj.calldata_lai
-        if laiobj is not None and laj is None:
+            calldata_lai = snpobj.calldata_lai
+        elif laiobj is not None:
             try:
-                # Prefer 3D LAI to mask haplotypes
-                laj = laiobj.convert_to_snp_level(snpobject=snpobj, lai_format="3D").calldata_lai
+                converted_lai = laiobj.convert_to_snp_level(snpobject=snpobj, lai_format="3D")
+                calldata_lai = getattr(converted_lai, "calldata_lai", None)
             except Exception:
-                pass
-        if laj is None:
+                calldata_lai = None
+
+        if calldata_lai is None:
             raise ValueError(
-                "Ancestry-specific masking requires SNP-level LAI (provide a LocalAncestryObject via 'laiobj' or ensure 'snpobj.calldata_lai' is set)."
+                "Ancestry-specific masking requires SNP-level LAI "
+                "(provide a LocalAncestryObject via 'laiobj' or ensure 'snpobj.calldata_lai' is set)."
             )
-        if gt.ndim != 3:
-            raise ValueError("Ancestry-specific masking requires 3D genotype array (n_snps, n_samples, 2).")
-        # Normalize LAI to 3D
-        laj = np.asarray(laj)
-        if laj.ndim == 2:
-            n_samples = gt.shape[1]
-            try:
-                laj = laj.reshape(n_snps, n_samples, 2)
-            except Exception:
-                raise ValueError("LAI shape is incompatible with genotypes. Expected (n_snps, n_samples*2) to reshape.")
-        if laj.ndim != 3:
-            raise ValueError("LAI must be 3D (n_snps, n_samples, 2) or 2D (n_snps, n_samples*2).")
-        # Apply mask: keep entries matching ancestry; others set to NaN
-        mask = (laj.astype(str) == str(ancestry))
-        gt = gt.astype(float)
-        gt[~mask] = np.nan
 
-    # Compute alt allele counts and haplotype counts per SNP and sample
-    if gt.ndim == 3:
-        # (n_snps, n_samples, 2)
-        g = gt.astype(float)
-        # treat values < 0 as missing
-        missing = g < 0
-        g[missing] = np.nan
-        alt_counts_per_sample = np.nansum(g, axis=2)  # sum haplotypes per sample
-        hap_count_per_sample = 2 - np.sum(np.isnan(g), axis=2)
-    else:
-        # (n_snps, n_samples)
-        g = gt.astype(float)
-        missing = g < 0
-        g[missing] = np.nan
-        all_nan = np.all(np.isnan(g))
-        max_val = np.nan if all_nan else np.nanmax(g)
-        if all_nan:
-            hap_count_per_sample = np.zeros_like(g)
-            alt_counts_per_sample = np.zeros_like(g)
-        elif max_val <= 1:
-            hap_count_per_sample = np.where(np.isnan(g), 0.0, 1.0)
-            alt_counts_per_sample = np.where(np.isnan(g), 0.0, g)
-        else:
-            hap_count_per_sample = np.where(np.isnan(g), 0.0, 2.0)
-            alt_counts_per_sample = np.where(np.isnan(g), 0.0, g)
-
-    # Aggregate per population
-    afs = np.zeros((n_snps, n_pops), dtype=float)
-    counts = np.zeros((n_snps, n_pops), dtype=float)
-    for k in range(n_pops):
-        cols = np.where(pop_indices == k)[0]
-        if cols.size == 0:
-            continue
-        counts[:, k] = np.sum(hap_count_per_sample[:, cols], axis=1)
-        alt_sum = np.sum(alt_counts_per_sample[:, cols], axis=1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            afs[:, k] = np.where(counts[:, k] > 0, alt_sum / counts[:, k], np.nan)
-    return afs, counts.astype(int), pops.tolist()
+    afs, counts, pops = aggregate_pop_allele_freq(
+        calldata_gt=calldata_gt,
+        sample_labels=sample_labels,
+        ancestry=ancestry,
+        calldata_lai=calldata_lai,
+    )
+    return afs, counts, pops
 
 
 def _prepare_inputs(
@@ -853,5 +791,4 @@ __all__ = [
     "f4_ratio",
     "fst",
 ]
-
 

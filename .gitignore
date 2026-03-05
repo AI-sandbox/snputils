@@ -158,3 +158,6 @@ benchmark/*/
 
 # Private tests (large-scale internal); do not push
 snputils/tools/__test__/test_admixture_mapping_internal_large.py
+
+*.md
+!README.md

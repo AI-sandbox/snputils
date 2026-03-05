@@ -678,9 +678,10 @@ class LocalAncestryObject(AncestryObject):
                 snp_to_window_indices[snp_indices[valid_mask]] = window_indices[inds[valid_mask]]
                 log.debug(f"Number of SNPs within window ranges for chromosome {chrom}: {valid_mask.sum()}")
 
-            # Initialize SNP-level ancestry array with NaNs as default
+            # Initialize SNP-level ancestry array with a missing-value sentinel.
+            # `-1` marks SNPs that do not fall within any LAI window.
             shape = (n_snps, n_samples, 2) if lai_format == "3D" else (n_snps, n_samples * 2)
-            calldata_lai = np.full(shape, np.nan, dtype='uint8')
+            calldata_lai = np.full(shape, -1, dtype=np.int16)
 
             # Assign ancestry values to SNPs with valid window assignments
             valid_mask = (snp_to_window_indices != -1)

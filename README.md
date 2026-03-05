@@ -57,6 +57,7 @@ Working with ancestry files, performing processing operations, and creating visu
 ### Processing & Analysis Tools
 - **Basic Data Manipulation**
   - Filter variants and samples, correct SNP flips, and filter out ambiguous SNPs
+  - Compute cohort allele frequency and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)` or in streaming for memory efficiency with `snputils.stats.allele_freq_stream(...)`
   - Standardized querying across genotype, local ancestry, global ancestry, and IBD data
 
 - **Dimensionality Reduction**

@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Any, Union
+from typing import Optional, List, Any, Union, Iterator, Tuple, Dict
 from pathlib import Path
 import gzip
 import csv
@@ -366,8 +366,101 @@ def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[s
 class VCFReaderPolars(SNPBaseReader):
     """Reads a VCF file and processes it into a SNPObject."""
 
-    def __init__(self, filename: str):
-        self._filename = filename
+    def __init__(self, filename: Union[str, pathlib.Path]):
+        super().__init__(filename)
+
+    def _resolve_columns(
+        self,
+        fields: Optional[List[str]],
+        exclude_fields: Optional[List[str]],
+        samples: Optional[List[str]],
+        separator: Optional[str],
+    ) -> Tuple[List[str], List[str], List[int], Dict[str, pl.DataType], str]:
+        """
+        Resolve the field/sample column selections and parser schema for the VCF.
+        """
+        col_names, detected_separator = _get_vcf_col_names_and_sep(
+            str(self._filename),
+            separator=separator,
+        )
+        col_dtypes = _infer_col_data_types(col_names)
+        field_columns, sample_columns, selected_column_idxs = _extract_columns(
+            col_names,
+            fields,
+            exclude_fields,
+            samples,
+        )
+        return field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator
+
+    def _parse_genotypes(
+        self,
+        vcf: pl.DataFrame,
+        sample_columns: List[str],
+        sum_strands: bool,
+    ) -> np.ndarray:
+        if not sample_columns:
+            return np.array([])
+
+        # Process maternal strand:
+        # Extract the first position from genotype, e.g., 0|1 -> 0.
+        # Replace missing values codified as ".", "-", or "" with -1 for integer casting.
+        genotype_maternal = (
+            vcf[sample_columns]
+            .select(pl.all().str.slice(0, length=1))
+            .select(pl.all().replace({".": -1, "-": -1, "": -1}))
+            .cast(pl.Int8)
+        )
+
+        # Process paternal strand:
+        # Extract the third position from genotype, e.g., 0|1 -> 1.
+        # Convert ":" to ".." such that if only maternal strand is present,
+        # paternal strand is set to missing, e.g., 0:0.982 -> 0..0.982 -> . -> -1.
+        genotype_paternal = (
+            vcf[sample_columns]
+            .select(pl.all().str.replace_all("-1", "."))
+            .select(pl.all().str.replace(":", ".."))
+            .select(pl.all().str.slice(2, length=1))
+            .select(pl.all().replace({".": -1, "": -1}))
+            .cast(pl.Int8)
+        )
+
+        genotypes = np.dstack((genotype_maternal, genotype_paternal))
+        if sum_strands:
+            genotypes = genotypes.sum(axis=2, dtype=np.int8)
+
+        return genotypes
+
+    def _dataframe_to_snpobject(
+        self,
+        vcf: pl.DataFrame,
+        field_columns: List[str],
+        sample_columns: List[str],
+        sum_strands: bool,
+    ) -> SNPObject:
+        genotypes = self._parse_genotypes(vcf, sample_columns, bool(sum_strands))
+
+        if "#CHROM" in vcf.columns:
+            chrom_column = "#CHROM"
+        elif "CHROM" in vcf.columns:
+            chrom_column = "CHROM"
+        else:
+            chrom_column = None
+
+        return SNPObject(
+            calldata_gt=genotypes,
+            samples=np.asarray(sample_columns),
+            variants_ref=vcf["REF"].to_numpy() if "REF" in field_columns else np.array([]),
+            variants_alt=vcf["ALT"].to_numpy() if "ALT" in field_columns else np.array([]),
+            variants_chrom=(
+                vcf[chrom_column].to_numpy()
+                if chrom_column is not None and chrom_column in field_columns
+                else np.array([])
+            ),
+            variants_filter_pass=vcf["FILTER"].to_numpy() if "FILTER" in field_columns else np.array([]),
+            variants_id=vcf["ID"].to_numpy() if "ID" in field_columns else np.array([]),
+            variants_pos=vcf["POS"].to_numpy() if "POS" in field_columns else np.array([]),
+            variants_qual=vcf["QUAL"].to_numpy() if "QUAL" in field_columns else np.array([]),
+        )
 
     def read(self,
              fields: Optional[List[str]] = None,
@@ -410,80 +503,30 @@ class VCFReaderPolars(SNPBaseReader):
         log.info(f"Reading {self._filename}")
 
         try:
-            # Get the names and data types for the VCF file
-            col_names, separator = _get_vcf_col_names_and_sep(self._filename)
-            col_dtypes = _infer_col_data_types(col_names)
-
-            # Extract columns to read based on specified 'fields', 'exclude_fields' and 'samples'
-            # `selected_column_idxs` contains the indexes of the selected columns
-            fields, samples, selected_column_idxs = _extract_columns(col_names, fields, exclude_fields, samples)
+            field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator = self._resolve_columns(
+                fields=fields,
+                exclude_fields=exclude_fields,
+                samples=samples,
+                separator=separator,
+            )
 
             # Read the VCF file into a Polars DataFrame
             vcf = pl.read_csv(
                 self._filename,
-                comment_prefix='##',
+                comment_prefix="##",
                 has_header=True,
-                separator=separator,
+                separator=detected_separator,
                 columns=selected_column_idxs,
-                schema_overrides=col_dtypes
+                schema_overrides=col_dtypes,
             )
 
             log.debug("vcf polars read")
 
-            if not samples:
-                genotypes = np.array([])
-            else:  # note that if samples is None, all samples are read
-                # Process maternal strand:
-                # Extract the first position from genotype, e.g., 0|1 -> 0
-                # Replace missing values codified as ".", "-", or "" with -1, necessary for integer casting
-                genotype_maternal = vcf[samples].select(pl.all().str.slice(0, length=1)) \
-                                                .select(pl.all().replace({
-                                                    ".": -1,
-                                                    "-": -1,
-                                                    "": -1
-                                                })).cast(pl.Int8)
-
-                # Process paternal strand:
-                # Extract the third position from genotype, e.g., 0|1 -> 1
-                # Convert ":" to ".." such that if only maternal strand is present, paternal strand is set to missing,
-                # e.g., 0:0.982 -> 0..0.982 -> . -> -1
-                # Replace missing values with -1
-                genotype_paternal = vcf[samples].select(pl.all().str.replace_all('-1', '.')) \
-                                                .select(pl.all().str.replace(':', '..')) \
-                                                .select(pl.all().str.slice(2, length=1)) \
-                                                .select(pl.all().replace({
-                                                    ".": -1,
-                                                    "": -1
-                                                })).cast(pl.Int8)
-
-                # Combine maternal and paternal genotypes
-                genotypes = np.dstack((genotype_maternal, genotype_paternal))
-
-                if sum_strands:
-                    genotypes = genotypes.sum(axis=2, dtype=np.int8)
-
-            if '#CHROM' in vcf.columns:
-                chrom_column = '#CHROM'
-            elif 'CHROM' in vcf.columns:
-                chrom_column = 'CHROM'
-            else:
-                chrom_column = None
-
-            # Create a SNPObject with the processed data
-            snpobj = SNPObject(
-                calldata_gt=genotypes,
-                samples=np.array(samples),
-                variants_ref=vcf['REF'].to_numpy() if 'REF' in fields else np.array([]),
-                variants_alt=vcf['ALT'].to_numpy() if 'ALT' in fields else np.array([]),
-                variants_chrom=(
-                    vcf[chrom_column].to_numpy()
-                    if chrom_column is not None and chrom_column in fields
-                    else np.array([])
-                ),
-                variants_filter_pass=vcf['FILTER'].to_numpy() if 'FILTER' in fields else np.array([]),
-                variants_id=vcf['ID'].to_numpy() if 'ID' in fields else np.array([]),
-                variants_pos=vcf['POS'].to_numpy() if 'POS' in fields else np.array([]),
-                variants_qual=vcf['QUAL'].to_numpy() if 'QUAL' in fields else np.array([])
+            snpobj = self._dataframe_to_snpobject(
+                vcf=vcf,
+                field_columns=field_columns,
+                sample_columns=sample_columns,
+                sum_strands=bool(sum_strands),
             )
 
             log.info(f"Finished reading {self.filename}")
@@ -499,6 +542,81 @@ class VCFReaderPolars(SNPBaseReader):
 
             # Instantiate a VCFReader object and read SNP data
             reader = VCFReader(self._filename)
-            snpobj = reader.read()
+            snpobj = reader.read(
+                fields=fields,
+                exclude_fields=exclude_fields,
+                region=region,
+                samples=samples,
+                sum_strands=bool(sum_strands),
+            )
 
             return snpobj
+
+    def iter_read(
+        self,
+        fields: Optional[List[str]] = None,
+        exclude_fields: Optional[List[str]] = None,
+        region: Optional[str] = None,
+        samples: Optional[List[str]] = None,
+        sum_strands: Optional[bool] = False,
+        separator: Optional[str] = None,
+        chunk_size: int = 10_000,
+    ) -> Iterator[SNPObject]:
+        """
+        Stream a VCF in variant chunks using the Polars backend.
+        """
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1.")
+        if region is not None:
+            raise NotImplementedError("VCFReaderPolars.iter_read does not support `region` yet.")
+
+        field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator = self._resolve_columns(
+            fields=fields,
+            exclude_fields=exclude_fields,
+            samples=samples,
+            separator=separator,
+        )
+
+        try:
+            reader = pl.read_csv_batched(
+                self._filename,
+                comment_prefix="##",
+                has_header=True,
+                separator=detected_separator,
+                columns=selected_column_idxs,
+                schema_overrides=col_dtypes,
+                batch_size=int(chunk_size),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to initialize VCF batched reader for {self._filename}: {exc}") from exc
+
+        pending: Optional[pl.DataFrame] = None
+
+        while True:
+            batches = reader.next_batches(1)
+            if not batches:
+                break
+
+            batch = batches[0]
+            if pending is None:
+                pending = batch
+            else:
+                pending = pl.concat([pending, batch], how="vertical_relaxed")
+
+            while pending.height >= int(chunk_size):
+                chunk_df = pending.slice(0, int(chunk_size))
+                pending = pending.slice(int(chunk_size))
+                yield self._dataframe_to_snpobject(
+                    vcf=chunk_df,
+                    field_columns=field_columns,
+                    sample_columns=sample_columns,
+                    sum_strands=bool(sum_strands),
+                )
+
+        if pending is not None and pending.height > 0:
+            yield self._dataframe_to_snpobject(
+                vcf=pending,
+                field_columns=field_columns,
+                sample_columns=sample_columns,
+                sum_strands=bool(sum_strands),
+            )

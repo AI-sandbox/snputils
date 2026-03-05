@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import Iterator, List, Optional
 import csv
 
 import numpy as np
@@ -117,9 +117,11 @@ class BEDReader(SNPBaseReader):
                 num_variants = file_num_variants
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
             else:
-                variant_idxs = np.array(variant_idxs, dtype=np.uint32)
+                requested_variant_idxs = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+                bim = bim.filter(pl.col("index").is_in(requested_variant_idxs))
+                variant_idxs = bim.select("index").to_series().to_numpy()
+                variant_idxs = np.asarray(variant_idxs, dtype=np.uint32)
                 num_variants = np.size(variant_idxs)
-                bim = bim.filter(pl.col("index").is_in(variant_idxs))
 
             log.info(f"Reading {filename_noext}.fam")
 
@@ -193,3 +195,110 @@ class BEDReader(SNPBaseReader):
 
         log.info("Finished constructing SNPObject")
         return snpobj
+
+    def _resolve_variant_idxs_for_iter(
+        self,
+        *,
+        variant_ids: Optional[np.ndarray],
+        variant_idxs: Optional[np.ndarray],
+        separator: Optional[str],
+    ) -> np.ndarray:
+        """
+        Resolve variant selectors to canonical file-order row indices.
+        """
+        filename_noext = str(self.filename)
+        if filename_noext[-4:].lower() in (".bed", ".bim", ".fam"):
+            filename_noext = filename_noext[:-4]
+
+        local_separator = separator
+        if local_separator is None:
+            with open(filename_noext + ".bim", "r") as file:
+                local_separator = csv.Sniffer().sniff(file.readline()).delimiter
+
+        bim = pl.read_csv(
+            filename_noext + ".bim",
+            separator=local_separator,
+            has_header=False,
+            new_columns=["#CHROM", "ID", "CM", "POS", "ALT", "REF"],
+            schema_overrides={
+                "#CHROM": pl.String,
+                "ID": pl.String,
+                "CM": pl.Float64,
+                "POS": pl.Int64,
+                "ALT": pl.String,
+                "REF": pl.String,
+            },
+            null_values=["NA"],
+        ).with_row_index()
+
+        if variant_ids is not None:
+            variant_id_values = [str(v) for v in np.atleast_1d(variant_ids)]
+            variant_id_or_pos = (
+                pl.col("ID").is_in(variant_id_values)
+                | pl.concat_str([pl.col("#CHROM"), pl.lit(":"), pl.col("POS").cast(pl.String)]).is_in(
+                    variant_id_values
+                )
+            )
+            resolved = (
+                bim.filter(variant_id_or_pos)
+                .select("index")
+                .to_series()
+                .to_numpy()
+            )
+            return np.asarray(resolved, dtype=np.uint32)
+
+        if variant_idxs is not None:
+            requested = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+            resolved = (
+                bim.filter(pl.col("index").is_in(requested))
+                .select("index")
+                .to_series()
+                .to_numpy()
+            )
+            return np.asarray(resolved, dtype=np.uint32)
+
+        return np.arange(bim.height, dtype=np.uint32)
+
+    def iter_read(
+        self,
+        fields: Optional[List[str]] = None,
+        exclude_fields: Optional[List[str]] = None,
+        sample_ids: Optional[np.ndarray] = None,
+        sample_idxs: Optional[np.ndarray] = None,
+        variant_ids: Optional[np.ndarray] = None,
+        variant_idxs: Optional[np.ndarray] = None,
+        sum_strands: bool = False,
+        separator: Optional[str] = None,
+        chunk_size: int = 10_000,
+    ) -> Iterator[SNPObject]:
+        """
+        Stream the BED fileset in variant chunks.
+
+        This yields a sequence of SNPObject chunks along the SNP axis.
+        """
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1.")
+        if sample_idxs is not None and sample_ids is not None:
+            raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
+        if variant_idxs is not None and variant_ids is not None:
+            raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
+
+        selectors = self._resolve_variant_idxs_for_iter(
+            variant_ids=variant_ids,
+            variant_idxs=variant_idxs,
+            separator=separator,
+        )
+
+        n_selectors = int(selectors.size)
+        for start in range(0, n_selectors, int(chunk_size)):
+            stop = min(start + int(chunk_size), n_selectors)
+            selector_chunk = np.asarray(selectors[start:stop], dtype=np.uint32)
+            yield self.read(
+                fields=fields,
+                exclude_fields=exclude_fields,
+                sample_ids=sample_ids,
+                sample_idxs=sample_idxs,
+                variant_idxs=selector_chunk,
+                sum_strands=sum_strands,
+                separator=separator,
+            )

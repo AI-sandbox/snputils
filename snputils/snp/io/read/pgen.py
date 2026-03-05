@@ -13,6 +13,13 @@ from snputils.snp.io.read.base import SNPBaseReader
 log = logging.getLogger(__name__)
 
 
+def _open_textfile(filename):
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, "rt")
+    return open(filename, "rt")
+
+
 @SNPBaseReader.register
 class PGENReader(SNPBaseReader):
     def read(
@@ -89,16 +96,9 @@ class PGENReader(SNPBaseReader):
 
             log.info(f"Reading {pvar_filename}")
 
-            def open_textfile(filename):
-                if filename.endswith('.zst'):
-                    import zstandard as zstd
-                    return zstd.open(filename, 'rt')
-                else:
-                    return open(filename, 'rt')
-
             pvar_has_header = True
             pvar_header_line_num = 0
-            with open_textfile(pvar_filename) as file:
+            with _open_textfile(pvar_filename) as file:
                 for line_num, line in enumerate(file):
                     if line.startswith("##"):  # Metadata
                         continue
@@ -277,16 +277,9 @@ class PGENReader(SNPBaseReader):
 
         local_separator = separator
 
-        def open_textfile(filename):
-            if filename.endswith(".zst"):
-                import zstandard as zstd
-
-                return zstd.open(filename, "rt")
-            return open(filename, "rt")
-
         pvar_has_header = True
         pvar_header_line_num = 0
-        with open_textfile(pvar_filename) as file:
+        with _open_textfile(pvar_filename) as file:
             for line_num, line in enumerate(file):
                 if line.startswith("##"):
                     continue

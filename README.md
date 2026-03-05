@@ -73,8 +73,11 @@ Working with ancestry files, performing processing operations, and creating visu
   - Read `hap-IBD` and `ancIBD` outputs into a unified format
   - Fast filtering and ancestry-restricted segment trimming using local ancestry
 
-- **Admixture Analysis & Simulation**
+- **Association Analysis**
   - **Admixture Mapping:** Locus-by-locus regression of local ancestry dosage on traits
+  - **GWAS:** Variant-level association testing on SNP dosages for binary and quantitative traits
+
+- **Admixture Simulation**
   - **Simulation:** Lightweight haplotype-based simulation of admixed mosaics from real founder haplotypes
 
 ### Visualization

@@ -30,6 +30,12 @@ def _run_admixture_map(args: argparse.Namespace) -> int:
     return int(admix_module.run_admixmap_command(args))
 
 
+def _run_gwas(args: argparse.Namespace) -> int:
+    from . import gwas as gwas_module
+
+    return int(gwas_module.run_gwas_command(args))
+
+
 def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--snp-path",
@@ -191,6 +197,118 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--phe-id",
+        dest="phe_id",
+        required=True,
+        type=str,
+        help="Phenotype ID.",
+    )
+    parser.add_argument(
+        "--phe-path",
+        dest="phe_path",
+        required=True,
+        type=str,
+        help="Path to phenotype file.",
+    )
+    parser.add_argument(
+        "--snp-path",
+        dest="snp_path",
+        required=True,
+        type=str,
+        help="Path to genotype input (VCF/BED/PGEN).",
+    )
+    parser.add_argument(
+        "--results-path",
+        dest="results_path",
+        required=True,
+        type=str,
+        help="Output directory or output .tsv/.tsv.gz path.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        dest="batch_size",
+        default=32768,
+        type=int,
+        help="Max variants processed per chunk.",
+    )
+    parser.add_argument(
+        "--memory",
+        dest="memory",
+        default=None,
+        type=int,
+        help="Peak RSS-delta memory cap in MiB.",
+    )
+    parser.add_argument(
+        "--quantitative",
+        dest="quantitative",
+        action="store_true",
+        default=None,
+        help="Force quantitative (linear) mode.",
+    )
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Print progress updates.",
+    )
+    parser.add_argument(
+        "--covar-path",
+        dest="covar_path",
+        default=None,
+        type=str,
+        help="Path to covariate file.",
+    )
+    parser.add_argument(
+        "--covar-col-nums",
+        dest="covar_col_nums",
+        default=None,
+        type=str,
+        help='Covariate columns relative to first covariate column (e.g. "1-5,7").',
+    )
+    parser.add_argument(
+        "--covar-variance-standardize",
+        dest="covar_variance_standardize",
+        action="store_true",
+        help="Center and variance-standardize selected covariates.",
+    )
+    parser.add_argument(
+        "--ci",
+        dest="ci",
+        default=None,
+        type=float,
+        help="Confidence level in (0, 1), e.g. 0.95.",
+    )
+    parser.add_argument(
+        "--adjust",
+        dest="adjust",
+        action="store_true",
+        help="Add Bonferroni and Benjamini-Hochberg FDR p-values.",
+    )
+    parser.add_argument(
+        "--keep-path",
+        dest="keep_path",
+        default=None,
+        type=str,
+        help="Path to keep file (FID IID or IID per line).",
+    )
+    parser.add_argument(
+        "--remove-path",
+        dest="remove_path",
+        default=None,
+        type=str,
+        help="Path to remove file (FID IID or IID per line).",
+    )
+    parser.add_argument(
+        "--vcf-backend",
+        dest="vcf_backend",
+        choices=("polars", "scikit-allel"),
+        default="polars",
+        help="VCF reader backend (used only when input is VCF).",
+    )
+
+
 _COMMANDS: Dict[str, _Command] = {
     "pca": _Command(
         help="Run PCA and save plot/components.",
@@ -201,6 +319,11 @@ _COMMANDS: Dict[str, _Command] = {
         help="Run admixture mapping.",
         add_arguments=_add_admixture_map_arguments,
         run=_run_admixture_map,
+    ),
+    "gwas": _Command(
+        help="Run GWAS.",
+        add_arguments=_add_gwas_arguments,
+        run=_run_gwas,
     ),
 }
 

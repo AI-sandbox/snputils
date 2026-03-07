@@ -292,8 +292,12 @@ def _infer_col_data_types(names: List):
     return col_dtypes
 
 
-def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[str],
-                     samples: List[str]) -> List[str]:
+def _extract_columns(
+    names: List[str],
+    fields: List[str],
+    exclude_fields: List[str],
+    samples: List[str],
+) -> Tuple[List[str], List[str], List[str]]:
     """
     Extracts columns based on specified `fields`, `exclude_fields` and `samples`.
 
@@ -310,7 +314,7 @@ def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[s
     Returns:
         field_columns: List of field columns.
         sample_columns: List of sample columns.
-        selected_column_idxs: List of selected column indices.
+        selected_columns: List of selected column names in file order.
     """
 
     # Define standard field names in a VCF file
@@ -355,11 +359,10 @@ def _extract_columns(names: List[str], fields: List[str], exclude_fields: List[s
 
     # Create a list of selected column indices
     selected_column_idxs = [column_idx_map[col] for col in field_columns + sample_columns]
-
-    # Sort the selected column indices
     selected_column_idxs.sort()
+    selected_columns = [names[idx] for idx in selected_column_idxs]
 
-    return field_columns, sample_columns, selected_column_idxs
+    return field_columns, sample_columns, selected_columns
 
 
 @SNPBaseReader.register
@@ -375,7 +378,7 @@ class VCFReaderPolars(SNPBaseReader):
         exclude_fields: Optional[List[str]],
         samples: Optional[List[str]],
         separator: Optional[str],
-    ) -> Tuple[List[str], List[str], List[int], Dict[str, pl.DataType], str]:
+    ) -> Tuple[List[str], List[str], List[str], Dict[str, pl.DataType], str]:
         """
         Resolve the field/sample column selections and parser schema for the VCF.
         """
@@ -384,13 +387,13 @@ class VCFReaderPolars(SNPBaseReader):
             separator=separator,
         )
         col_dtypes = _infer_col_data_types(col_names)
-        field_columns, sample_columns, selected_column_idxs = _extract_columns(
+        field_columns, sample_columns, selected_columns = _extract_columns(
             col_names,
             fields,
             exclude_fields,
             samples,
         )
-        return field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator
+        return field_columns, sample_columns, selected_columns, col_dtypes, detected_separator
 
     def _parse_genotypes(
         self,
@@ -503,7 +506,7 @@ class VCFReaderPolars(SNPBaseReader):
         log.info(f"Reading {self._filename}")
 
         try:
-            field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator = self._resolve_columns(
+            field_columns, sample_columns, selected_columns, col_dtypes, detected_separator = self._resolve_columns(
                 fields=fields,
                 exclude_fields=exclude_fields,
                 samples=samples,
@@ -516,7 +519,7 @@ class VCFReaderPolars(SNPBaseReader):
                 comment_prefix="##",
                 has_header=True,
                 separator=detected_separator,
-                columns=selected_column_idxs,
+                columns=selected_columns,
                 schema_overrides=col_dtypes,
             )
 
@@ -570,7 +573,7 @@ class VCFReaderPolars(SNPBaseReader):
         if region is not None:
             raise NotImplementedError("VCFReaderPolars.iter_read does not support `region` yet.")
 
-        field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator = self._resolve_columns(
+        field_columns, sample_columns, selected_columns, col_dtypes, detected_separator = self._resolve_columns(
             fields=fields,
             exclude_fields=exclude_fields,
             samples=samples,
@@ -578,40 +581,39 @@ class VCFReaderPolars(SNPBaseReader):
         )
 
         try:
-            reader = pl.read_csv_batched(
+            scan = pl.scan_csv(
                 self._filename,
                 comment_prefix="##",
                 has_header=True,
                 separator=detected_separator,
-                columns=selected_column_idxs,
                 schema_overrides=col_dtypes,
-                batch_size=int(chunk_size),
             )
+            if selected_columns:
+                scan = scan.select(selected_columns)
+            reader = scan.collect_batches(chunk_size=int(chunk_size))
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize VCF batched reader for {self._filename}: {exc}") from exc
 
         pending: Optional[pl.DataFrame] = None
 
-        while True:
-            batches = reader.next_batches(1)
-            if not batches:
-                break
+        try:
+            for batch in reader:
+                if pending is None:
+                    pending = batch
+                else:
+                    pending = pl.concat([pending, batch], how="vertical_relaxed")
 
-            batch = batches[0]
-            if pending is None:
-                pending = batch
-            else:
-                pending = pl.concat([pending, batch], how="vertical_relaxed")
-
-            while pending.height >= int(chunk_size):
-                chunk_df = pending.slice(0, int(chunk_size))
-                pending = pending.slice(int(chunk_size))
-                yield self._dataframe_to_snpobject(
-                    vcf=chunk_df,
-                    field_columns=field_columns,
-                    sample_columns=sample_columns,
-                    sum_strands=bool(sum_strands),
-                )
+                while pending.height >= int(chunk_size):
+                    chunk_df = pending.slice(0, int(chunk_size))
+                    pending = pending.slice(int(chunk_size))
+                    yield self._dataframe_to_snpobject(
+                        vcf=chunk_df,
+                        field_columns=field_columns,
+                        sample_columns=sample_columns,
+                        sum_strands=bool(sum_strands),
+                    )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to stream VCF batches for {self._filename}: {exc}") from exc
 
         if pending is not None and pending.height > 0:
             yield self._dataframe_to_snpobject(

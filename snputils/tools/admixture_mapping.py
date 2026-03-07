@@ -124,7 +124,7 @@ def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to keep file (FID IID or IID per line) for sample inclusion.",
     )
     parser.add_argument(
-        "--remove-path",
+        "--sample-remove",
         dest="remove_path",
         required=False,
         type=str,

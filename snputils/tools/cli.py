@@ -199,7 +199,7 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to keep file (FID IID or IID per line).",
     )
     parser.add_argument(
-        "--remove-path",
+        "--sample-remove",
         dest="remove_path",
         default=None,
         type=str,
@@ -284,6 +284,13 @@ def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         help="Center and variance-standardize selected covariates.",
     )
     parser.add_argument(
+        "--variant-exclude",
+        dest="exclude_path",
+        default=None,
+        type=str,
+        help="Path to variant exclusion file (one or more variant selectors per line).",
+    )
+    parser.add_argument(
         "--ci",
         dest="ci",
         default=None,
@@ -304,7 +311,7 @@ def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to keep file (FID IID or IID per line).",
     )
     parser.add_argument(
-        "--remove-path",
+        "--sample-remove",
         dest="remove_path",
         default=None,
         type=str,

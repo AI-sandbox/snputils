@@ -92,6 +92,14 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         help="Center and variance-standardize selected covariates.",
     )
     parser.add_argument(
+        "--variant-exclude",
+        dest="exclude_path",
+        required=False,
+        type=str,
+        default=None,
+        help="Path to variant exclusion file (one or more variant selectors per line).",
+    )
+    parser.add_argument(
         "--ci",
         dest="ci",
         required=False,
@@ -115,7 +123,7 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to keep file (FID IID or IID per line) for sample inclusion.",
     )
     parser.add_argument(
-        "--remove-path",
+        "--sample-remove",
         dest="remove_path",
         required=False,
         type=str,
@@ -203,6 +211,22 @@ def _read_snp_samples(snp_reader: object) -> List[str]:
         return [str(sample) for sample in np.asarray(samples, dtype=object).tolist()]
 
     raise ValueError(f"Unsupported SNP reader type: {type(snp_reader).__name__}")
+
+
+def _read_variant_list(path: Union[str, Path]) -> Set[str]:
+    selected: Set[str] = set()
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [part for part in line.split() if part]
+            if not parts:
+                continue
+            selected.update(parts)
+            if len(parts) >= 2:
+                selected.add(f"{parts[0]}:{parts[1]}")
+    return selected
 
 
 def _align_samples_to_snp_order(
@@ -464,6 +488,44 @@ def _extract_chunk_arrays(
     return dosage_uint8, chrom, pos, variant_id, ref, alt
 
 
+def _filter_chunk_variants(
+    dosage_batch: np.ndarray,
+    chrom: np.ndarray,
+    pos: np.ndarray,
+    variant_id: np.ndarray,
+    ref: np.ndarray,
+    alt: np.ndarray,
+    *,
+    exclude_variants: Optional[Set[str]] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if not exclude_variants:
+        return dosage_batch, chrom, pos, variant_id, ref, alt
+
+    keep_mask = np.ones(int(pos.shape[0]), dtype=bool)
+    for idx in range(int(pos.shape[0])):
+        row_tokens = {
+            str(variant_id[idx]),
+            str(int(pos[idx])),
+        }
+        chrom_text = str(chrom[idx]).strip()
+        if chrom_text and chrom_text != ".":
+            row_tokens.add(f"{chrom_text}:{int(pos[idx])}")
+        if exclude_variants.intersection(row_tokens):
+            keep_mask[idx] = False
+
+    if np.all(keep_mask):
+        return dosage_batch, chrom, pos, variant_id, ref, alt
+
+    return (
+        dosage_batch[keep_mask],
+        chrom[keep_mask],
+        pos[keep_mask],
+        variant_id[keep_mask],
+        ref[keep_mask],
+        alt[keep_mask],
+    )
+
+
 def _compute_linear_stats_from_dosage_batch(
     dosage_batch: np.ndarray,
     y: np.ndarray,
@@ -502,6 +564,7 @@ def run_gwas(
     adjust: bool = False,
     keep_path: Optional[Union[str, Path]] = None,
     remove_path: Optional[Union[str, Path]] = None,
+    exclude_path: Optional[Union[str, Path]] = None,
     vcf_backend: str = "polars",
 ) -> pd.DataFrame:
     if memory is not None and int(memory) < 2:
@@ -519,6 +582,7 @@ def run_gwas(
 
     keep_ids = _read_sample_list(keep_path) if keep_path is not None else None
     remove_ids = _read_sample_list(remove_path) if remove_path is not None else None
+    exclude_variants = _read_variant_list(exclude_path) if exclude_path is not None else None
 
     covar_samples: Optional[List[str]] = None
     covar_matrix: Optional[np.ndarray] = None
@@ -610,6 +674,15 @@ def run_gwas(
                 dosage_batch, chrom_arr, pos_arr, id_arr, ref_arr, alt_arr = _extract_chunk_arrays(
                     chunk,
                     variant_offset=variants_processed_total,
+                )
+                dosage_batch, chrom_arr, pos_arr, id_arr, ref_arr, alt_arr = _filter_chunk_variants(
+                    dosage_batch,
+                    chrom_arr,
+                    pos_arr,
+                    id_arr,
+                    ref_arr,
+                    alt_arr,
+                    exclude_variants=exclude_variants,
                 )
                 n_variants = int(dosage_batch.shape[0])
                 if n_variants == 0:
@@ -786,6 +859,7 @@ def run_gwas_command(args: argparse.Namespace) -> int:
         adjust=args.adjust,
         keep_path=args.keep_path,
         remove_path=args.remove_path,
+        exclude_path=args.exclude_path,
         vcf_backend=args.vcf_backend,
     )
     return 0

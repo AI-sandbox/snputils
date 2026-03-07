@@ -252,6 +252,45 @@ def test_main_gwas_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert output_file.stat().st_size > 0
 
 
+def test_main_gwas_multi_phenotype_and_variant_exclude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sample_ids = [f"s{i}" for i in range(8)]
+    y_binary = np.array([0, 0, 1, 0, 1, 1, 0, 1], dtype=np.int8)
+    y_other = np.array([1, 1, 0, 1, 0, 0, 1, 0], dtype=np.int8)
+    vcf_path = tmp_path / "toy_gwas.vcf"
+    phe_path = tmp_path / "toy_gwas_multi.phe"
+    exclude_path = tmp_path / "exclude.txt"
+    out_path = tmp_path / "toy_selected.tsv.gz"
+
+    _write_gwas_vcf(vcf_path, sample_ids)
+    _write_multi_phe(phe_path, sample_ids, ["Y1", "Y2"], [y_binary, y_other])
+    exclude_path.write_text("rs2\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "gwas",
+            "--phe-id",
+            "Y2",
+            "--phe-path",
+            str(phe_path),
+            "--snp-path",
+            str(vcf_path),
+            "--results-path",
+            str(out_path),
+            "--batch-size",
+            "2",
+            "--variant-exclude",
+            str(exclude_path),
+        ],
+    )
+
+    assert main() == 0
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
+
+
 def test_main_without_command_prints_help_and_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

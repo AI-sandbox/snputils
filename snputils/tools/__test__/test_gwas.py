@@ -97,6 +97,12 @@ def _write_sample_list(path: Path, sample_ids: Sequence[str]) -> None:
             handle.write(f"{sid} {sid}\n")
 
 
+def _write_variant_list(path: Path, selectors: Sequence[str]) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        for selector in selectors:
+            handle.write(f"{selector}\n")
+
+
 def _make_snpobj_from_dosage(
     sample_ids: Sequence[str],
     dosage: np.ndarray,
@@ -644,6 +650,89 @@ def test_gwas_errors_when_requested_phenotype_missing_from_multi_phenotype_file(
             batch_size=4,
             memory=2048,
         )
+
+
+def test_gwas_variant_exclusion_matches_prefiltered_variants(tmp_path: Path):
+    sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(
+        n_samples=102,
+        n_variants=28,
+        seed=660,
+    )
+    rng = np.random.default_rng(661)
+    y_binary = rng.binomial(
+        1,
+        expit(-0.18 + 0.52 * dosage[4].astype(np.float64) - 0.31 * dosage[15].astype(np.float64)),
+    ).astype(np.int8)
+
+    vcf_path = tmp_path / "toy.vcf"
+    phe_path = tmp_path / "toy.phe"
+    exclude_path = tmp_path / "exclude.txt"
+    _write_vcf(vcf_path, sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    _write_binary_phe(phe_path, sample_ids, y_binary)
+
+    excluded_indices = [3, 11, 19]
+    selectors = [
+        str(variant_ids[excluded_indices[0]]),
+        f"{chromosomes[excluded_indices[1]]}:{int(positions[excluded_indices[1]])}",
+        str(int(positions[excluded_indices[2]])),
+    ]
+    _write_variant_list(exclude_path, selectors)
+
+    filtered = run_gwas(
+        phe_path=phe_path,
+        snp_path=vcf_path,
+        results_path=tmp_path / "out_filtered",
+        phe_id="toy",
+        batch_size=7,
+        memory=2048,
+        exclude_path=exclude_path,
+    ).copy()
+
+    keep_mask = np.ones(len(variant_ids), dtype=bool)
+    keep_mask[excluded_indices] = False
+    vcf_prefiltered = tmp_path / "toy_prefiltered.vcf"
+    _write_vcf(
+        vcf_prefiltered,
+        sample_ids,
+        dosage[keep_mask],
+        np.asarray(chromosomes, dtype=object)[keep_mask],
+        np.asarray(positions, dtype=np.int64)[keep_mask],
+        np.asarray(variant_ids, dtype=object)[keep_mask],
+        np.asarray(refs, dtype=object)[keep_mask],
+        np.asarray(alts, dtype=object)[keep_mask],
+    )
+
+    reference = run_gwas(
+        phe_path=phe_path,
+        snp_path=vcf_prefiltered,
+        results_path=tmp_path / "out_reference",
+        phe_id="toy",
+        batch_size=7,
+        memory=2048,
+    ).copy()
+
+    key_cols = ["#CHROM", "POS", "END", "ID", "TEST", "ERRCODE"]
+    num_cols = ["BETA", "OR", "LOG(OR)_SE", "Z_STAT", "P"]
+    for col in ("POS", "END"):
+        filtered[col] = pd.to_numeric(filtered[col], errors="coerce").astype(int)
+        reference[col] = pd.to_numeric(reference[col], errors="coerce").astype(int)
+    filtered["#CHROM"] = filtered["#CHROM"].astype(str)
+    reference["#CHROM"] = reference["#CHROM"].astype(str)
+    for col in num_cols:
+        filtered[col] = pd.to_numeric(filtered[col], errors="coerce")
+        reference[col] = pd.to_numeric(reference[col], errors="coerce")
+
+    filtered = filtered.sort_values(key_cols).reset_index(drop=True)
+    reference = reference.sort_values(key_cols).reset_index(drop=True)
+    assert len(filtered) == len(reference)
+    np.testing.assert_allclose(
+        filtered[num_cols].to_numpy(),
+        reference[num_cols].to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
 
 def test_gwas_ci_columns_logistic_and_quantitative(tmp_path: Path):
     sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(

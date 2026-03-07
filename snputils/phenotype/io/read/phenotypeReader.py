@@ -9,11 +9,12 @@ from snputils.phenotype.genobj import PhenotypeObject
 
 class PhenotypeReader(PhenotypeBaseReader):
     """
-    Reader for single-trait phenotype files (any extension; common: .txt, .phe, .pheno).
+    Reader for phenotype files (any extension; common: .txt, .phe, .pheno).
 
     Expected format (headered, whitespace-delimited):
       - Must include `IID` (optionally preceded by `FID`)
-      - First phenotype column after `IID` is used by default
+      - Must include one or more phenotype columns after `IID`
+      - If multiple phenotype columns are present, select one explicitly
     """
 
     def __init__(self, file: Union[str, Path]) -> None:
@@ -79,6 +80,11 @@ class PhenotypeReader(PhenotypeBaseReader):
         if "IID" not in normalized_columns:
             raise ValueError("Phenotype file must include an IID column in the header.")
         iid_col = columns[normalized_columns.index("IID")]
+        phenotype_candidates = columns[normalized_columns.index("IID") + 1 :]
+        if not phenotype_candidates:
+            raise ValueError(
+                "Phenotype file must include at least one phenotype column after IID."
+            )
 
         iid_series = phen_df[iid_col].astype(str).str.strip()
         if iid_series.eq("").any():
@@ -88,18 +94,21 @@ class PhenotypeReader(PhenotypeBaseReader):
 
         if phenotype_col is not None:
             resolved = self._resolve_column(columns, normalized_columns, phenotype_col)
-            if resolved is None:
+            if resolved is None and len(phenotype_candidates) == 1:
+                target_col = phenotype_candidates[0]
+            elif resolved is None:
                 raise ValueError(
                     f"Phenotype column '{phenotype_col}' not found in header: {columns}"
                 )
-            target_col = resolved
+            else:
+                target_col = resolved
         else:
-            iid_idx = normalized_columns.index("IID")
-            if iid_idx + 1 >= len(columns):
+            if len(phenotype_candidates) != 1:
                 raise ValueError(
-                    "Phenotype file must include at least one phenotype column after IID."
+                    "Phenotype file contains multiple phenotype columns after IID. "
+                    "Select one explicitly."
                 )
-            target_col = columns[iid_idx + 1]
+            target_col = phenotype_candidates[0]
 
         values = pd.to_numeric(phen_df[target_col], errors="coerce")
         if values.isna().any():

@@ -131,13 +131,19 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         help="VCF reader backend (used only when --snp-path is VCF).",
     )
     required_argv = parser.add_argument_group("required arguments")
-    required_argv.add_argument("--phe-id", dest="phe_id", required=True, type=str, help="Phenotype ID.")
+    required_argv.add_argument(
+        "--phe-id",
+        dest="phe_id",
+        required=True,
+        type=str,
+        help="Phenotype ID / column name to analyze.",
+    )
     required_argv.add_argument(
         "--phe-path",
         dest="phe_path",
         required=True,
         type=str,
-        help="Path to phenotype file (headered text with IID column and one phenotype column; e.g. .txt, .phe, .pheno).",
+        help="Path to phenotype file (headered text with IID column and one or more phenotype columns; e.g. .txt, .phe, .pheno).",
     )
     required_argv.add_argument(
         "--snp-path",
@@ -503,7 +509,10 @@ def run_gwas(
     if ci is not None and (ci <= 0.0 or ci >= 1.0):
         raise ValueError("--ci must be in the open interval (0, 1).")
 
-    phenotype_obj = PhenotypeReader(phe_path).read(quantitative=quantitative)
+    phenotype_obj = PhenotypeReader(phe_path).read(
+        phenotype_col=phe_id,
+        quantitative=quantitative,
+    )
     phe_samples = phenotype_obj.samples
     y = phenotype_obj.values
     trait_is_quantitative = bool(phenotype_obj.is_quantitative)

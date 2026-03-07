@@ -92,7 +92,7 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         dest="phe_id",
         required=True,
         type=str,
-        help="Phenotype ID.",
+        help="Phenotype ID / column name to analyze.",
     )
     parser.add_argument(
         "--phe-path",
@@ -203,14 +203,14 @@ def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         dest="phe_id",
         required=True,
         type=str,
-        help="Phenotype ID.",
+        help="Phenotype ID / column name to analyze.",
     )
     parser.add_argument(
         "--phe-path",
         dest="phe_path",
         required=True,
         type=str,
-        help="Path to phenotype file.",
+        help="Path to phenotype file with IID and one or more phenotype columns.",
     )
     parser.add_argument(
         "--snp-path",

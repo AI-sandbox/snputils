@@ -64,6 +64,25 @@ def _write_quantitative_phe(path: Path, sample_ids: Sequence[str], y: np.ndarray
             handle.write(f"{sid} {sid} {float(yi):.12g}\n")
 
 
+def _write_multi_phe(
+    path: Path,
+    sample_ids: Sequence[str],
+    names: Sequence[str],
+    columns: Sequence[np.ndarray],
+) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("#FID IID " + " ".join(names) + "\n")
+        for row_idx, sid in enumerate(sample_ids):
+            values = []
+            for column in columns:
+                value = column[row_idx]
+                if np.issubdtype(np.asarray(column).dtype, np.integer):
+                    values.append(str(int(value)))
+                else:
+                    values.append(f"{float(value):.12g}")
+            handle.write(f"{sid} {sid} {' '.join(values)}\n")
+
+
 def _write_covar(path: Path, sample_ids: Sequence[str], names: Sequence[str], covar: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("#FID IID " + " ".join(names) + "\n")
@@ -538,6 +557,93 @@ def test_gwas_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
         equal_nan=True,
     )
 
+
+def test_gwas_selects_requested_phenotype_from_multi_phenotype_file(tmp_path: Path):
+    sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(
+        n_samples=96,
+        n_variants=20,
+        seed=640,
+    )
+    rng = np.random.default_rng(641)
+    y1 = rng.binomial(
+        1,
+        expit(-0.25 + 0.70 * dosage[2].astype(np.float64) - 0.25 * dosage[9].astype(np.float64)),
+    ).astype(np.int8)
+    y2 = rng.binomial(
+        1,
+        expit(0.15 - 0.60 * dosage[5].astype(np.float64) + 0.45 * dosage[13].astype(np.float64)),
+    ).astype(np.int8)
+
+    vcf_path = tmp_path / "toy.vcf"
+    phe_multi = tmp_path / "toy_multi.phe"
+    phe_single = tmp_path / "toy_single.phe"
+    _write_vcf(vcf_path, sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    _write_multi_phe(phe_multi, sample_ids, ["Y1", "Y2"], [y1, y2])
+    _write_binary_phe(phe_single, sample_ids, y2)
+
+    selected = run_gwas(
+        phe_path=phe_multi,
+        snp_path=vcf_path,
+        results_path=tmp_path / "out_selected",
+        phe_id="Y2",
+        batch_size=6,
+        memory=2048,
+    ).copy()
+    reference = run_gwas(
+        phe_path=phe_single,
+        snp_path=vcf_path,
+        results_path=tmp_path / "out_reference",
+        phe_id="toy",
+        batch_size=6,
+        memory=2048,
+    ).copy()
+
+    key_cols = ["#CHROM", "POS", "END", "ID", "TEST", "ERRCODE"]
+    num_cols = ["BETA", "OR", "LOG(OR)_SE", "Z_STAT", "P"]
+    for col in ("POS", "END"):
+        selected[col] = pd.to_numeric(selected[col], errors="coerce").astype(int)
+        reference[col] = pd.to_numeric(reference[col], errors="coerce").astype(int)
+    selected["#CHROM"] = selected["#CHROM"].astype(str)
+    reference["#CHROM"] = reference["#CHROM"].astype(str)
+    for col in num_cols:
+        selected[col] = pd.to_numeric(selected[col], errors="coerce")
+        reference[col] = pd.to_numeric(reference[col], errors="coerce")
+
+    selected = selected.sort_values(key_cols).reset_index(drop=True)
+    reference = reference.sort_values(key_cols).reset_index(drop=True)
+    assert len(selected) == len(reference)
+    np.testing.assert_allclose(
+        selected[num_cols].to_numpy(),
+        reference[num_cols].to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+def test_gwas_errors_when_requested_phenotype_missing_from_multi_phenotype_file(tmp_path: Path):
+    sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(
+        n_samples=20,
+        n_variants=8,
+        seed=650,
+    )
+    y1 = np.array([0, 1] * 10, dtype=np.int8)
+    y2 = np.array([1, 0] * 10, dtype=np.int8)
+
+    vcf_path = tmp_path / "toy.vcf"
+    phe_multi = tmp_path / "toy_multi.phe"
+    _write_vcf(vcf_path, sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    _write_multi_phe(phe_multi, sample_ids, ["Y1", "Y2"], [y1, y2])
+
+    with pytest.raises(ValueError, match="Phenotype column 'toy' not found"):
+        run_gwas(
+            phe_path=phe_multi,
+            snp_path=vcf_path,
+            results_path=tmp_path / "out",
+            phe_id="toy",
+            batch_size=4,
+            memory=2048,
+        )
 
 def test_gwas_ci_columns_logistic_and_quantitative(tmp_path: Path):
     sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(

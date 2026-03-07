@@ -52,6 +52,14 @@ def _write_binary_phe(path: Path, sample_ids, y_binary: np.ndarray) -> None:
             handle.write(f"{sid} {sid} {status}\n")
 
 
+def _write_multi_phe(path: Path, sample_ids, names, columns) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("#FID IID " + " ".join(names) + "\n")
+        for row_idx, sid in enumerate(sample_ids):
+            values = [str(int(column[row_idx])) for column in columns]
+            handle.write(f"{sid} {sid} {' '.join(values)}\n")
+
+
 def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     matplotlib.use("Agg", force=True)
     monkeypatch.setenv("MPLBACKEND", "Agg")

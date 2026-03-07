@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Union
 
 from snputils.snp.genobj import SNPObject
+from snputils.snp.io.write._genotype_encoding import phased_to_hardcalls
 from snputils.snp.io.write._plink import coerce_sex_codes
 
 log = logging.getLogger(__name__)
@@ -51,23 +52,14 @@ class BEDWriter:
 
         log.info(f"Writing .bed file: {self.__filename}")
 
-        # Optionally rename potential missing values in `snpobj.calldata_gt` before writing
-        if rename_missing_values:
-            self.__snpobj.rename_missings(before=before, after=after, inplace=True)
-
-        # PLINK BED stores variants-major packed 2-bit hard calls. Convert to an
-        # individuals x variants dosage matrix first, then pack each variant row.
-        if len(self.__snpobj.calldata_gt.shape) == 3:
-            genotype_matrix = self.__snpobj.calldata_gt.transpose(1, 0, 2).sum(axis=2, dtype=np.int8)
-        elif len(self.__snpobj.calldata_gt.shape) == 2:
-            genotype_matrix = self.__snpobj.calldata_gt.T
-        else:
-            raise ValueError("`calldata_gt` must be a 2D or 3D array.")
-        genotype_matrix = np.asarray(genotype_matrix)
-        if not np.issubdtype(genotype_matrix.dtype, np.number):
-            genotype_matrix = np.where(genotype_matrix == ".", -9, genotype_matrix)
-        genotype_matrix = genotype_matrix.astype(np.int8, copy=False)
-        genotype_matrix = np.where(genotype_matrix < 0, -9, genotype_matrix)
+        # pgenlib expects a numeric hardcall matrix in (samples, variants) order.
+        hardcalls = phased_to_hardcalls(
+            self.__snpobj.calldata_gt,
+            rename_missing_values=rename_missing_values,
+            before=before,
+            after=after,
+        )
+        genotype_matrix = np.asarray(hardcalls.T)
 
         # Infer the number of samples and variants from the matrix
         samples, variants = genotype_matrix.shape

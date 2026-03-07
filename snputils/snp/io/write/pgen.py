@@ -7,6 +7,7 @@ import zstandard as zstd
 from typing import Union
 
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.write._genotype_encoding import phased_to_flat_alleles, phased_to_hardcalls
 
 log = logging.getLogger(__name__)
 
@@ -53,9 +54,9 @@ class PGENWriter:
         if self.__filename.suffix in file_extensions:
             self.__filename = self.__filename.with_suffix('')
 
-        # Optionally rename potential missing values in `snpobj.calldata_gt` before writing
-        if rename_missing_values:
-            self.__snpobj.rename_missings(before=before, after=after, inplace=True)
+        self.__rename_missing_values = rename_missing_values
+        self.__missing_before = before
+        self.__missing_after = after
 
         self.write_pvar(vzs=vzs)
         self.write_psam()
@@ -123,9 +124,11 @@ class PGENWriter:
         summed_strands = False if self.__snpobj.calldata_gt.ndim == 3 else True
         if not summed_strands:
             num_variants, num_samples, num_alleles = self.__snpobj.calldata_gt.shape
-            # Flatten the genotype matrix for pgenlib
-            flat_genotypes = self.__snpobj.calldata_gt.reshape(
-                num_variants, num_samples * num_alleles
+            flat_genotypes = phased_to_flat_alleles(
+                self.__snpobj.calldata_gt,
+                rename_missing_values=self.__rename_missing_values,
+                before=self.__missing_before,
+                after=self.__missing_after,
             )
             with pg.PgenWriter(
                 filename=f"{self.__filename}.pgen".encode('utf-8'),
@@ -135,12 +138,16 @@ class PGENWriter:
             ) as writer:
                 for variant_index in range(num_variants):
                     writer.append_alleles(
-                        flat_genotypes[variant_index].astype(np.int32), all_phased=True
+                        flat_genotypes[variant_index], all_phased=True
                     )
         else:
-            num_variants, num_samples = self.__snpobj.calldata_gt.shape
-            # Transpose to (samples, variants)
-            genotypes = self.__snpobj.calldata_gt.T  # Shape is (samples, variants)
+            genotypes = phased_to_hardcalls(
+                self.__snpobj.calldata_gt,
+                rename_missing_values=self.__rename_missing_values,
+                before=self.__missing_before,
+                after=self.__missing_after,
+            )
+            num_variants, num_samples = genotypes.shape
             with pg.PgenWriter(
                 filename=f"{self.__filename}.pgen".encode('utf-8'),
                 sample_ct=num_samples,
@@ -148,7 +155,5 @@ class PGENWriter:
                 hardcall_phase_present=False,
             ) as writer:
                 for variant_index in range(num_variants):
-                    variant_genotypes = genotypes[:, variant_index].astype(np.int8)
-                    # Map missing genotypes to -9 if necessary
-                    variant_genotypes[variant_genotypes == -1] = -9
+                    variant_genotypes = genotypes[variant_index].astype(np.int8, copy=False)
                     writer.append_biallelic(np.ascontiguousarray(variant_genotypes))

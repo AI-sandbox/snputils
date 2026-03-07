@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Union
 
 from snputils.snp.genobj import SNPObject
+from snputils.snp.io.write._genotype_encoding import phased_to_hardcalls
 
 log = logging.getLogger(__name__)
 
@@ -48,14 +49,14 @@ class BEDWriter:
 
         log.info(f"Writing .bed file: {self.__filename}")
 
-        # Optionally rename potential missing values in `snpobj.calldata_gt` before writing
-        if rename_missing_values:
-            self.__snpobj.rename_missings(before=before, after=after, inplace=True)
-
-        # If the input matrix has three dimensions, it indicates that the data is divided into two strands.
-        if len(self.__snpobj.calldata_gt.shape) == 3:
-            # Sum the two strands
-            self.__snpobj.calldata_gt = self.__snpobj.calldata_gt.transpose(1, 0, 2).sum(axis=2, dtype=np.int8)
+        # pgenlib expects a numeric hardcall matrix in (samples, variants) order.
+        hardcalls = phased_to_hardcalls(
+            self.__snpobj.calldata_gt,
+            rename_missing_values=rename_missing_values,
+            before=before,
+            after=after,
+        )
+        self.__snpobj.calldata_gt = hardcalls.T
 
         # Infer the number of samples and variants from the matrix
         samples, variants = self.__snpobj.calldata_gt.shape
@@ -102,7 +103,7 @@ class BEDWriter:
         bim_file['chrom'] = self.__snpobj.variants_chrom
         bim_file['snp'] = self.__snpobj.variants_id
         bim_file['cm'] = 0  # TODO: read, save and write too if available?
-        log.warning("The .bim file is being saved with 0 cM values.")
+        log.info("The .bim file is being saved with 0 cM values.")
         bim_file['pos'] = self.__snpobj.variants_pos
         bim_file['a0'] = self.__snpobj.variants_alt
         bim_file['a1'] = self.__snpobj.variants_ref

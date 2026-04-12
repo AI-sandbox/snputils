@@ -305,8 +305,7 @@ class maasMDS:
         Retrieve `groups_to_remove`.
         
         Returns:
-            dict of int to list of str: Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
-                lists of groups to remove for each array. Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
+            A flat removal list or a per-array mapping of labels to remove.
         """
         return self.__groups_to_remove
 

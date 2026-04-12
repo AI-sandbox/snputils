@@ -1,11 +1,18 @@
 import pathlib
 import numpy as np
 import copy
-from typing import Optional, Dict, List, Union
+from typing import Dict, Optional, List, Sequence, Union
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from ._utils.mds_distance import distance_mat, mds_transform
+from ._utils.mds_distance import (
+    binary_intersection,
+    conversion_metrics,
+    distance_mat,
+    distance_overlap,
+    mds_transform,
+    overlap_blocks,
+)
 from ._utils.gen_tools import process_calldata_gt, process_labels_weights
 
 
@@ -25,15 +32,15 @@ class maasMDS:
     """
     def __init__(
             self, 
-            snpobj: Optional['SNPObject'] = None,
-            laiobj: Optional['LocalAncestryObject'] = None,
+            snpobj: Optional[Union['SNPObject', Sequence['SNPObject']]] = None,
+            laiobj: Optional[Union['LocalAncestryObject', Sequence['LocalAncestryObject']]] = None,
             labels_file: Optional[str] = None,
             ancestry: Optional[Union[int, str]] = None,
             is_masked: bool = True,
             average_strands: bool = False,
             force_nan_incomplete_strands: bool = False,
             is_weighted: bool = False,
-            groups_to_remove: Dict[int, List[str]] = {},
+            groups_to_remove: Optional[Union[Dict[int, List[str]], List[str], Sequence[List[str]]]] = None,
             min_percent_snps: float = 4,
             group_snp_frequencies_only: bool = True,
             save_masks: bool = False,
@@ -69,9 +76,9 @@ class maasMDS:
                 Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
             is_weighted (bool, default=False): 
                 True if weights are provided in the labels file, or False otherwise.
-            groups_to_remove (dict of int to list of str, default={}): 
-                Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
-                lists of groups to remove for each array.
+            groups_to_remove (dict of int to list of str, optional):
+                Dictionary specifying groups to exclude from analysis. Keys are 1-based array numbers,
+                and values are lists of labels to remove from each array.
                 Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
             min_percent_snps (float, default=4.0): 
                 Minimum percentage of SNPs to be known in an individual for an individual to be included in the analysis. 
@@ -98,7 +105,8 @@ class maasMDS:
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
-        self.__ancestry = self._define_ancestry(ancestry, laiobj.ancestry_map) if laiobj is not None else None
+        ancestry_map = self._resolve_ancestry_map(laiobj)
+        self.__ancestry = self._define_ancestry(ancestry, ancestry_map) if ancestry_map is not None and ancestry is not None else ancestry
         self.__is_masked = is_masked
         self.__average_strands = average_strands
         self.__force_nan_incomplete_strands = force_nan_incomplete_strands
@@ -116,6 +124,7 @@ class maasMDS:
         self.__haplotypes_ = None  # Store haplotypes after filtering if min_percent_snps > 0
         self.__samples_ = None  # Store samples after filtering if min_percent_snps > 0
         self.__variants_id_ = None  # Store variants ID (after filtering SNPs not in laiobj)
+        self.array_labels_ = None  # Store per-individual array membership after filtering
 
         # Fit and transform if a `snpobj`, `laiobj`, `labels_file`, and `ancestry` are provided
         if self.snpobj is not None and self.laiobj is not None and self.labels_file is not None and self.ancestry is not None:
@@ -152,7 +161,7 @@ class maasMDS:
         return copy.copy(self)
 
     @property
-    def snpobj(self) -> Optional['SNPObject']:
+    def snpobj(self) -> Optional[Union['SNPObject', Sequence['SNPObject']]]:
         """
         Retrieve `snpobj`.
         
@@ -162,14 +171,14 @@ class maasMDS:
         return self.__snpobj
 
     @snpobj.setter
-    def snpobj(self, x: 'SNPObject') -> None:
+    def snpobj(self, x: Union['SNPObject', Sequence['SNPObject']]) -> None:
         """
         Update `snpobj`.
         """
         self.__snpobj = x
 
     @property
-    def laiobj(self) -> Optional['LocalAncestryObject']:
+    def laiobj(self) -> Optional[Union['LocalAncestryObject', Sequence['LocalAncestryObject']]]:
         """
         Retrieve `laiobj`.
         
@@ -179,7 +188,7 @@ class maasMDS:
         return self.__laiobj
 
     @laiobj.setter
-    def laiobj(self, x: 'LocalAncestryObject') -> None:
+    def laiobj(self, x: Union['LocalAncestryObject', Sequence['LocalAncestryObject']]) -> None:
         """
         Update `laiobj`.
         """
@@ -218,7 +227,8 @@ class maasMDS:
         """
         Update `ancestry`.
         """
-        self.__ancestry = self._define_ancestry(x, self.laiobj.ancestry_map) if self.laiobj is not None else None
+        ancestry_map = self._resolve_ancestry_map(self.laiobj)
+        self.__ancestry = self._define_ancestry(x, ancestry_map) if ancestry_map is not None else x
 
     @property
     def is_masked(self) -> bool:
@@ -290,7 +300,7 @@ class maasMDS:
         self.__is_weighted = x
 
     @property
-    def groups_to_remove(self) -> Dict[int, List[str]]:
+    def groups_to_remove(self) -> Optional[Union[Dict[int, List[str]], List[str], Sequence[List[str]]]]:
         """
         Retrieve `groups_to_remove`.
         
@@ -301,7 +311,7 @@ class maasMDS:
         return self.__groups_to_remove
 
     @groups_to_remove.setter
-    def groups_to_remove(self, x: Dict[int, List[str]]) -> None:
+    def groups_to_remove(self, x: Optional[Union[Dict[int, List[str]], List[str], Sequence[List[str]]]]) -> None:
         """
         Update `groups_to_remove`.
         """
@@ -527,7 +537,7 @@ class maasMDS:
             return [x[:-2] for x in haplotypes]
 
     @property
-    def variants_id_(self) -> Optional[np.ndarray]:
+    def variants_id_(self) -> Optional[Union[np.ndarray, List[np.ndarray]]]:
         """
         Retrieve `variants_id_`.
 
@@ -540,7 +550,7 @@ class maasMDS:
         return self.__variants_id_
 
     @variants_id_.setter
-    def variants_id_(self, x: np.ndarray) -> None:
+    def variants_id_(self, x: Union[np.ndarray, List[np.ndarray]]) -> None:
         """
         Update `variants_id_`.
         """
@@ -556,7 +566,7 @@ class maasMDS:
                 The total number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`).
         """
-        return len(self.__haplotypes_)
+        return len(self.haplotypes_)
 
     @property
     def n_samples(self) -> Optional[int]:
@@ -595,21 +605,180 @@ class maasMDS:
             raise ValueError(f"Invalid ancestry input: {ancestry}")
 
     @staticmethod
+    def _resolve_ancestry_map(laiobj):
+        if laiobj is None:
+            return None
+        if isinstance(laiobj, (list, tuple)):
+            if len(laiobj) == 0:
+                return None
+            return laiobj[0].ancestry_map
+        return laiobj.ancestry_map
+
+    @staticmethod
+    def _as_object_list(value):
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+
+    @staticmethod
+    def _normalize_groups_to_remove(
+        groups_to_remove: Optional[Union[Dict[int, List[str]], List[str], Sequence[List[str]]]],
+        num_arrays: int,
+    ) -> List[List[str]]:
+        if groups_to_remove is None:
+            return [[] for _ in range(num_arrays)]
+        if isinstance(groups_to_remove, dict):
+            return [list(groups_to_remove.get(i + 1, [])) for i in range(num_arrays)]
+        if isinstance(groups_to_remove, (list, tuple)):
+            if len(groups_to_remove) == 0 or all(isinstance(x, str) for x in groups_to_remove):
+                return [list(groups_to_remove) for _ in range(num_arrays)]
+            if len(groups_to_remove) != num_arrays:
+                raise ValueError(
+                    "Per-array `groups_to_remove` sequences must match the number of arrays."
+                )
+            return [list(x) for x in groups_to_remove]
+        raise TypeError(
+            "`groups_to_remove` must be None, a dict keyed by 1-based array number, "
+            "a flat list of labels, or a per-array sequence of label lists."
+        )
+
+    @staticmethod
+    def _coerce_loaded_value(value):
+        if isinstance(value, np.ndarray) and value.dtype == object:
+            if value.shape == ():
+                return value.item()
+            return value.tolist()
+        return value
+
+    @staticmethod
+    def _normalize_mask_keys(masks):
+        """Convert string ancestry keys (e.g. ``'3'``) to ``int`` in mask dicts."""
+        for i, m in enumerate(masks):
+            if isinstance(m, dict):
+                masks[i] = {
+                    (int(k) if isinstance(k, str) and k.isdigit() else k): v
+                    for k, v in m.items()
+                }
+        return masks
+
+    @staticmethod
     def _load_masks_file(masks_file):
         mask_files = np.load(masks_file, allow_pickle=True)
-        mask = mask_files['mask']
-        rs_ID_list = mask_files['rs_ID_list']
-        ind_ID_list = mask_files['ind_ID_list']
-        groups = mask_files['labels']
-        weights = mask_files['weights']
-        return mask, rs_ID_list, ind_ID_list, groups, weights
+        groups = np.asarray(mask_files['labels'])
+        weights = np.asarray(mask_files['weights'])
+
+        if 'masks' in mask_files:
+            masks = maasMDS._coerce_loaded_value(mask_files['masks'])
+            masks = maasMDS._normalize_mask_keys(list(masks))
+            variants_key = 'variants_id_list' if 'variants_id_list' in mask_files else 'rs_ID_list'
+            haplotypes_key = 'haplotypes_list' if 'haplotypes_list' in mask_files else 'ind_ID_list'
+            variants_id_list = maasMDS._coerce_loaded_value(mask_files[variants_key])
+            haplotypes_list = maasMDS._coerce_loaded_value(mask_files[haplotypes_key])
+            return (
+                masks,
+                [np.asarray(x) for x in variants_id_list],
+                [np.asarray(x) for x in haplotypes_list],
+                groups,
+                weights,
+            )
+
+        mask = maasMDS._coerce_loaded_value(mask_files['mask'])
+        if isinstance(mask, dict):
+            mask = {(int(k) if isinstance(k, str) and k.isdigit() else k): v for k, v in mask.items()}
+        variants_key = 'variants_id' if 'variants_id' in mask_files else 'rs_ID_list'
+        haplotypes_key = 'haplotypes' if 'haplotypes' in mask_files else 'ind_ID_list'
+        variants_id = maasMDS._coerce_loaded_value(mask_files[variants_key])
+        haplotypes = maasMDS._coerce_loaded_value(mask_files[haplotypes_key])
+        return [mask], [np.asarray(variants_id)], [np.asarray(haplotypes)], groups, weights
+
+    @staticmethod
+    def _save_masks_file(masks_file, masks, variants_id_list, haplotypes_list, groups, weights):
+        save_payload = {
+            'masks': np.asarray(masks, dtype=object),
+            'variants_id_list': np.asarray(variants_id_list, dtype=object),
+            'haplotypes_list': np.asarray(haplotypes_list, dtype=object),
+            'rs_ID_list': np.asarray(variants_id_list, dtype=object),
+            'ind_ID_list': np.asarray(haplotypes_list, dtype=object),
+            'labels': np.asarray(groups),
+            'weights': np.asarray(weights),
+        }
+        if len(masks) == 1:
+            single_mask = np.empty((), dtype=object)
+            single_mask[()] = masks[0]
+            save_payload['mask'] = single_mask
+            save_payload['variants_id'] = np.asarray(variants_id_list[0])
+            save_payload['haplotypes'] = np.asarray(haplotypes_list[0])
+        np.savez_compressed(masks_file, **save_payload)
+
+    def _process_input_arrays(self, snpobjs, laiobjs, labels_file, ancestry, average_strands):
+        if len(snpobjs) == 0:
+            raise ValueError("At least one `snpobj` must be provided.")
+        if self.is_masked and len(snpobjs) != len(laiobjs):
+            raise ValueError("`snpobj` and `laiobj` must contain the same number of arrays.")
+        if not self.is_masked and len(laiobjs) == 0:
+            laiobjs = [None] * len(snpobjs)
+        if labels_file is None:
+            raise ValueError("`labels_file` is required unless `load_masks=True`.")
+        groups_to_remove = self._normalize_groups_to_remove(
+            self.groups_to_remove,
+            len(snpobjs),
+        )
+
+        masks = []
+        variants_id_list = []
+        haplotypes_list = []
+        groups = []
+        weights = []
+        variants_ref_map = {}
+
+        for array_index, current_snpobj in enumerate(snpobjs):
+            current_laiobj = laiobjs[array_index] if array_index < len(laiobjs) else None
+            mask, variants_id, haplotypes, variants_ref_map = process_calldata_gt(
+                current_snpobj,
+                current_laiobj,
+                ancestry,
+                average_strands,
+                self.force_nan_incomplete_strands,
+                self.is_masked,
+                self.rsid_or_chrompos,
+                variants_ref_map=variants_ref_map,
+            )
+            mask, haplotypes, current_groups, current_weights = process_labels_weights(
+                labels_file,
+                mask,
+                variants_id,
+                haplotypes,
+                average_strands,
+                ancestry,
+                self.min_percent_snps,
+                self.group_snp_frequencies_only,
+                groups_to_remove[array_index],
+                self.is_weighted,
+                False,
+                self.masks_file,
+            )
+            masks.append(mask)
+            variants_id_list.append(np.asarray(variants_id))
+            haplotypes_list.append(np.asarray(haplotypes))
+            groups.append(np.asarray(current_groups))
+            weights.append(np.asarray(current_weights))
+
+        return (
+            masks,
+            variants_id_list,
+            haplotypes_list,
+            np.concatenate(groups) if groups else np.array([]),
+            np.concatenate(weights) if weights else np.array([]),
+        )
 
     def fit_transform(
             self,
-            snpobj: Optional['SNPObject'] = None, 
-            laiobj: Optional['LocalAncestryObject'] = None,
+            snpobj: Optional[Union['SNPObject', Sequence['SNPObject']]] = None, 
+            laiobj: Optional[Union['LocalAncestryObject', Sequence['LocalAncestryObject']]] = None,
             labels_file: Optional[str] = None,
-            ancestry: Optional[str] = None,
+            ancestry: Optional[Union[int, str]] = None,
             average_strands: Optional[bool] = None
         ) -> np.ndarray:
         """
@@ -645,45 +814,98 @@ class maasMDS:
             ancestry = self.ancestry
         if average_strands is None:
             average_strands = self.average_strands
-        
-        if not self.is_masked:
-            self.ancestry = 1
-        if self.load_masks:
-            # Load precomputed ancestry-based masked genotype matrix, SNP identifiers, haplotype identifiers, and weights
-            mask, variants_id, haplotypes, _, weights = self._load_masks_file(self.masks_file)
-        else:
-            # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
-            mask, variants_id, haplotypes = process_calldata_gt(
-                self.snpobj,
-                self.laiobj,
-                self.ancestry,
-                self.average_strands,
-                self.force_nan_incomplete_strands,
-                self.is_masked, 
-                self.rsid_or_chrompos
-            )
 
-            # Process individual genomic labels and weights, aligning them with a masked genotype matrix by 
-            # filtering out low-coverage individuals, reordering data to match the matrix structure, and 
-            # handling group-based adjustments
-            mask, haplotypes, groups, weights = process_labels_weights(
-                self.labels_file,
-                mask,
-                variants_id,
-                haplotypes,
-                self.average_strands,
-                self.ancestry,
-                self.min_percent_snps,
-                self.group_snp_frequencies_only,
-                self.groups_to_remove,
-                self.is_weighted,
-                self.save_masks,
+        self.__snpobj = snpobj
+        self.__laiobj = laiobj
+        self.__labels_file = labels_file
+        self.__average_strands = average_strands
+
+        ancestry_map = self._resolve_ancestry_map(laiobj)
+        if ancestry is not None and ancestry_map is not None:
+            ancestry = self._define_ancestry(ancestry, ancestry_map)
+        analysis_ancestry = ancestry if self.is_masked else 1
+        self.__ancestry = analysis_ancestry
+
+        snpobjs = self._as_object_list(snpobj)
+        laiobjs = self._as_object_list(laiobj)
+
+        if self.load_masks:
+            masks, variants_id_list, haplotypes_list, groups, weights = self._load_masks_file(
                 self.masks_file
             )
-        
-        distance_list = [[distance_mat(first=mask[self.ancestry], dist_func=self.distance_type)]]
-        
-        self.X_new_ = mds_transform(distance_list, groups, weights, haplotypes, self.n_components)
-        
+        else:
+            masks, variants_id_list, haplotypes_list, groups, weights = self._process_input_arrays(
+                snpobjs,
+                laiobjs,
+                labels_file,
+                analysis_ancestry,
+                average_strands,
+            )
+            if self.save_masks:
+                self._save_masks_file(
+                    self.masks_file,
+                    masks,
+                    variants_id_list,
+                    haplotypes_list,
+                    groups,
+                    weights,
+                )
+
+        num_arrays = len(masks)
+        if num_arrays == 0:
+            raise ValueError("No arrays available for maasMDS processing.")
+
+        if num_arrays > 1:
+            ref_row = 0
+            ref_col = 1
+            binary = binary_intersection(variants_id_list)
+            overlap = overlap_blocks(
+                analysis_ancestry,
+                ref_col,
+                ref_row,
+                num_arrays,
+                variants_id_list,
+                binary,
+                masks,
+            )
+            conversion, intercept = conversion_metrics(
+                analysis_ancestry,
+                ref_col,
+                ref_row,
+                num_arrays,
+                variants_id_list,
+                binary,
+                masks,
+                self.distance_type,
+            )
+            distance_list = distance_overlap(
+                ref_col,
+                ref_row,
+                num_arrays,
+                overlap,
+                conversion,
+                intercept,
+                self.distance_type,
+            )
+            ind_id_arg = haplotypes_list
+        else:
+            distance_list = [[distance_mat(first=masks[0][analysis_ancestry], dist_func=self.distance_type)]]
+            ind_id_arg = haplotypes_list[0]
+
+        transformed, haplotypes, _, array_labels = mds_transform(
+            distance_list,
+            np.asarray(groups),
+            np.asarray(weights),
+            ind_id_arg,
+            self.n_components,
+            num_arrays=num_arrays,
+            imputation_method="mean",
+            return_metadata=True,
+        )
+
+        self.X_new_ = transformed
         self.haplotypes_ = haplotypes
-        self.variants_id_ = variants_id
+        self.variants_id_ = variants_id_list[0] if num_arrays == 1 else [np.asarray(x) for x in variants_id_list]
+        self.array_labels_ = np.asarray(array_labels)
+
+        return self.X_new_

@@ -1056,7 +1056,7 @@ class mdPCA:
             mask, variants_id, haplotypes, _, weights = self._load_mask_file()
         else:
             # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
-            mask, variants_id, haplotypes = process_calldata_gt(
+            mask, variants_id, haplotypes, _ = process_calldata_gt(
                 self.snpobj,
                 self.laiobj,
                 self.ancestry,

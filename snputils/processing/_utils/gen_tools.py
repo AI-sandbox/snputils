@@ -184,28 +184,43 @@ def process_laiobj(laiobj, snpobj):
     Obtain a SNP-level ancestry matrix by matching genomic positions and chromosomes in the SNPObject 
     with ancestry segments in the LocalAncestryObject.
 
+    If the LocalAncestryObject already contains per-SNP ancestry data (i.e. one entry per SNP
+    rather than window-level segments), the conversion step is skipped.  This is detected by
+    the absence of ``physical_pos`` and ``chromosomes`` on the LocalAncestryObject — when
+    those attributes are ``None``, the LAI data is assumed to be at SNP-level already and the
+    number of rows in ``laiobj.lai`` must equal the number of SNPs in ``snpobj``.
+
     Args:
         laiobj (LocalAncestryObject): 
             A LocalAncestryObject instance.
-        variants_pos (list of int): 
-            A list containing the chromosomal positions for each SNP.
-        variants_chrom (list of int): 
-            A list containing the chromosome for each SNP.
-        calldata_gt (np.ndarray of shape (n_snps, n_samples)): 
-            An array containing genotype data for each sample.
-        variants_id (list of str): 
-            A list containing unique identifiers (IDs) for each SNP.
+        snpobj (SNPObject):
+            A SNPObject instance whose genotype matrix determines the expected number of SNPs.
 
     Returns:
-        Tuple:
-            - np.ndarray of shape (n_snps, n_samples): 
-                An ancestry matrix where `n_snps` represents the number of genomic 
-                positions and `n_samples` represents the number of individuals. 
-                Ancestry values are assigned based on LAI data.                                                                                          
+        np.ndarray of shape (n_snps, n_haplotypes): 
+            An ancestry matrix where ``n_snps`` is the number of genomic positions and
+            ``n_haplotypes`` is the number of haplotype phases.  Ancestry values are
+            assigned based on LAI data.
     """
+    n_snps = snpobj['calldata_gt'].shape[0]
+
+    if snpobj.calldata_lai is not None:
+        logging.info("Using pre-populated calldata_lai from SNPObject")
+        return snpobj.calldata_lai
+
+    if getattr(laiobj, 'physical_pos', None) is None and getattr(laiobj, 'chromosomes', None) is None:
+        if laiobj.lai.shape[0] != n_snps:
+            raise ValueError(
+                f"LocalAncestryObject has {laiobj.lai.shape[0]} entries but SNPObject has "
+                f"{n_snps} SNPs. When physical_pos and chromosomes are not provided, "
+                f"LAI must already be at SNP-level (one entry per SNP)."
+            )
+        logging.info("LAI already at SNP-level; skipping convert_to_snp_level")
+        return laiobj.lai
+
     start_time = time.time()
     ancestry_matrix = laiobj.convert_to_snp_level(snpobj, lai_format='2D').calldata_lai
-    logging.info("TSV Processing Time: --- %s seconds ---" % (time.time() - start_time))
+    logging.info("LAI Processing Time: --- %s seconds ---" % (time.time() - start_time))
     return ancestry_matrix
 
 
@@ -282,7 +297,44 @@ def process_beagle(beagle_file, rs_ID_dict, rsid_or_chrompos):
     return calldata_gt, ind_IDs, variants_id, rs_ID_dict
 
 
-def process_snpobj(snpobj, rsid_or_chrompos):
+def _normalize_ref_allele(ref_allele):
+    if isinstance(ref_allele, bytes):
+        ref_allele = ref_allele.decode()
+    if ref_allele is None:
+        return None
+    return str(ref_allele)
+
+
+def harmonize_calldata_gt_by_variants_ref(calldata_gt, variants_id, variants_ref, variants_ref_map):
+    """
+    Flip genotype encoding when a shared variant uses a different REF allele in a
+    later array.
+
+    This mirrors the legacy maasMDS pipeline, which kept a shared variant->REF
+    mapping while loading multiple arrays and inverted 0/1 calls whenever a later
+    array used the opposite reference allele for the same variant.
+    """
+    if variants_ref_map is None or variants_ref is None or len(variants_ref) != len(variants_id):
+        return calldata_gt, variants_ref_map
+
+    for i, variant_id in enumerate(variants_id):
+        current_ref = _normalize_ref_allele(variants_ref[i])
+        if current_ref is None:
+            continue
+
+        canonical_ref = variants_ref_map.get(variant_id)
+        if canonical_ref is None:
+            variants_ref_map[variant_id] = current_ref
+            continue
+
+        if current_ref != canonical_ref:
+            non_missing = ~np.isnan(calldata_gt[i])
+            calldata_gt[i, non_missing] = 1 - calldata_gt[i, non_missing]
+
+    return calldata_gt, variants_ref_map
+
+
+def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     """                                                                                       
     Process genotype data from a SNPObject:
     - Reshape the 3D genotype array (n_snps, n_samples, 2) to 2D (n_snps, n_samples × 2). 
@@ -311,6 +363,9 @@ def process_snpobj(snpobj, rsid_or_chrompos):
                 Array of individual IDs corresponding to the genotype matrix.
             - list of int or float: 
                 List of variant identifiers, formatted based on `rsid_or_chrompos` selection.
+            - dict:
+                Updated shared REF-allele map used to keep genotype encoding
+                consistent across arrays.
     """
     start_time = time.time()
 
@@ -333,6 +388,14 @@ def process_snpobj(snpobj, rsid_or_chrompos):
     else:
         sys.exit("Illegal value for rsid_or_chrompos. Choose 1 for rsID format or 2 for Chromosome_position format.")
 
+    if variants_ref_map is not None:
+        calldata_gt, variants_ref_map = harmonize_calldata_gt_by_variants_ref(
+            calldata_gt,
+            variants_id,
+            snpobj['variants_ref'],
+            variants_ref_map,
+        )
+
     # Extract individual sample IDs
     samples = snpobj['samples']
 
@@ -340,7 +403,7 @@ def process_snpobj(snpobj, rsid_or_chrompos):
     ind_IDs = np.array([f"{sample}_{suffix}" for sample in samples for suffix in ["A", "B"]])
     
     logging.info("SNPObject Processing Time: --- %s seconds ---" % (time.time() - start_time))
-    return calldata_gt, ind_IDs, variants_id
+    return calldata_gt, ind_IDs, variants_id, variants_ref_map
 
 
 def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=False):
@@ -484,7 +547,16 @@ def add_AB_indIDs(ind_IDs):
     return new_ind_IDs
 
 
-def process_calldata_gt(snpobj, laiobj, ancestry, average_strands, force_nan_incomplete_strands, is_masked, rsid_or_chrompos): 
+def process_calldata_gt(
+        snpobj,
+        laiobj,
+        ancestry,
+        average_strands,
+        force_nan_incomplete_strands,
+        is_masked,
+        rsid_or_chrompos,
+        variants_ref_map=None,
+    ): 
     """                                                                                       
     Process genotype data with optional ancestry-based masking and return the corresponding 
     SNP and individual identifiers.
@@ -532,8 +604,14 @@ def process_calldata_gt(snpobj, laiobj, ancestry, average_strands, force_nan_inc
     # Obtain the masked genotype matrices, SNP identifiers, and haplotype identifiers
     logging.info("------ Array Processing: ------")
     
-    # Extract genotype data, sample identifiers, variant identifiers, and positions from the SNPObject
-    calldata_gt, haplotypes, variants_id = process_snpobj(snpobj, rsid_or_chrompos)
+    # Extract genotype data, sample identifiers, and variant identifiers from the SNPObject.
+    # When processing multiple arrays, keep genotype encoding aligned to a shared
+    # REF allele map so cross-array distances are comparable.
+    calldata_gt, haplotypes, variants_id, variants_ref_map = process_snpobj(
+        snpobj,
+        rsid_or_chrompos,
+        variants_ref_map=variants_ref_map,
+    )
 
     if is_masked:
         # Obtain a SNP-level ancestry matrix by matching genomic positions and chromosomes in the SNPObject 
@@ -556,7 +634,7 @@ def process_calldata_gt(snpobj, laiobj, ancestry, average_strands, force_nan_inc
         # Remove duplicate haplotype identifiers (A/B strand labels)
         haplotypes = remove_AB_indIDs(haplotypes)
     
-    return mask, variants_id, haplotypes
+    return mask, variants_id, haplotypes, variants_ref_map
 
 
 def process_labels_weights(

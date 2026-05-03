@@ -9,6 +9,8 @@ import subprocess
 log = logging.getLogger(__name__)
 import tempfile
 
+from snputils._utils.printing import format_repr
+
 GRGType = Union[pyg.GRG, pyg.MutableGRG]
 
 
@@ -54,6 +56,35 @@ class GRGObject:
         except AttributeError:
             raise KeyError(f'Invalid key: {key}.')
 
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_snps=self._grg_count("num_mutations"),
+            n_haplotypes=self._grg_count("num_samples"),
+            n_samples=self._n_samples_or_none(),
+            filename=self.__filename,
+            mutable=self.__mutable,
+            loaded=self.__calldata_gt is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def _grg_count(self, attr: str) -> Optional[int]:
+        if self.__calldata_gt is None:
+            return None
+        value = getattr(self.__calldata_gt, attr, None)
+        if value is None:
+            return None
+        return int(value)
+
+    def _n_samples_or_none(self) -> Optional[int]:
+        try:
+            return self.n_samples()
+        except Exception:
+            return None
+
     @property
     def calldata_gt(self) -> Optional[GRGType]:
         """
@@ -94,6 +125,13 @@ class GRGObject:
     @property
     def mutable(self) -> Optional[bool]:
         return self.__mutable
+
+    @property
+    def shape(self) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Retrieve the graph genotype shape as `(n_mutations, n_haplotypes)`.
+        """
+        return (self._grg_count("num_mutations"), self._grg_count("num_samples"))
 
     def allele_freq(self) -> np.ndarray:
         # allele frequency array

@@ -4,6 +4,8 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from snputils._utils.printing import format_repr
+
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +70,20 @@ class IBDObject:
             setattr(self, key, value)
         except Exception:
             raise KeyError(f"Invalid key: {key}.")
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_segments=self.n_segments,
+            n_samples=self.n_samples,
+            n_chromosomes=self.n_chromosomes,
+            has_length_cm=self.__length_cm is not None,
+            has_segment_type=self.__segment_type is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @property
     def sample_id_1(self) -> np.ndarray:
@@ -231,6 +247,28 @@ class IBDObject:
             **int:** The total number of IBD segments.
         """
         return self.__chrom.shape[0]
+
+    @property
+    def n_samples(self) -> int:
+        """
+        Retrieve the number of unique samples represented in the segments.
+        """
+        samples = np.concatenate([self.__sample_id_1, self.__sample_id_2])
+        return len(np.unique(samples))
+
+    @property
+    def n_chromosomes(self) -> int:
+        """
+        Retrieve the number of unique chromosomes represented in the segments.
+        """
+        return len(np.unique(self.__chrom))
+
+    @property
+    def shape(self) -> tuple[int]:
+        """
+        Retrieve the one-dimensional segment shape.
+        """
+        return (self.n_segments,)
 
     @property
     def pairs(self) -> np.ndarray:
@@ -673,4 +711,3 @@ class IBDObject:
         valid_values = np.array([1, 2, -1])
         if not np.isin(self.__haplotype_id_1, valid_values).all() or not np.isin(self.__haplotype_id_2, valid_values).all():
             raise ValueError("Haplotype identifiers must be in {1, 2} or -1 if unknown.")
-

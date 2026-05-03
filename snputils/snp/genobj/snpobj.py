@@ -9,6 +9,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
+from snputils._utils.printing import array_shape, format_repr
 
 if TYPE_CHECKING:
     from snputils.ancestry.genobj.local import LocalAncestryObject
@@ -97,6 +98,44 @@ class SNPObject:
             setattr(self, key, value)
         except:
             raise KeyError(f'Invalid key: {key}.')
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_snps=self._n_snps_or_none(),
+            n_samples=self._n_samples_or_none(),
+            calldata_gt_shape=array_shape(self.__calldata_gt),
+            calldata_lai_shape=array_shape(self.__calldata_lai),
+            has_variant_metadata=any(
+                attr is not None
+                for attr in (
+                    self.__variants_ref,
+                    self.__variants_alt,
+                    self.__variants_chrom,
+                    self.__variants_filter_pass,
+                    self.__variants_id,
+                    self.__variants_pos,
+                    self.__variants_qual,
+                )
+            ),
+            has_ancestry_map=self.__ancestry_map is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def _n_samples_or_none(self) -> Optional[int]:
+        try:
+            return self.n_samples
+        except ValueError:
+            return None
+
+    def _n_snps_or_none(self) -> Optional[int]:
+        try:
+            return self.n_snps
+        except ValueError:
+            return None
 
     @property
     def calldata_gt(self) -> np.ndarray:
@@ -365,6 +404,26 @@ class SNPObject:
             return len(np.unique(self.__calldata_lai))
         else:
             raise ValueError("Unable to determine the total number of ancestries: no relevant data is available.")
+
+    @property
+    def shape(self) -> Tuple[Optional[int], ...]:
+        """
+        Retrieve the primary data shape.
+
+        Returns:
+            tuple: The shape of `calldata_gt` when present, otherwise the shape
+            of `calldata_lai`. If only metadata is available, returns
+            `(n_snps, n_samples)` with unknown dimensions represented as None.
+        """
+        gt_shape = array_shape(self.__calldata_gt)
+        if gt_shape is not None:
+            return gt_shape
+
+        lai_shape = array_shape(self.__calldata_lai)
+        if lai_shape is not None:
+            return lai_shape
+
+        return (self._n_snps_or_none(), self._n_samples_or_none())
 
     @property
     def unique_chrom(self) -> Optional[np.ndarray]:

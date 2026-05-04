@@ -44,6 +44,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "PhenotypeObject": (".phenotype", "PhenotypeObject"),
     "MultiPhenReader": (".phenotype", "MultiPhenReader"),
     "PhenotypeReader": (".phenotype", "PhenotypeReader"),
+    "available_datasets_list": (".datasets", "available_datasets_list"),
     "load_dataset": (".datasets", "load_dataset"),
     "viz": (".visualization", ""),
 }

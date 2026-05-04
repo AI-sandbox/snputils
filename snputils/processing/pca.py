@@ -25,7 +25,6 @@ def _require_torch():
         raise ImportError(_TORCH_INSTALL_MESSAGE) from exc
     return torch
 
-
 _PCA_FITTING_OPTIONS = frozenset({"exact", "lowrank"})
 
 

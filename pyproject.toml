@@ -42,6 +42,7 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = ["torch"]
+demos = ["jupyterlab", "seaborn"]
 tests = ["tox", "pytest", "pytest-cov"]
 docs = [
     "sphinx>=7.2",

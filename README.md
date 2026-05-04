@@ -24,9 +24,9 @@ Basic installation using pip:
 pip install snputils
 ```
 
-Optionally, for GPU-accelerated functionalities, install the package with the `[gpu]` extra:
+Optionally, for PyTorch-backed features, install with the `[torch]` extra:
 ```bash
-pip install 'snputils[gpu]'
+pip install 'snputils[torch]'
 ```
 
 ## Key Features

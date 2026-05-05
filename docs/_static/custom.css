@@ -1,0 +1,27 @@
+.content {
+  line-height: 1.65;
+}
+
+.bd-main .bd-content .bd-article-container {
+  max-width: 78rem;
+}
+
+.sidebar-brand img {
+  max-width: 10rem;
+}
+
+.sd-card {
+  border-radius: 0.45rem;
+}
+
+.sd-card-title {
+  font-weight: 650;
+}
+
+.highlight pre {
+  border-radius: 0.35rem;
+}
+
+table.autosummary {
+  width: 100%;
+}

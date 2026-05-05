@@ -44,9 +44,15 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = ["torch"]
-demos = ["jupyterlab", "seaborn"]
 tests = ["tox", "pytest", "pytest-cov"]
-docs = ["pdoc", "torch"]  # pdoc requires to import all the libraries that are imported in the code
+docs = [
+    "sphinx>=7.2",
+    "furo>=2023.9.10",
+    "myst-parser>=2.0",
+    "myst-nb>=1.0",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
+]
 benchmark = ["pytest", "pytest-benchmark", "memory_profiler",
              "pandas-plink", "pysam", "scikit-allel", "sgkit[plink]", "hail", "pysnptools", "Pgenlib", "cyvcf2", "plinkio", "PyVCF3"]
 
@@ -85,6 +91,5 @@ passenv =
 extras =
     tests
     torch
-    docs
 commands = python -m pytest -vv --color=yes --cov=snputils --cov-report=xml
 """

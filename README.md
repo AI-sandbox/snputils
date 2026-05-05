@@ -44,7 +44,7 @@ Similarly, reading BED or PGEN filesets is straightforward:
 snpobj = su.read_snp("path/to/file.pgen")
 ```
 
-Working with ancestry files, performing processing operations, and creating visualizations is just as straightforward. See the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos) for examples.
+Working with ancestry files, performing processing operations, and creating visualizations is just as straightforward. See the [tutorial notebooks](https://github.com/AI-sandbox/snputils/tree/main/docs/tutorials) for examples.
 
 ### File Format Support
 **snputils** aims to provide the fastest available readers and writers for various genomic data formats:
@@ -109,8 +109,8 @@ The **snputils** package is continuously updated with new features and improveme
 
 ## Documentation & Support
 
-- **Documentation**: Comprehensive API reference at [docs.snputils.org](https://docs.snputils.org).
-- **Examples & Tutorials**: Check out our interactive notebooks in the [demos directory](https://github.com/AI-sandbox/snputils/tree/main/demos).
+- **Documentation**: User guide, tutorials, and API reference at [docs.snputils.org](https://docs.snputils.org).
+- **Examples & Tutorials**: Browse the tutorials in the documentation or the source notebooks in [`docs/tutorials`](https://github.com/AI-sandbox/snputils/tree/main/docs/tutorials).
 - **Issues & Community**: Report bugs, ask questions, or request features via [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
 
 ## Citation

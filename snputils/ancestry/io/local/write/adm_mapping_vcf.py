@@ -110,7 +110,7 @@ class AdmixtureMappingVCFWriter:
         **Output files:**
 
         - A separate VCF file is written for each ancestry type, with filenames formatted as:
-        `<filename>_<ancestry>.vcf` (e.g., `output_African.vcf`).
+          `<filename>_<ancestry>.vcf` (e.g., `output_African.vcf`).
         """
         # Process the list of positions to include both the start and end coordinates for each window
         # Iterate over each ancestry key in the ancestry mapping

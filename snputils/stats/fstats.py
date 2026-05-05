@@ -200,10 +200,9 @@ def f2(
     Args:
         data: Either a SNPObject or a tuple (afs, counts, pops), where `afs` and `counts` are arrays of
               shape (n_snps, n_pops). If a SNPObject is provided, `sample_labels` are used to aggregate samples to populations.
-        pop1, pop2: Populations to compute f2 for. 
-            If None:
-                - with include_self=False (default), compute only off-diagonal pairs i<j.
-                - with include_self=True, compute all pairs including diagonals (i<=j).
+        pop1, pop2: Populations to compute f2 for. If both are None, `include_self=False`
+            computes only off-diagonal pairs i<j; `include_self=True` computes all pairs
+            including diagonals i<=j.
         sample_labels: Population label per sample (aligned with SNPObject.samples) when `data` is a SNPObject.
         apply_correction: Apply small-sample correction p*(1-p)/(n-1) per population.
             When True, SNPs with n<=1 in either population are excluded at that SNP.
@@ -478,7 +477,9 @@ def d_stat(
 ) -> pd.DataFrame:
     """
     Compute D-statistics D(a, b; c, d) as ratio of sums:
-        D = sum_l (A-B)(C-D)  /  sum_l (A+B-2AB)(C+D-2CD)
+
+    `D = sum_l (A-B)(C-D) / sum_l (A+B-2AB)(C+D-2CD)`
+
     with delete-one block jackknife SE.
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
@@ -653,25 +654,14 @@ def fst(
     Pairwise F_ST with delete-one block jackknife SE.
 
     Methods:
-      - 'hudson' (a.k.a. "ratio of averages" following Hudson 1992 / Bhatia 2013):
-            per-SNP num = d_xy - 0.5*(pi_x + pi_y)
-            per-SNP den = d_xy
-        where d_xy = p_x*(1-p_y) + p_y*(1-p_x) and
-              pi_x = 2*p_x*(1-p_x) * n_x/(n_x - 1) (unbiased within-pop diversity on haplotypes).
-      - 'weir_cockerham' (Weir & Cockerham 1984; θ):
-            compute per-SNP variance components a,b,c (for r=2) from allele freqs and haplotype counts:
-                n1, n2 = haplotype counts; p1, p2 = allele freqs
-                n  = n1 + n2
-                n_bar = n / 2
-                p_bar = (n1*p1 + n2*p2) / n
-                s2    = (n1*(p1 - p_bar)**2 + n2*(p2 - p_bar)**2) / n_bar
-                h1, h2 = 2*p1*(1-p1), 2*p2*(1-p2)
-                h_bar = 0.5*(h1 + h2)
-                n_c   = (n - (n1**2 + n2**2)/n)  # equals 2*n1*n2/n for r=2
-                a = (n_bar / n_c) * (s2 - (p_bar*(1 - p_bar) - 0.5*s2 - 0.25*h_bar) / (n_bar - 1))
-                b = (n_bar / (n_bar - 1)) * (p_bar*(1 - p_bar) - 0.5*s2 - ((2*n_bar - 1)/(4*n_bar))*h_bar)
-                c = 0.5 * h_bar
-            and use num=a, den=(a+b+c), then ratio-of-sums jackknife.
+        `hudson`:
+            Ratio-of-averages following Hudson 1992 / Bhatia 2013. Uses
+            `num = d_xy - 0.5*(pi_x + pi_y)` and `den = d_xy`, where
+            `d_xy = p_x*(1-p_y) + p_y*(1-p_x)` and `pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)`.
+        `weir_cockerham`:
+            Weir and Cockerham's theta for two populations. Computes per-SNP
+            variance components `a`, `b`, and `c`, then uses a ratio-of-sums
+            jackknife with `num = a` and `den = a + b + c`.
 
     Notes:
       * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
@@ -791,4 +781,3 @@ __all__ = [
     "f4_ratio",
     "fst",
 ]
-

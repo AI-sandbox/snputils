@@ -89,16 +89,15 @@ jobs:
           python -m pip install '.[docs]'
 
       # Build documentation and verify it builds correctly
-      # PDOC_ALLOW_EXEC=1 allows executing code examples in docstrings
       - name: Build documentation
-        run: PDOC_ALLOW_EXEC=1 pdoc --docformat google --favicon https://snputils.org/su_favicon.png -o docs/ snputils
+        run: sphinx-build -b html docs docs/_build/html
 
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact
         if: github.event_name == 'release'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/
+          path: docs/_build/html
 
   publish:
     needs: [test, build-docs]

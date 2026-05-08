@@ -39,7 +39,7 @@ jobs:
         python-version: ['3.9', '3.14']  # Test on limit versions (3.9 and latest)
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch full repository history, including all tags
 
@@ -47,14 +47,14 @@ jobs:
         run: git tag -l
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"           # Enables automatic pip caching
 
       # Cache test data
       - name: Cache test data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: data/
           key: snputils-test-data-${{ hashFiles('snputils/snp/io/read/__test__/conftest.py') }}
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch full repository history, including all tags
 
@@ -82,7 +82,7 @@ jobs:
         run: git tag -l
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
@@ -99,7 +99,7 @@ jobs:
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact
         if: github.event_name == 'release'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: docs/_build/html
 
@@ -110,7 +110,7 @@ jobs:
     steps:
       # Build and publish to PyPI
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch full repository history, including all tags
 
@@ -118,7 +118,7 @@ jobs:
         run: git tag -l
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
@@ -157,4 +157,4 @@ jobs:
       # Deploy documentation to GitHub Pages
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

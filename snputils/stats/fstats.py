@@ -13,6 +13,39 @@ from snputils._utils.allele_freq import aggregate_pop_allele_freq
 ArrayLike = Union[np.ndarray, Sequence[float]]
 
 
+def genomic_block_labels(
+    chrom: Sequence[Any],
+    pos: Sequence[int],
+    block_size_bp: int,
+) -> np.ndarray:
+    """
+    Build genomic block labels from chromosome and base-pair position arrays.
+
+    A new block starts when the chromosome changes or when the current variant is at least
+    ``block_size_bp`` bases away from the start of the current block on that chromosome.
+    """
+    if block_size_bp <= 0:
+        raise ValueError("block_size_bp must be positive.")
+    chrom_arr = np.asarray(chrom)
+    pos_arr = np.asarray(pos)
+    if chrom_arr.shape[0] != pos_arr.shape[0]:
+        raise ValueError("'chrom' and 'pos' must have the same length.")
+
+    labels: List[str] = []
+    current_chrom: Optional[str] = None
+    block_start = -1
+    block_index = -1
+    for c, p in zip(chrom_arr, pos_arr):
+        c = str(c)
+        p = int(p)
+        if current_chrom != c or p - block_start >= block_size_bp:
+            current_chrom = c
+            block_start = p
+            block_index += 1
+        labels.append(f"{c}:{block_index}")
+    return np.asarray(labels, dtype=object)
+
+
 @dataclass
 class BlockJackknifeResult:
     est: float
@@ -129,6 +162,28 @@ def _aggregate_to_pop_allele_freq(
     return afs, counts, pops
 
 
+def _default_sample_labels_from_snpobj(snpobj: Any) -> List[str]:
+    """
+    Default per-sample group labels for SNPObject inputs.
+
+    If ``sample_fid`` is set on the object and differs from ``samples`` for at least
+    one individual (PLINK FID vs IID), use ``sample_fid`` — matching the usual
+    ADMIXTOOLS2 binary PLINK convention. Otherwise use ``samples`` (IID) as the label
+    for each individual.
+    """
+    if snpobj.samples is None:
+        raise ValueError("sample_labels must be provided when SNPObject.samples is None")
+    samples = np.asarray(snpobj.samples, dtype=object)
+    fid = getattr(snpobj, "sample_fid", None)
+    if fid is not None:
+        fid = np.asarray(fid, dtype=object)
+        if fid.shape[0] != samples.shape[0]:
+            raise ValueError("'sample_fid' must have the same length as 'samples'")
+        if np.any(fid.astype(str) != samples.astype(str)):
+            return [str(x) for x in fid]
+    return [str(x) for x in samples]
+
+
 def _prepare_inputs(
     data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
     sample_labels: Optional[Sequence[str]] = None,
@@ -148,9 +203,7 @@ def _prepare_inputs(
     if is_snpobj:
         snpobj = data
         if sample_labels is None:
-            if snpobj.samples is None:
-                raise ValueError("sample_labels must be provided when SNPObject.samples is None")
-            sample_labels = snpobj.samples
+            sample_labels = _default_sample_labels_from_snpobj(snpobj)
         afs, counts, pops = _aggregate_to_pop_allele_freq(
             snpobj.calldata_gt,
             sample_labels,
@@ -205,6 +258,8 @@ def f2(
                 - with include_self=False (default), compute only off-diagonal pairs i<j.
                 - with include_self=True, compute all pairs including diagonals (i<=j).
         sample_labels: Population label per sample (aligned with SNPObject.samples) when `data` is a SNPObject.
+            If omitted, labels are inferred from ``SNPObject.sample_fid`` when it differs from ``samples`` (PLINK FID);
+            otherwise each ``samples`` value is used as its own group label.
         apply_correction: Apply small-sample correction p*(1-p)/(n-1) per population.
             When True, SNPs with n<=1 in either population are excluded at that SNP.
         block_size: Number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
@@ -309,6 +364,7 @@ def f3(
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
     - If `apply_correction` is True, subtract the finite sample term p_t*(1-p_t)/(n_t-1) from the per-SNP product.
         When True, SNPs with n_t<=1 are excluded.
+    - If `sample_labels` is omitted for a SNPObject, defaults match ``f2`` (PLINK ``sample_fid`` when FID differs from IID).
     """
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
     n_snps, _ = afs.shape
@@ -791,4 +847,3 @@ __all__ = [
     "f4_ratio",
     "fst",
 ]
-

@@ -9,6 +9,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
+from snputils._utils.printing import array_shape, format_repr
 
 if TYPE_CHECKING:
     from snputils.ancestry.genobj.local import LocalAncestryObject
@@ -34,7 +35,8 @@ class SNPObject:
         variants_pos: Optional[np.ndarray] = None,
         variants_qual: Optional[np.ndarray] = None,
         calldata_lai: Optional[np.ndarray] = None,
-        ancestry_map: Optional[Dict[str, str]] = None
+        ancestry_map: Optional[Dict[str, str]] = None,
+        sample_fid: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
@@ -44,6 +46,10 @@ class SNPObject:
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
             samples (array of shape (n_samples,), optional): 
                 An array containing unique sample identifiers.
+            sample_fid (array of shape (n_samples,), optional):
+                PLINK-style family ID per sample (same order as ``samples``), for example population labels
+                in column 1 of a ``.fam`` file. When present and not identical to ``samples``, f-statistics
+                use these values as default group labels if ``sample_labels`` is omitted.
             variants_ref (array of shape (n_snps,), optional): 
                 An array containing the reference allele for each SNP.
             variants_alt (array of shape (n_snps,), optional): 
@@ -75,6 +81,7 @@ class SNPObject:
         self.__variants_qual = variants_qual
         self.__calldata_lai = calldata_lai
         self.__ancestry_map = ancestry_map
+        self.__sample_fid = None if sample_fid is None else np.asarray(sample_fid)
 
         self._sanity_check()
 
@@ -97,6 +104,44 @@ class SNPObject:
             setattr(self, key, value)
         except:
             raise KeyError(f'Invalid key: {key}.')
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_snps=self._n_snps_or_none(),
+            n_samples=self._n_samples_or_none(),
+            calldata_gt_shape=array_shape(self.__calldata_gt),
+            calldata_lai_shape=array_shape(self.__calldata_lai),
+            has_variant_metadata=any(
+                attr is not None
+                for attr in (
+                    self.__variants_ref,
+                    self.__variants_alt,
+                    self.__variants_chrom,
+                    self.__variants_filter_pass,
+                    self.__variants_id,
+                    self.__variants_pos,
+                    self.__variants_qual,
+                )
+            ),
+            has_ancestry_map=self.__ancestry_map is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def _n_samples_or_none(self) -> Optional[int]:
+        try:
+            return self.n_samples
+        except ValueError:
+            return None
+
+    def _n_snps_or_none(self) -> Optional[int]:
+        try:
+            return self.n_snps
+        except ValueError:
+            return None
 
     @property
     def calldata_gt(self) -> np.ndarray:
@@ -135,6 +180,32 @@ class SNPObject:
         Update `samples`.
         """
         self.__samples = np.asarray(x)
+        if (
+            self.__sample_fid is not None
+            and self.__samples is not None
+            and len(self.__sample_fid) != len(self.__samples)
+        ):
+            raise ValueError(
+                f"Length mismatch after updating samples: sample_fid has {len(self.__sample_fid)} "
+                f"entries but samples has {len(self.__samples)}."
+            )
+
+    @property
+    def sample_fid(self) -> Optional[np.ndarray]:
+        """
+        PLINK Family ID (FID) per sample, aligned with ``samples``.
+        """
+        return self.__sample_fid
+
+    @sample_fid.setter
+    def sample_fid(self, x: Optional[Union[List, np.ndarray]]):
+        self.__sample_fid = None if x is None else np.asarray(x)
+        if self.__sample_fid is not None and self.__samples is not None:
+            if len(self.__sample_fid) != len(self.__samples):
+                raise ValueError(
+                    f"Length mismatch: sample_fid has {len(self.__sample_fid)} entries "
+                    f"but samples has {len(self.__samples)}."
+                )
 
     @property
     def variants_ref(self) -> Optional[np.ndarray]:
@@ -367,6 +438,26 @@ class SNPObject:
             raise ValueError("Unable to determine the total number of ancestries: no relevant data is available.")
 
     @property
+    def shape(self) -> Tuple[Optional[int], ...]:
+        """
+        Retrieve the primary data shape.
+
+        Returns:
+            tuple: The shape of `calldata_gt` when present, otherwise the shape
+            of `calldata_lai`. If only metadata is available, returns
+            `(n_snps, n_samples)` with unknown dimensions represented as None.
+        """
+        gt_shape = array_shape(self.__calldata_gt)
+        if gt_shape is not None:
+            return gt_shape
+
+        lai_shape = array_shape(self.__calldata_lai)
+        if lai_shape is not None:
+            return lai_shape
+
+        return (self._n_snps_or_none(), self._n_samples_or_none())
+
+    @property
     def unique_chrom(self) -> Optional[np.ndarray]:
         """
         Retrieve `unique_chrom`.
@@ -549,11 +640,12 @@ class SNPObject:
             chrom: Optional[Union[str, Sequence[str], np.ndarray, None]] = None, 
             pos: Optional[Union[int, Sequence[int], np.ndarray, None]] = None, 
             indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None, 
+            mask: Optional[Union[Sequence[bool], np.ndarray, None]] = None,
             include: bool = True, 
             inplace: bool = False
         ) -> Optional['SNPObject']:
         """
-        Filter variants based on specified chromosome names, variant positions, or variant indexes.
+        Filter variants based on chromosome names, variant positions, indexes, or a boolean mask.
 
         This method updates the `calldata_gt`, `variants_ref`, `variants_alt`, 
         `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`,  
@@ -577,6 +669,9 @@ class SNPObject:
             indexes (int or array_like of int, optional): 
                 Index(es) of the variants to include or exclude. Can be a single index or a sequence
                 of indexes. Negative indexes are supported. Default is None.
+            mask (array_like of bool, optional):
+                Boolean mask aligned to the SNP axis. If provided with other criteria, the union of all
+                selected variants is used before applying ``include``.
             include (bool, default=True): 
                 If True, includes only the specified variants. If False, excludes the specified
                 variants. Default is True.
@@ -589,8 +684,8 @@ class SNPObject:
                 A new `SNPObject` with the specified variants filtered if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
-        if chrom is None and pos is None and indexes is None:
-            raise ValueError("At least one of 'chrom', 'pos', or 'indexes' must be provided.")
+        if chrom is None and pos is None and indexes is None and mask is None:
+            raise ValueError("At least one of 'chrom', 'pos', 'indexes', or 'mask' must be provided.")
 
         n_snps = self.n_snps
 
@@ -655,6 +750,15 @@ class SNPObject:
             # Combine with `chrom` and `pos` mask using logical OR (union of all specified criteria)
             mask_combined = mask_combined | mask_indexes
 
+        if mask is not None:
+            mask_array = np.asarray(mask, dtype=bool).ravel()
+            if mask_array.shape[0] != n_snps:
+                raise ValueError(
+                    f"'mask' must have length equal to the number of SNPs ({n_snps}); "
+                    f"got {mask_array.shape[0]}."
+                )
+            mask_combined = mask_combined | mask_array
+
         # Invert mask if `include` is False
         if not include:
             mask_combined = ~mask_combined
@@ -686,6 +790,79 @@ class SNPObject:
                         snpobj[key] = np.asarray(snpobj[key])[mask_combined]
 
             return snpobj
+
+    def filter_biallelic_variants(
+            self,
+            snv_only: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Keep variants with exactly one alternate allele.
+
+        Args:
+            snv_only (bool, default=True):
+                If True, also require REF and ALT to be single-base alleles.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            **Optional[SNPObject]**:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        if self.variants_ref is None or self.variants_alt is None:
+            raise ValueError("'variants_ref' and 'variants_alt' are required to filter biallelic variants.")
+
+        ref = np.asarray(self.variants_ref).astype(str)
+        alt = np.asarray(self.variants_alt).astype(str)
+        mask = (
+            (ref != "")
+            & (alt != "")
+            & (ref != ".")
+            & (alt != ".")
+            & (np.char.find(alt, ",") < 0)
+        )
+        if snv_only:
+            mask = mask & (np.char.str_len(ref) == 1) & (np.char.str_len(alt) == 1)
+        return self.filter_variants(mask=mask, include=True, inplace=inplace)
+
+    def filter_complete_genotypes(self, inplace: bool = False) -> Optional['SNPObject']:
+        """
+        Keep variants with no missing genotype calls across all samples.
+
+        Missing calls are represented as negative values in ``calldata_gt``.
+        """
+        if self.calldata_gt is None:
+            raise ValueError("Genotype data `calldata_gt` is None.")
+        gt = np.asarray(self.calldata_gt)
+        if gt.ndim == 2:
+            mask = np.all(gt >= 0, axis=1)
+        elif gt.ndim == 3:
+            mask = np.all(gt >= 0, axis=(1, 2))
+        else:
+            raise ValueError("'calldata_gt' must be a 2D or 3D array.")
+        return self.filter_variants(mask=mask, include=True, inplace=inplace)
+
+    def filter_polymorphic_variants(self, inplace: bool = False) -> Optional['SNPObject']:
+        """
+        Keep variants with at least two observed genotype dosages among called samples.
+        """
+        if self.calldata_gt is None:
+            raise ValueError("Genotype data `calldata_gt` is None.")
+        gt = np.asarray(self.calldata_gt)
+        if gt.ndim == 3:
+            called = np.all(gt >= 0, axis=2)
+            dosages = gt.sum(axis=2, dtype=np.int16)
+        elif gt.ndim == 2:
+            called = gt >= 0
+            dosages = gt
+        else:
+            raise ValueError("'calldata_gt' must be a 2D or 3D array.")
+
+        mask = np.zeros(gt.shape[0], dtype=bool)
+        for i in range(gt.shape[0]):
+            observed = dosages[i, called[i]]
+            mask[i] = np.unique(observed).size >= 2
+        return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
     def filter_samples(
             self, 
@@ -801,6 +978,8 @@ class SNPObject:
 
         # Define keys to filter
         keys = ['samples', 'calldata_gt', 'calldata_lai']
+        if self.sample_fid is not None:
+            keys.insert(1, 'sample_fid')
 
         # Apply filtering based on inplace parameter
         if inplace:
@@ -1305,6 +1484,7 @@ class SNPObject:
             calldata_gt = None
 
         # Merge samples if present and compatible, handling duplicates if `force_samples=True`
+        merged_fid: Optional[np.ndarray] = None
         if self.samples is not None and snpobj.samples is not None:
             overlapping_samples = set(self.samples).intersection(set(snpobj.samples))
             if overlapping_samples:
@@ -1319,6 +1499,10 @@ class SNPObject:
                     samples = np.concatenate([self.samples, renamed_samples], axis=0)
             else:
                 samples = np.concatenate([self.samples, snpobj.samples], axis=0)
+
+            fid_left = self.sample_fid if self.sample_fid is not None else self.samples
+            fid_right = snpobj.sample_fid if snpobj.sample_fid is not None else snpobj.samples
+            merged_fid = np.concatenate([np.asarray(fid_left), np.asarray(fid_right)], axis=0)
         else:
             samples = None
 
@@ -1344,12 +1528,14 @@ class SNPObject:
             self.calldata_gt = calldata_gt
             self.calldata_lai = calldata_lai
             self.samples = samples
+            self.sample_fid = merged_fid
             return self
 
         # Create and return a new SNPObject containing the merged samples
         return SNPObject(
             calldata_gt=calldata_gt,
             samples=samples,
+            sample_fid=merged_fid,
             variants_ref=self.variants_ref,
             variants_alt=self.variants_alt,
             variants_chrom=self.variants_chrom,
@@ -1405,6 +1591,18 @@ class SNPObject:
         else:
             calldata_gt = None
 
+        if self.samples is not None and snpobj.samples is not None:
+            if not np.array_equal(self.samples, snpobj.samples):
+                raise ValueError("Cannot concatenate SNPObjects: sample IDs differ or are not in the same order.")
+        elif self.samples is not None or snpobj.samples is not None:
+            raise ValueError("Cannot concatenate SNPObjects: samples metadata is present in only one object.")
+
+        if self.sample_fid is not None and snpobj.sample_fid is not None:
+            if not np.array_equal(self.sample_fid, snpobj.sample_fid):
+                raise ValueError("Cannot concatenate SNPObjects: sample_fid values differ.")
+        elif self.sample_fid is not None or snpobj.sample_fid is not None:
+            raise ValueError("Cannot concatenate SNPObjects: sample_fid metadata is present in only one object.")
+
         # Merge SNP-related attributes if present
         attributes = [
             'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 'variants_id', 'variants_pos', 'variants_qual'
@@ -1451,6 +1649,7 @@ class SNPObject:
             calldata_gt=calldata_gt,
             calldata_lai=calldata_lai,
             samples=self.samples,
+            sample_fid=self.sample_fid,
             variants_ref=merged_attrs['variants_ref'],
             variants_alt=merged_attrs['variants_alt'],
             variants_chrom=merged_attrs['variants_chrom'],
@@ -1460,6 +1659,20 @@ class SNPObject:
             variants_filter_pass=merged_attrs['variants_filter_pass'],
             ancestry_map=self.ancestry_map
         )
+
+    @classmethod
+    def concat_variants(cls, snpobjs: Sequence['SNPObject']) -> 'SNPObject':
+        """
+        Concatenate multiple SNPObjects along the SNP axis.
+
+        All objects must have the same sample order and genotype strand representation.
+        """
+        if len(snpobjs) == 0:
+            raise ValueError("concat_variants requires at least one SNPObject.")
+        merged = snpobjs[0].copy()
+        for snpobj in snpobjs[1:]:
+            merged = merged.concat(snpobj, inplace=False)
+        return merged
 
     def remove_strand_ambiguous_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
@@ -1942,7 +2155,7 @@ class SNPObject:
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
-    def save_bed(self, file: Union[str, Path]) -> None:
+    def save_bed(self, file: Union[str, Path], **kwargs) -> None:
         """
         Save the data stored in `self` to a `.bed` file.
 
@@ -1950,10 +2163,11 @@ class SNPObject:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. It should end with `.bed`. 
                 If the provided path does not have this extension, it will be appended.
+            **kwargs: Additional arguments passed to :class:`snputils.snp.io.write.bed.BEDWriter`.
         """
         from snputils.snp.io.write.bed import BEDWriter
         writer = BEDWriter(snpobj=self, filename=file)
-        writer.write()
+        writer.write(**kwargs)
 
     def save_pgen(self, file: Union[str, Path]) -> None:
         """
@@ -2069,3 +2283,11 @@ class SNPObject:
             missing_ancestries = [anc for anc in unique_ancestries if str(anc) not in self.__ancestry_map]
             if missing_ancestries:
                 warnings.warn(f"Missing ancestries in ancestry_map: {missing_ancestries}")
+        if self.__sample_fid is not None:
+            if self.__samples is None:
+                raise ValueError("'sample_fid' is set but 'samples' is None; both are required together.")
+            if len(self.__sample_fid) != len(self.__samples):
+                raise ValueError(
+                    f"Length mismatch: sample_fid has {len(self.__sample_fid)} entries "
+                    f"but samples has {len(self.__samples)}."
+                )

@@ -577,27 +577,25 @@ class VCFReaderPolars(SNPBaseReader):
             separator=separator,
         )
 
+        selected_columns = field_columns + sample_columns
         try:
-            reader = pl.read_csv_batched(
-                self._filename,
-                comment_prefix="##",
-                has_header=True,
-                separator=detected_separator,
-                columns=selected_column_idxs,
-                schema_overrides=col_dtypes,
-                batch_size=int(chunk_size),
+            reader = (
+                pl.scan_csv(
+                    self._filename,
+                    comment_prefix="##",
+                    has_header=True,
+                    separator=detected_separator,
+                    schema_overrides=col_dtypes,
+                )
+                .select(selected_columns)
+                .collect_batches(chunk_size=int(chunk_size))
             )
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize VCF batched reader for {self._filename}: {exc}") from exc
 
         pending: Optional[pl.DataFrame] = None
 
-        while True:
-            batches = reader.next_batches(1)
-            if not batches:
-                break
-
-            batch = batches[0]
+        for batch in reader:
             if pending is None:
                 pending = batch
             else:

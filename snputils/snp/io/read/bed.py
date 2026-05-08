@@ -186,9 +186,14 @@ class BEDReader(SNPBaseReader):
 
         log.info("Constructing SNPObject")
 
+        fid_col = None
+        if "IID" in fields and "Family ID" in fam.columns:
+            fid_col = fam.get_column("Family ID").to_numpy()
+
         snpobj = SNPObject(
             calldata_gt=genotypes if "GT" in fields else None,
             samples=fam.get_column("IID").to_numpy() if "IID" in fields and "IID" in fam.columns else None,
+            sample_fid=fid_col,
             **{f'variants_{k.lower()}': bim.get_column(v).to_numpy() if v in fields and v in bim.columns else None
                for k, v in {'ref': 'REF', 'alt': 'ALT', 'chrom': '#CHROM', 'id': 'ID', 'pos': 'POS'}.items()}
         )

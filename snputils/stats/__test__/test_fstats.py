@@ -1,5 +1,6 @@
 import numpy as np
 
+from snputils.snp.genobj.snpobj import SNPObject
 from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
 
 
@@ -16,6 +17,32 @@ def _toy_data():
     counts = np.full_like(afs, 20)
     pops = ["A", "B", "C", "D"]
     return afs, counts, pops
+
+
+def test_f2_uses_plink_fid_when_fid_differs_from_iid():
+    gt = np.array(
+        [
+            [0, 0, 2, 2],
+            [0, 0, 2, 2],
+            [1, 1, 1, 1],
+        ],
+        dtype=np.int8,
+    )
+    samples = np.array(["i1", "i2", "i3", "i4"])
+    fids = np.array(["A", "A", "B", "B"])
+    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=fids)
+    explicit = f2(obj, pop1=["A"], pop2=["B"], sample_labels=["A", "A", "B", "B"], apply_correction=False, block_size=2)
+    inferred = f2(obj, pop1=["A"], pop2=["B"], sample_labels=None, apply_correction=False, block_size=2)
+    assert np.isclose(explicit.est.iloc[0], inferred.est.iloc[0], atol=1e-15)
+
+
+def test_f2_ignores_fid_when_same_as_iid():
+    gt = np.array([[0, 1], [1, 0]], dtype=np.int8)
+    samples = np.array(["s0", "s1"])
+    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=samples.copy())
+    res = f2(obj, apply_correction=False, block_size=1)
+    assert res.shape[0] == 1
+    assert {res.pop1.iloc[0], res.pop2.iloc[0]} == {"s0", "s1"}
 
 
 def test_f2_basic():

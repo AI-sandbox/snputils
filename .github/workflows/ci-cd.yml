@@ -13,6 +13,10 @@
 name: Test, Docs & Publish
 
 on:
+  # Run on pushes to the docs branch (verify tests and docs build)
+  push:
+    branches:
+      - docs
   # Run on pull requests to main branch to verify changes
   pull_request:
     branches:
@@ -28,7 +32,7 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name == 'pull_request' || (github.event_name == 'release' && github.event.release.prerelease == true)
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/docs') || (github.event_name == 'release' && github.event.release.prerelease == true)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -66,7 +70,7 @@ jobs:
   build-docs:
     # Only build documentation after tests have passed
     needs: test
-    if: needs.test.result == 'success' && (github.event_name == 'pull_request' || (github.event_name == 'release' && github.event.release.prerelease == true))
+    if: needs.test.result == 'success' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/docs') || (github.event_name == 'release' && github.event.release.prerelease == true))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -89,16 +93,15 @@ jobs:
           python -m pip install '.[docs]'
 
       # Build documentation and verify it builds correctly
-      # PDOC_ALLOW_EXEC=1 allows executing code examples in docstrings
       - name: Build documentation
-        run: PDOC_ALLOW_EXEC=1 pdoc --docformat google --favicon https://snputils.org/su_favicon.png -o docs/ snputils
+        run: sphinx-build -b html docs docs/_build/html
 
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact
         if: github.event_name == 'release'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/
+          path: docs/_build/html
 
   publish:
     needs: [test, build-docs]

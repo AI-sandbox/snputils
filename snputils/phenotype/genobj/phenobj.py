@@ -3,6 +3,8 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
+from snputils._utils.printing import array_shape, format_repr
+
 
 class PhenotypeObject:
     """
@@ -120,6 +122,21 @@ class PhenotypeObject:
         except AttributeError as exc:
             raise KeyError(f"Invalid key: {key}") from exc
 
+    def __repr__(self) -> str:
+        fields = {
+            "phenotype_name": self._phenotype_name,
+            "shape": self.shape,
+            "n_samples": self.n_samples,
+            "trait_type": "quantitative" if self._is_quantitative else "binary",
+        }
+        if not self._is_quantitative:
+            fields["n_cases"] = self.n_cases
+            fields["n_controls"] = self.n_controls
+        return format_repr(self, **fields)
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     @property
     def samples(self) -> List[str]:
         return self._samples
@@ -131,6 +148,10 @@ class PhenotypeObject:
     @property
     def values(self) -> np.ndarray:
         return self._values
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return array_shape(self._values) or (self.n_samples,)
 
     @property
     def y(self) -> np.ndarray:

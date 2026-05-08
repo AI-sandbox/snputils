@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from typing import Union, Sequence, Optional
 
+from snputils._utils.printing import array_shape, format_repr
+
 
 class MultiPhenotypeObject():
     """
@@ -45,6 +47,19 @@ class MultiPhenotypeObject():
         except AttributeError:
             raise KeyError(f'Invalid key: {key}')
 
+    def __repr__(self) -> str:
+        sample_column = None if self.__phen_df.shape[1] == 0 else self.__phen_df.columns[0]
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_samples=self.n_samples,
+            n_phenotypes=self.n_phenotypes,
+            sample_column=sample_column,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     @property
     def phen_df(self) -> pd.DataFrame:
         """
@@ -73,6 +88,26 @@ class MultiPhenotypeObject():
             int: The total number of samples.
         """
         return len(self.phen_df)
+
+    @property
+    def n_phenotypes(self) -> int:
+        """
+        Retrieve `n_phenotypes`.
+
+        Returns:
+            int: Number of phenotype columns, excluding the sample identifier column.
+        """
+        return max(0, self.phen_df.shape[1] - 1)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """
+        Retrieve the shape of the phenotype DataFrame.
+        """
+        phen_shape = array_shape(self.__phen_df)
+        if phen_shape is None:
+            return (self.n_samples, self.n_phenotypes + 1)
+        return phen_shape
 
     def copy(self):
         """

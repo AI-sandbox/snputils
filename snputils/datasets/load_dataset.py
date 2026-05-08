@@ -120,3 +120,8 @@ def load_dataset(
     merge_list_txt.close()
 
     return snpobj
+
+
+# Keep the generated module-style path usable even when package-level
+# ``snputils.datasets.load_dataset`` resolves to this convenience function.
+load_dataset.available_datasets_list = available_datasets_list  # type: ignore[attr-defined]

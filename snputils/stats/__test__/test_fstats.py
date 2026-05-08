@@ -407,3 +407,37 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
     den_sum = f2_unc_sum + within_sum
     expected = num_sum / den_sum
     assert np.isclose(fst_row.est, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_and_f2_pseudohaploid():
+    # A: 2 diploid samples
+    # B: 2 pseudohaploid samples (no hets)
+    gt = np.array([
+        # S0(A) S1(A) S2(B) S3(B)
+        [ 1.0,  0.0,  0.0,  2.0],
+        [ 0.0,  1.0,  2.0,  0.0],
+        [ 2.0,  1.0,  2.0,  2.0],
+    ])
+    samples = np.array(["s0", "s1", "s2", "s3"])
+    labels = np.array(["A", "A", "B", "B"])
+    obj = SNPObject(calldata_gt=gt, samples=samples)
+
+    # 1. Fst
+    res_fst_false = fst(obj, pop1=["A"], pop2=["B"], sample_labels=labels, method="hudson", pseudohaploid=False)
+    res_fst_true = fst(obj, pop1=["A"], pop2=["B"], sample_labels=labels, method="hudson", pseudohaploid=True)
+    
+    # Frequencies are exactly the same (0.5, 0.5, 1.0) for pop B in both cases.
+    # But counts differ: n=4 (False) vs n=2 (True).
+    # Since pi_B uses n/(n-1), it will be larger for n=2.
+    # Therefore, the numerator of Fst (d_xy - 0.5(pi_x + pi_y)) will be smaller.
+    assert res_fst_false.est.iloc[0] != res_fst_true.est.iloc[0]
+    assert res_fst_true.est.iloc[0] < res_fst_false.est.iloc[0]
+
+    # 2. f2
+    res_f2_false = f2(obj, pop1=["A"], pop2=["B"], sample_labels=labels, pseudohaploid=False)
+    res_f2_true = f2(obj, pop1=["A"], pop2=["B"], sample_labels=labels, pseudohaploid=True)
+    
+    # Similarly, f2 uses p*(1-p)/(n-1) correction.
+    # With n=2, correction is larger, so corrected f2 is smaller.
+    assert res_f2_false.est.iloc[0] != res_f2_true.est.iloc[0]
+    assert res_f2_true.est.iloc[0] < res_f2_false.est.iloc[0]

@@ -39,6 +39,7 @@ def aggregate_pop_allele_freq(
     *,
     ancestry: Optional[Union[str, int]] = None,
     calldata_lai: Optional[np.ndarray] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[Any]]:
     """
     Aggregate sample-level genotypes into per-population allele frequencies.
@@ -85,6 +86,16 @@ def aggregate_pop_allele_freq(
         g[g < 0] = np.nan
         alt_counts_per_sample = np.nansum(g, axis=2)
         hap_count_per_sample = 2 - np.sum(np.isnan(g), axis=2)
+
+        if pseudohaploid is not False:
+            n_test = 1000 if pseudohaploid is True else int(pseudohaploid)
+            n_check = min(n_snps, n_test)
+            g_check = alt_counts_per_sample[:n_check, :]
+            # Sample is pseudohaploid if it has no heterozygote calls (alt count == 1)
+            is_pseudohaploid = np.nansum(g_check == 1.0, axis=0) == 0
+            mask = is_pseudohaploid[np.newaxis, :] & (hap_count_per_sample == 2.0)
+            hap_count_per_sample[mask] = 1.0
+            alt_counts_per_sample[mask] /= 2.0
     else:
         # (n_snps, n_samples)
         g = gt.astype(float)
@@ -102,6 +113,15 @@ def aggregate_pop_allele_freq(
             # Diploid dosage-style 2D calls
             hap_count_per_sample = np.where(np.isnan(g), 0.0, 2.0)
             alt_counts_per_sample = np.where(np.isnan(g), 0.0, g)
+
+            if pseudohaploid is not False:
+                n_test = 1000 if pseudohaploid is True else int(pseudohaploid)
+                n_check = min(n_snps, n_test)
+                g_check = g[:n_check, :]
+                is_pseudohaploid = np.nansum(g_check == 1.0, axis=0) == 0
+                mask = is_pseudohaploid[np.newaxis, :] & (hap_count_per_sample == 2.0)
+                hap_count_per_sample[mask] = 1.0
+                alt_counts_per_sample[mask] /= 2.0
 
     afs = np.zeros((n_snps, n_pops), dtype=float)
     counts = np.zeros((n_snps, n_pops), dtype=float)

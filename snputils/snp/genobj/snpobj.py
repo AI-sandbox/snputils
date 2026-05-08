@@ -517,6 +517,7 @@ class SNPObject:
         sample_labels: Optional[Sequence[Any]] = None,
         ancestry: Optional[Union[str, int]] = None,
         laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
         return_counts: bool = False,
         as_dataframe: bool = False,
     ) -> Any:
@@ -530,6 +531,10 @@ class SNPObject:
                 If provided, compute ancestry-masked frequencies using SNP-level LAI.
             laiobj (LocalAncestryObject, optional):
                 Optional LAI object used when `self.calldata_lai` is not set.
+            pseudohaploid (bool or int, default=False):
+                If True, detects pseudo-haploid samples (samples with no heterozygotes in the first 1000 SNPs)
+                and treats them as haploid. If an integer `n` is provided, checks the first `n` SNPs.
+                If False, treats all samples as diploid.
             return_counts (bool, default=False):
                 If True, also return called-allele counts with the same shape as frequencies.
             as_dataframe (bool, default=False):
@@ -582,6 +587,7 @@ class SNPObject:
             sample_labels=labels,
             ancestry=ancestry,
             calldata_lai=calldata_lai,
+            pseudohaploid=pseudohaploid,
         )
 
         if grouped_output:

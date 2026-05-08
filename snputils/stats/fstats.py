@@ -132,6 +132,7 @@ def _aggregate_to_pop_allele_freq(
     ancestry: Optional[Union[str, int]] = None,
     snpobj: Optional[Any] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Convert sample-level genotypes into per-population allele frequency and count matrices.
@@ -158,6 +159,7 @@ def _aggregate_to_pop_allele_freq(
         sample_labels=sample_labels,
         ancestry=ancestry,
         calldata_lai=calldata_lai,
+        pseudohaploid=pseudohaploid,
     )
     return afs, counts, pops
 
@@ -190,6 +192,7 @@ def _prepare_inputs(
     *,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Normalize inputs to allele frequencies, counts, and optional variant metadata.
@@ -210,6 +213,7 @@ def _prepare_inputs(
             ancestry=ancestry,
             snpobj=snpobj,
             laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
         )
         return afs, counts, pops
 
@@ -246,6 +250,7 @@ def f2(
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
     include_self: bool = False,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Compute f2-statistics with block-jackknife standard errors.
@@ -266,11 +271,14 @@ def f2(
         blocks: Optional explicit block id per SNP. If provided, overrides `block_size`.
         ancestry: Optional ancestry code to mask genotypes to a specific ancestry before aggregation. Requires LAI.
         laiobj: Optional `LocalAncestryObject` used to derive SNP-level LAI if it is not already present on the SNPObject.
+        pseudohaploid: If True, detects pseudo-haploid samples (samples with no heterozygotes in the first 1000 SNPs)
+                       and treats them as haploid. If an integer `n` is provided, checks the first `n` SNPs.
+                       If False, treats all samples as diploid.
 
     Returns:
         Pandas DataFrame with columns: pop1, pop2, est, se, z, p, n_blocks, n_snps
     """
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, n_pops = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -355,6 +363,7 @@ def f3(
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Compute f3-statistics f3(target; ref1, ref2) with block-jackknife SE.
@@ -365,8 +374,9 @@ def f3(
     - If `apply_correction` is True, subtract the finite sample term p_t*(1-p_t)/(n_t-1) from the per-SNP product.
         When True, SNPs with n_t<=1 are excluded.
     - If `sample_labels` is omitted for a SNPObject, defaults match ``f2`` (PLINK ``sample_fid`` when FID differs from IID).
+    - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, _ = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -446,14 +456,16 @@ def f4(
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Compute f4-statistics f4(a, b; c, d) with block-jackknife SE.
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+    - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, _ = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -531,6 +543,7 @@ def d_stat(
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Compute D-statistics D(a, b; c, d) as ratio of sums:
@@ -539,8 +552,9 @@ def d_stat(
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+    - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, _ = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -622,6 +636,7 @@ def f4_ratio(
     blocks: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Compute f4-ratio statistics as ratio of two f4-statistics with block-jackknife SE.
@@ -633,11 +648,12 @@ def f4_ratio(
     Notes:
         - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
         - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+        - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     if len(num) != len(den):
         raise ValueError("'num' and 'den' must have the same length")
 
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, _ = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -704,6 +720,7 @@ def fst(
     ancestry: Optional[Union[str, int]] = None,
     laiobj: Optional[Any] = None,
     include_self: bool = False,
+    pseudohaploid: Union[bool, int] = False,
 ) -> pd.DataFrame:
     """
     Pairwise F_ST with delete-one block jackknife SE.
@@ -733,6 +750,7 @@ def fst(
       * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
       * For WC we use expected heterozygosity h_i = 2 p_i (1 - p_i) from allele freqs.
       * SNPs with n<=1 in either pop or with invalid denominators are ignored.
+      * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     method = str(method).strip().lower().replace(" ", "_").replace("-", "_")
     if method in ("wc", "weir", "weir_cockerham", "weir-cockerham"):
@@ -743,7 +761,7 @@ def fst(
         # only raise if it's neither a known alias nor a canonical name
         raise ValueError(f"Unknown method for fst: {method!r}")
 
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj)
+    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, n_pops = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size

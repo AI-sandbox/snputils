@@ -33,8 +33,7 @@ def read_msp(file: Union[str, Path]) -> 'LocalAncestryObject':
             Path to the file to be read. It should end with `.msp` or `.msp.tsv`.
 
     Returns:
-        **LocalAncestryObject:**
-            A LocalAncestryObject instance.
+        LocalAncestryObject: A LocalAncestryObject instance.
     """
     from snputils.ancestry.io.local.read.msp import MSPReader
 

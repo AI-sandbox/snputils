@@ -612,3 +612,8 @@ def _sex_labels_for_samples(
         return [default] * len(samples)
     aligned = _metadata_for_samples(metadata, samples, sample_col=sample_col)
     return aligned[sex_col].fillna(default).astype(str).tolist()
+
+
+# Keep the generated module-style path usable even when package-level
+# ``snputils.datasets.load_dataset`` resolves to this convenience function.
+load_dataset.available_datasets_list = available_datasets_list  # type: ignore[attr-defined]

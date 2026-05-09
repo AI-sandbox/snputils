@@ -54,6 +54,7 @@ class mdPCA:
         Args:
             method (str, default='weighted_cov_pca'): 
                 The PCA method to use for dimensionality reduction. Options include:
+
                 - `'weighted_cov_pca'`: 
                     Simple covariance-based PCA, weighted by sample strengths.
                 - `'regularized_optimization_ils'`: 
@@ -87,6 +88,7 @@ class mdPCA:
                 from the analysis.
             ancestry (int or str, optional): 
                 Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`. The ancestry input can be:
+
                 - An integer (e.g., 0, 1, 2).
                 - A string representation of an integer (e.g., '0', '1').
                 - A string matching one of the ancestry map values (e.g., 'Africa').

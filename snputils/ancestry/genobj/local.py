@@ -8,6 +8,7 @@ from typing import Union, List, Dict, Sequence, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from snputils.snp.genobj.snpobj import SNPObject
 
+from snputils._utils.printing import array_shape, format_repr
 from .base import AncestryObject
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,29 @@ class LocalAncestryObject(AncestryObject):
             setattr(self, key, value)
         except AttributeError:
             raise KeyError(f'Invalid key: {key}')
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_windows=self.n_windows,
+            n_samples=self.n_samples,
+            n_haplotypes=self.n_haplotypes,
+            n_ancestries=self.n_ancestries,
+            has_window_metadata=any(
+                attr is not None
+                for attr in (
+                    self.__window_sizes,
+                    self.__centimorgan_pos,
+                    self.__chromosomes,
+                    self.__physical_pos,
+                )
+            ),
+            has_ancestry_map=self.__ancestry_map is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @property
     def haplotypes(self) -> List[str]:
@@ -287,6 +311,19 @@ class LocalAncestryObject(AncestryObject):
             **int:** The total number of genomic windows.
         """
         return self.__lai.shape[0]
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """
+        Retrieve the shape of the LAI matrix.
+
+        Returns:
+            tuple: `(n_windows, n_haplotypes)`.
+        """
+        lai_shape = array_shape(self.__lai)
+        if lai_shape is None:
+            return (self.n_windows, self.n_haplotypes)
+        return lai_shape
 
     def copy(self) -> 'LocalAncestryObject':
         """

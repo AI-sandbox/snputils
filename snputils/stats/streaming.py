@@ -314,6 +314,7 @@ def allele_freq_stream(
     Args:
         data:
             One of:
+
             - in-memory SNPObject
             - a reader implementing `iter_read(...)`
             - an iterable yielding SNPObject chunks
@@ -326,6 +327,7 @@ def allele_freq_stream(
         laiobj:
             Optional LAI source used to derive SNP-level LAI when missing in chunks.
             Supported inputs:
+
             - in-memory LocalAncestryObject
             - LAI reader implementing `iter_windows(...)`
             - path to an LAI file understood by `snputils.ancestry.io.local.read.LAIReader`

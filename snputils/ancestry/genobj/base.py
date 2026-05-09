@@ -1,6 +1,8 @@
 import abc
 import copy
 
+from snputils._utils.printing import format_repr
+
 
 class AncestryObject(abc.ABC):
     """
@@ -9,6 +11,17 @@ class AncestryObject(abc.ABC):
     def __init__(self, n_samples, n_ancestries) -> None:
         self.__n_samples = n_samples
         self.__n_ancesties = n_ancestries
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_samples=self.n_samples,
+            n_ancestries=self.n_ancestries,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @property
     def n_ancestries(self) -> int:
@@ -29,6 +42,16 @@ class AncestryObject(abc.ABC):
             int: number of sample in the data.
         """
         return self.__n_samples
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """
+        Retrieve the primary ancestry matrix shape.
+
+        Returns:
+            tuple: `(n_samples, n_ancestries)`.
+        """
+        return (self.n_samples, self.n_ancestries)
 
     @property
     def copy(self):

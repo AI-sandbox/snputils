@@ -1,11 +1,29 @@
+from __future__ import annotations
+
 import warnings
-import torch
 import numpy as np
 import copy
-from typing import Tuple, Optional, Union, List
+from typing import TYPE_CHECKING, Tuple, Optional, Union, List
 from sklearn.decomposition import PCA as skPCA 
 
 from snputils.snp.genobj.snpobj import SNPObject
+
+if TYPE_CHECKING:
+    import torch
+
+
+_TORCH_INSTALL_MESSAGE = (
+    "PyTorch-backed PCA requires optional dependency 'torch'. "
+    "Install it with `pip install snputils[torch]` or `pip install torch`."
+)
+
+
+def _require_torch():
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(_TORCH_INSTALL_MESSAGE) from exc
+    return torch
 
 
 def _svd_flip(u, v, u_based_decision=True):
@@ -15,6 +33,8 @@ def _svd_flip(u, v, u_based_decision=True):
     Adjusts the columns of u and the rows of v such that the loadings in the
     columns in u that are largest in absolute value are always positive.
     """
+    torch = _require_torch()
+
     if u_based_decision:
         # columns of u, rows of v
         max_abs_cols = torch.argmax(torch.abs(u), axis=0)
@@ -50,6 +70,8 @@ class TorchPCA:
                 - `'lowrank'`: Low-rank approximation, which provides a faster but approximate solution.
                 Default is 'reduced'.
         """
+        _require_torch()
+
         self.__n_components = n_components
         self.__fitting = fitting
         self.__n_components_ = None
@@ -214,6 +236,8 @@ class TorchPCA:
                 - `S` contains singular values (n_components).
                 - `Vt` has shape (n_components, n_snps) and represents the principal components.
         """
+        torch = _require_torch()
+
         n_samples, n_snps = X.shape
         self.n_components_ = min(self.n_components or min(X.shape), min(X.shape))
 
@@ -275,7 +299,8 @@ class TorchPCA:
         """
         if self.components_ is None or self.mean_ is None:
             raise ValueError("The PCA model must be fitted before calling `transform`.")
-        
+
+        torch = _require_torch()
         self.X_new_ = torch.matmul(X - self.mean_, self.components_.T)
         return self.X_new_
 
@@ -311,7 +336,7 @@ class PCA:
     def __init__(
         self, 
         snpobj: Optional['SNPObject'] = None, 
-        backend: str = 'pytorch', 
+        backend: str = 'sklearn',
         n_components: int = 2, 
         fitting: str = 'full', 
         device: str = 'cpu',
@@ -323,8 +348,8 @@ class PCA:
         Args:
             snpobj (SNPObject, optional): 
                 A SNPObject instance.
-            backend (str, default='pytorch'): 
-                The backend to use (`'sklearn'` or `'pytorch'`). Default is 'pytorch'.
+            backend (str, default='sklearn'):
+                The backend to use (`'sklearn'` or `'pytorch'`). Default is 'sklearn'.
             n_components (int, default=2): 
                 The number of principal components. Default is 2.
             fitting (str, default='full'): 
@@ -343,10 +368,10 @@ class PCA:
                 Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
         """
         self.__snpobj = snpobj
-        self.__backend = backend
+        self.__backend = backend.lower()
         self.__n_components = n_components
         self.__fitting = fitting
-        self.__device = self._process_device_argument(device)
+        self.__device = self._process_device_argument(device) if self.__backend == "pytorch" else device
         self.__average_strands = average_strands
         self.__samples_subset = samples_subset
         self.__snps_subset = snps_subset
@@ -621,6 +646,7 @@ class PCA:
             torch.device: PyTorch device object.
         """
         if isinstance(device, str):
+            torch = _require_torch()
             device_lower = device.lower()
             if device_lower in ['cpu']:
                 return torch.device('cpu')
@@ -638,9 +664,10 @@ class PCA:
                     return torch.device('cpu')
             else:
                 raise ValueError(f"Unknown device type: '{device}'. Please use 'CPU', 'GPU', 'cuda', or 'cuda:<index>'.")
-        elif isinstance(device, torch.device):
-            return device
         else:
+            torch = _require_torch()
+            if isinstance(device, torch.device):
+                return device
             raise TypeError(f"Device must be a string or torch.device, got {type(device)}.")
 
     def _get_data_from_snpobj(
@@ -708,6 +735,7 @@ class PCA:
             X = X[:, snps_subset]
         
         if self.backend == "pytorch":
+            torch = _require_torch()
             print(f"Converting data to PyTorch tensor on device {self.device}")
             X = torch.from_numpy(X).to(self.device)
 

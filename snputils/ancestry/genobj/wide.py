@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import copy
 
+from snputils._utils.printing import array_shape, format_repr
 from .base import AncestryObject
 
 
@@ -106,6 +107,23 @@ class GlobalAncestryObject(AncestryObject):
             setattr(self, key, value)
         except AttributeError:
             raise KeyError(f'Invalid key: {key}')
+
+    def __repr__(self) -> str:
+        return format_repr(
+            self,
+            shape=self.shape,
+            n_samples=self.n_samples,
+            n_snps=self.n_snps,
+            n_ancestries=self.n_ancestries,
+            Q_shape=array_shape(self.__Q),
+            P_shape=array_shape(self.__P),
+            has_sample_ids=self.__samples is not None,
+            has_snp_ids=self.__snps is not None,
+            has_ancestry_labels=self.__ancestries is not None,
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @property
     def Q(self) -> np.ndarray:
@@ -284,6 +302,19 @@ class GlobalAncestryObject(AncestryObject):
             **int:** The total number of unique ancestries.
         """
         return self.__Q.shape[1]
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """
+        Retrieve the shape of the primary Q matrix.
+
+        Returns:
+            tuple: `(n_samples, n_ancestries)`.
+        """
+        Q_shape = array_shape(self.__Q)
+        if Q_shape is None:
+            return (self.n_samples, self.n_ancestries)
+        return Q_shape
 
     def copy(self) -> 'GlobalAncestryObject':
         """

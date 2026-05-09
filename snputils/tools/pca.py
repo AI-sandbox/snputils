@@ -108,7 +108,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
         except ImportError as exc:
             raise ImportError(
                 "PCA backend 'pytorch' requires optional dependency 'torch'. "
-                "Install it with `pip install snputils[gpu]` or `pip install torch`."
+                "Install it with `pip install snputils[torch]` or `pip install torch`."
             ) from exc
 
         from ..processing import PCA

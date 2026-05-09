@@ -13,8 +13,9 @@ class IBDReader:
         A factory class that attempts to detect the IBD file format and returns the corresponding reader.
 
         Supported detections:
-        - Hap-IBD: *.ibd or *.ibd.gz (headerless, 8 columns)
-        - ancIBD: directories with `ch_all.tsv`/`ch*.tsv` or files *.tsv / *.tsv.gz with ancIBD schema
+
+        - Hap-IBD: `.ibd` or `.ibd.gz` files (headerless, 8 columns)
+        - ancIBD: directories with `ch_all.tsv`/`ch*.tsv` or `.tsv` / `.tsv.gz` files with ancIBD schema
         """
         file = Path(file)
         suffixes = [s.lower() for s in file.suffixes]
@@ -43,5 +44,4 @@ class IBDReader:
         # Default to HapIBDReader (most tools use .ibd[.gz])
         from snputils.ibd.io.read.hap_ibd import HapIBDReader
         return HapIBDReader(file)
-
 

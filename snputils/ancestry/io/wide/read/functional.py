@@ -37,8 +37,7 @@ def read_admixture(
             If None, ancestries are not loaded.
 
     Returns:
-            **GlobalAncestryObject:** 
-                A GlobalAncestryObject instance.
+        GlobalAncestryObject: A GlobalAncestryObject instance.
     """
     from snputils.ancestry.io.wide.read.admixture import AdmixtureReader
 

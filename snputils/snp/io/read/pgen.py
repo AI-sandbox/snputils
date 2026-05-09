@@ -51,8 +51,8 @@ class PGENReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            sum_strands: If True, maternal and paternal strands are combined into a single `int8` array with values `{0, 1, 2`}. 
-                If False, strands are stored separately as an `int8` array with values `{0, 1}` for each strand. 
+            sum_strands: If True, maternal and paternal strands are combined into a single `int8` array with values `{0, 1, 2}`.
+                If False, strands are stored separately as an `int8` array with values `{0, 1}` for each strand.
                 Note: With the pgenlib backend, `False` uses a temporary `int32` allele buffer.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.

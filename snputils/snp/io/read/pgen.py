@@ -9,6 +9,10 @@ import pgenlib as pg
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
+from snputils.snp.io.read._pgenlib import (
+    estimate_separate_strands_peak_bytes,
+    read_separate_strands,
+)
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +53,7 @@ class PGENReader(SNPBaseReader):
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
             sum_strands: If True, maternal and paternal strands are combined into a single `int8` array with values `{0, 1, 2`}. 
                 If False, strands are stored separately as an `int8` array with values `{0, 1}` for each strand. 
-                Note: With the pgenlib backend, `False` uses `~8×` more RAM, though `calldata_gt` is only `2×` larger.
+                Note: With the pgenlib backend, `False` uses a temporary `int32` allele buffer.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -222,15 +226,21 @@ class PGENReader(SNPBaseReader):
 
             # required arrays: variant_idxs + sample_idxs + genotypes
             if not sum_strands:
-                required_ram = (num_samples + num_variants + num_variants * 2 * num_samples) * 4
+                required_ram = (
+                    (num_samples + num_variants) * 4
+                    + estimate_separate_strands_peak_bytes(num_variants, num_samples)
+                )
             else:
                 required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
             log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
             if not sum_strands:
-                genotypes = np.empty((num_variants, 2 * num_samples), dtype=np.int32)  # cannot use int8 because of pgenlib
-                pgen_reader.read_alleles_list(variant_idxs, genotypes)
-                genotypes = genotypes.astype(np.int8).reshape((num_variants, num_samples, 2))
+                genotypes = read_separate_strands(
+                    pgen_reader,
+                    variant_idxs,
+                    num_variants,
+                    num_samples,
+                )
             else:
                 genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                 pgen_reader.read_list(variant_idxs, genotypes)

@@ -30,13 +30,16 @@ class SNPObject:
         variants_ref: Optional[np.ndarray] = None,
         variants_alt: Optional[np.ndarray] = None,
         variants_chrom: Optional[np.ndarray] = None,
+        variants_cm: Optional[np.ndarray] = None,
         variants_filter_pass: Optional[np.ndarray] = None,
         variants_id: Optional[np.ndarray] = None,
         variants_pos: Optional[np.ndarray] = None,
         variants_qual: Optional[np.ndarray] = None,
+        variants_info: Optional[np.ndarray] = None,
         calldata_lai: Optional[np.ndarray] = None,
         ancestry_map: Optional[Dict[str, str]] = None,
         sample_fid: Optional[np.ndarray] = None,
+        sample_sex: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
@@ -50,12 +53,16 @@ class SNPObject:
                 PLINK-style family ID per sample (same order as ``samples``), for example population labels
                 in column 1 of a ``.fam`` file. When present and not identical to ``samples``, f-statistics
                 use these values as default group labels if ``sample_labels`` is omitted.
+            sample_sex (array of shape (n_samples,), optional):
+                PLINK-style sex code per sample, aligned with ``samples``.
             variants_ref (array of shape (n_snps,), optional): 
                 An array containing the reference allele for each SNP.
             variants_alt (array of shape (n_snps,), optional): 
                 An array containing the alternate allele for each SNP.
             variants_chrom (array of shape (n_snps,), optional): 
                 An array containing the chromosome for each SNP.
+            variants_cm (array of shape (n_snps,), optional):
+                An array containing the genetic-map position in centimorgans for each SNP.
             variants_filter_pass (array of shape (n_snps,), optional): 
                 An array indicating whether each SNP passed control checks.
             variants_id (array of shape (n_snps,), optional): 
@@ -64,6 +71,8 @@ class SNPObject:
                 An array containing the chromosomal positions for each SNP.
             variants_qual (array of shape (n_snps,), optional): 
                 An array containing the Phred-scaled quality score for each SNP.
+            variants_info (array of shape (n_snps,), optional):
+                An array containing VCF/PVAR INFO column values for each SNP.
             calldata_lai (array, optional): 
                 An array containing the ancestry for each SNP. This array can be either 2D with shape
                 `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
@@ -75,13 +84,16 @@ class SNPObject:
         self.__variants_ref = variants_ref
         self.__variants_alt = variants_alt
         self.__variants_chrom = variants_chrom
+        self.__variants_cm = variants_cm
         self.__variants_filter_pass = variants_filter_pass
         self.__variants_id = variants_id
         self.__variants_pos = variants_pos
         self.__variants_qual = variants_qual
+        self.__variants_info = variants_info
         self.__calldata_lai = calldata_lai
         self.__ancestry_map = ancestry_map
         self.__sample_fid = None if sample_fid is None else np.asarray(sample_fid)
+        self.__sample_sex = None if sample_sex is None else np.asarray(sample_sex)
 
         self._sanity_check()
 
@@ -119,10 +131,12 @@ class SNPObject:
                     self.__variants_ref,
                     self.__variants_alt,
                     self.__variants_chrom,
+                    self.__variants_cm,
                     self.__variants_filter_pass,
                     self.__variants_id,
                     self.__variants_pos,
                     self.__variants_qual,
+                    self.__variants_info,
                 )
             ),
             has_ancestry_map=self.__ancestry_map is not None,
@@ -189,6 +203,15 @@ class SNPObject:
                 f"Length mismatch after updating samples: sample_fid has {len(self.__sample_fid)} "
                 f"entries but samples has {len(self.__samples)}."
             )
+        if (
+            self.__sample_sex is not None
+            and self.__samples is not None
+            and len(self.__sample_sex) != len(self.__samples)
+        ):
+            raise ValueError(
+                f"Length mismatch after updating samples: sample_sex has {len(self.__sample_sex)} "
+                f"entries but samples has {len(self.__samples)}."
+            )
 
     @property
     def sample_fid(self) -> Optional[np.ndarray]:
@@ -204,6 +227,23 @@ class SNPObject:
             if len(self.__sample_fid) != len(self.__samples):
                 raise ValueError(
                     f"Length mismatch: sample_fid has {len(self.__sample_fid)} entries "
+                    f"but samples has {len(self.__samples)}."
+                )
+
+    @property
+    def sample_sex(self) -> Optional[np.ndarray]:
+        """
+        PLINK sex code per sample, aligned with ``samples``.
+        """
+        return self.__sample_sex
+
+    @sample_sex.setter
+    def sample_sex(self, x: Optional[Union[List, np.ndarray]]):
+        self.__sample_sex = None if x is None else np.asarray(x)
+        if self.__sample_sex is not None and self.__samples is not None:
+            if len(self.__sample_sex) != len(self.__samples):
+                raise ValueError(
+                    f"Length mismatch: sample_sex has {len(self.__sample_sex)} entries "
                     f"but samples has {len(self.__samples)}."
                 )
 
@@ -257,6 +297,23 @@ class SNPObject:
         Update `variants_chrom`.
         """
         self.__variants_chrom = x
+
+    @property
+    def variants_cm(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `variants_cm`.
+
+        Returns:
+            **array of shape (n_snps,):** An array containing the genetic-map position in centimorgans for each SNP.
+        """
+        return self.__variants_cm
+
+    @variants_cm.setter
+    def variants_cm(self, x: np.ndarray):
+        """
+        Update `variants_cm`.
+        """
+        self.__variants_cm = x
 
     @property
     def variants_filter_pass(self) -> Optional[np.ndarray]:
@@ -325,6 +382,23 @@ class SNPObject:
         Update `variants_qual`.
         """
         self.__variants_qual = x
+
+    @property
+    def variants_info(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `variants_info`.
+
+        Returns:
+            **array of shape (n_snps,):** An array containing VCF/PVAR INFO column values for each SNP.
+        """
+        return self.__variants_info
+
+    @variants_info.setter
+    def variants_info(self, x: np.ndarray):
+        """
+        Update `variants_info`.
+        """
+        self.__variants_info = x
 
     @property
     def calldata_lai(self) -> Optional[np.ndarray]:
@@ -396,10 +470,12 @@ class SNPObject:
             self.__variants_ref,
             self.__variants_alt,
             self.__variants_chrom,
+            self.__variants_cm,
             self.__variants_filter_pass,
             self.__variants_id,
             self.__variants_pos,
             self.__variants_qual,
+            self.__variants_info,
             self.__calldata_lai
         ]
 
@@ -771,8 +847,8 @@ class SNPObject:
 
         # Define keys to filter
         keys = [
-            'calldata_gt', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 
-            'variants_id', 'variants_pos', 'variants_qual', 'calldata_lai'
+            'calldata_gt', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
+            'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai'
         ]
 
         # Apply filtering based on inplace parameter
@@ -982,51 +1058,64 @@ class SNPObject:
 
             ordered_indices = np.asarray(ordered_list, dtype=int)
 
-        # Define keys to filter
-        keys = ['samples', 'calldata_gt', 'calldata_lai']
-        if self.sample_fid is not None:
-            keys.insert(1, 'sample_fid')
+        def subset_sample_axis(key: str, value: np.ndarray) -> np.ndarray:
+            arr = np.asarray(value)
+            if ordered_indices is not None:
+                if key == 'calldata_lai' and arr.ndim == 2:
+                    # Haplotype-aware reordering for 2D LAI (n_snps, n_samples*2)
+                    hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
+                    return arr[:, hap_idx]
+                if arr.ndim > 1:
+                    return arr[:, ordered_indices, ...]
+                return arr[ordered_indices]
+
+            if arr.ndim > 1:
+                return arr[:, mask_combined, ...]
+            return arr[mask_combined]
+
+        new_samples = (
+            subset_sample_axis('samples', self.samples)
+            if self.samples is not None
+            else None
+        )
+        new_sample_fid = (
+            subset_sample_axis('sample_fid', self.sample_fid)
+            if self.sample_fid is not None
+            else None
+        )
+        new_sample_sex = (
+            subset_sample_axis('sample_sex', self.sample_sex)
+            if self.sample_sex is not None
+            else None
+        )
+        data_updates = {
+            key: subset_sample_axis(key, self[key])
+            for key in ['calldata_gt', 'calldata_lai']
+            if self[key] is not None
+        }
 
         # Apply filtering based on inplace parameter
         if inplace:
-            for key in keys:
-                if self[key] is not None:
-                    arr = np.asarray(self[key])
-                    if ordered_indices is not None:
-                        if key == 'calldata_lai' and arr.ndim == 2:
-                            # Haplotype-aware reordering for 2D LAI (n_snps, n_samples*2)
-                            hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
-                            self[key] = arr[:, hap_idx]
-                        elif arr.ndim > 1:
-                            self[key] = arr[:, ordered_indices, ...]
-                        else:
-                            self[key] = arr[ordered_indices]
-                    else:
-                        if arr.ndim > 1:
-                            self[key] = arr[:, mask_combined, ...]
-                        else:
-                            self[key] = arr[mask_combined]
-
+            self.sample_fid = None
+            self.sample_sex = None
+            if new_samples is not None:
+                self.samples = new_samples
+            self.sample_fid = new_sample_fid
+            self.sample_sex = new_sample_sex
+            for key, value in data_updates.items():
+                self[key] = value
             return None
         else:
             # Create A new `SNPObject` with filtered data
             snpobj = self.copy()
-            for key in keys:
-                if snpobj[key] is not None:
-                    arr = np.asarray(snpobj[key])
-                    if ordered_indices is not None:
-                        if key == 'calldata_lai' and arr.ndim == 2:
-                            hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
-                            snpobj[key] = arr[:, hap_idx]
-                        elif arr.ndim > 1:
-                            snpobj[key] = arr[:, ordered_indices, ...]
-                        else:
-                            snpobj[key] = arr[ordered_indices]
-                    else:
-                        if arr.ndim > 1:
-                            snpobj[key] = arr[:, mask_combined, ...]
-                        else:
-                            snpobj[key] = arr[mask_combined]
+            snpobj.sample_fid = None
+            snpobj.sample_sex = None
+            if new_samples is not None:
+                snpobj.samples = new_samples
+            snpobj.sample_fid = new_sample_fid
+            snpobj.sample_sex = new_sample_sex
+            for key, value in data_updates.items():
+                snpobj[key] = value
             return snpobj
 
     def detect_chromosome_format(self) -> str:
@@ -1491,6 +1580,7 @@ class SNPObject:
 
         # Merge samples if present and compatible, handling duplicates if `force_samples=True`
         merged_fid: Optional[np.ndarray] = None
+        merged_sex: Optional[np.ndarray] = None
         if self.samples is not None and snpobj.samples is not None:
             overlapping_samples = set(self.samples).intersection(set(snpobj.samples))
             if overlapping_samples:
@@ -1509,6 +1599,18 @@ class SNPObject:
             fid_left = self.sample_fid if self.sample_fid is not None else self.samples
             fid_right = snpobj.sample_fid if snpobj.sample_fid is not None else snpobj.samples
             merged_fid = np.concatenate([np.asarray(fid_left), np.asarray(fid_right)], axis=0)
+            if self.sample_sex is not None or snpobj.sample_sex is not None:
+                sex_left = (
+                    self.sample_sex
+                    if self.sample_sex is not None
+                    else np.repeat("0", len(self.samples))
+                )
+                sex_right = (
+                    snpobj.sample_sex
+                    if snpobj.sample_sex is not None
+                    else np.repeat("0", len(snpobj.samples))
+                )
+                merged_sex = np.concatenate([np.asarray(sex_left), np.asarray(sex_right)], axis=0)
         else:
             samples = None
 
@@ -1533,8 +1635,11 @@ class SNPObject:
         if inplace:
             self.calldata_gt = calldata_gt
             self.calldata_lai = calldata_lai
+            self.sample_fid = None
+            self.sample_sex = None
             self.samples = samples
             self.sample_fid = merged_fid
+            self.sample_sex = merged_sex
             return self
 
         # Create and return a new SNPObject containing the merged samples
@@ -1542,13 +1647,16 @@ class SNPObject:
             calldata_gt=calldata_gt,
             samples=samples,
             sample_fid=merged_fid,
+            sample_sex=merged_sex,
             variants_ref=self.variants_ref,
             variants_alt=self.variants_alt,
             variants_chrom=self.variants_chrom,
+            variants_cm=self.variants_cm,
             variants_filter_pass=self.variants_filter_pass,
             variants_id=self.variants_id,
             variants_pos=self.variants_pos,
             variants_qual=self.variants_qual,
+            variants_info=self.variants_info,
             calldata_lai=calldata_lai,
             ancestry_map=self.ancestry_map
         )
@@ -1609,9 +1717,15 @@ class SNPObject:
         elif self.sample_fid is not None or snpobj.sample_fid is not None:
             raise ValueError("Cannot concatenate SNPObjects: sample_fid metadata is present in only one object.")
 
+        merged_sample_sex = self.sample_sex if self.sample_sex is not None else snpobj.sample_sex
+        if self.sample_sex is not None and snpobj.sample_sex is not None:
+            if not np.array_equal(self.sample_sex, snpobj.sample_sex):
+                raise ValueError("Cannot concatenate SNPObjects: sample_sex values differ.")
+
         # Merge SNP-related attributes if present
         attributes = [
-            'variants_ref', 'variants_alt', 'variants_chrom', 'variants_filter_pass', 'variants_id', 'variants_pos', 'variants_qual'
+            'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
+            'variants_id', 'variants_pos', 'variants_qual', 'variants_info'
         ]
         merged_attrs = {}
         for attr in attributes:
@@ -1646,6 +1760,7 @@ class SNPObject:
         if inplace:
             self.calldata_gt = calldata_gt
             self.calldata_lai = calldata_lai
+            self.sample_sex = merged_sample_sex
             for attr in attributes:
                 self[attr] = merged_attrs[attr]
             return self
@@ -1656,12 +1771,15 @@ class SNPObject:
             calldata_lai=calldata_lai,
             samples=self.samples,
             sample_fid=self.sample_fid,
+            sample_sex=merged_sample_sex,
             variants_ref=merged_attrs['variants_ref'],
             variants_alt=merged_attrs['variants_alt'],
             variants_chrom=merged_attrs['variants_chrom'],
+            variants_cm=merged_attrs['variants_cm'],
             variants_id=merged_attrs['variants_id'],
             variants_pos=merged_attrs['variants_pos'],
             variants_qual=merged_attrs['variants_qual'],
+            variants_info=merged_attrs['variants_info'],
             variants_filter_pass=merged_attrs['variants_filter_pass'],
             ancestry_map=self.ancestry_map
         )
@@ -1965,6 +2083,9 @@ class SNPObject:
                 self.variants_filter_pass[self.variants_filter_pass == ''] = '.'
             if self.variants_id is not None:
                 self.variants_id[self.variants_id == ''] = '.'
+            if self.variants_info is not None:
+                self.variants_info = self.variants_info.astype(str)
+                self.variants_info[(self.variants_info == '') | (self.variants_info == 'nan')] = '.'
             return self
         else:
             snpobj = self.copy()
@@ -1981,6 +2102,9 @@ class SNPObject:
                 snpobj.variants_filter_pass[snpobj.variants_filter_pass == ''] = '.'
             if snpobj.variants_id is not None:
                 snpobj.variants_id[snpobj.variants_id == ''] = '.'
+            if snpobj.variants_info is not None:
+                snpobj.variants_info = snpobj.variants_info.astype(str)
+                snpobj.variants_info[(snpobj.variants_info == '') | (snpobj.variants_info == 'nan')] = '.'
             return snpobj
 
     def convert_to_window_level(
@@ -2161,7 +2285,14 @@ class SNPObject:
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
-    def save_bed(self, file: Union[str, Path], **kwargs) -> None:
+    def save_bed(
+        self,
+        file: Union[str, Path],
+        rename_missing_values: bool = True,
+        before: Union[int, float, str] = -1,
+        after: Union[int, float, str] = '.',
+        sample_phenotype: Optional[Union[np.ndarray, Sequence[Union[str, int, float]], str, int, float]] = None,
+    ) -> None:
         """
         Save the data stored in `self` to a `.bed` file.
 
@@ -2169,11 +2300,23 @@ class SNPObject:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. It should end with `.bed`. 
                 If the provided path does not have this extension, it will be appended.
-            **kwargs: Additional arguments passed to :class:`snputils.snp.io.write.bed.BEDWriter`.
+            rename_missing_values (bool, optional):
+                If True, renames potential missing values in `calldata_gt` before writing.
+            before (int, float, or str, default=-1):
+                The current representation of missing values in `calldata_gt`.
+            after (int, float, or str, default='.'):
+                The value that will replace `before`.
+            sample_phenotype (optional):
+                PLINK phenotype value per sample, or a scalar used for all samples.
         """
         from snputils.snp.io.write.bed import BEDWriter
         writer = BEDWriter(snpobj=self, filename=file)
-        writer.write(**kwargs)
+        writer.write(
+            rename_missing_values=rename_missing_values,
+            before=before,
+            after=after,
+            sample_phenotype=sample_phenotype,
+        )
 
     def save_pgen(self, file: Union[str, Path]) -> None:
         """
@@ -2295,5 +2438,13 @@ class SNPObject:
             if len(self.__sample_fid) != len(self.__samples):
                 raise ValueError(
                     f"Length mismatch: sample_fid has {len(self.__sample_fid)} entries "
+                    f"but samples has {len(self.__samples)}."
+                )
+        if self.__sample_sex is not None:
+            if self.__samples is None:
+                raise ValueError("'sample_sex' is set but 'samples' is None; both are required together.")
+            if len(self.__sample_sex) != len(self.__samples):
+                raise ValueError(
+                    f"Length mismatch: sample_sex has {len(self.__sample_sex)} entries "
                     f"but samples has {len(self.__samples)}."
                 )

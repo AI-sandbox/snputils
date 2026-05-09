@@ -30,10 +30,10 @@ class BEDReader(SNPBaseReader):
 
         Args:
             fields (str, None, or list of str, optional): Fields to extract data for that should be included in the returned SNPObject.
-                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'ID', 'POS'.
+                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS'.
                 To extract all fields, set fields to None. Defaults to None.
             exclude_fields (str, None, or list of str, optional): Fields to exclude from the returned SNPObject.
-                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'ID', 'POS'.
+                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS'.
                 To exclude no fields, set exclude_fields to None. Defaults to None.
             sample_ids: List of sample IDs to read. If None and sample_idxs is None, all samples are read.
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
@@ -61,7 +61,7 @@ class BEDReader(SNPBaseReader):
         if isinstance(exclude_fields, str):
             exclude_fields = [exclude_fields]
 
-        fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "ID", "POS"]
+        fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
         only_read_bed = fields == ["GT"] and variant_idxs is None and sample_idxs is None
@@ -189,13 +189,17 @@ class BEDReader(SNPBaseReader):
         fid_col = None
         if "IID" in fields and "Family ID" in fam.columns:
             fid_col = fam.get_column("Family ID").to_numpy()
+        sex_col = None
+        if "IID" in fields and "Sex code" in fam.columns:
+            sex_col = fam.get_column("Sex code").to_numpy()
 
         snpobj = SNPObject(
             calldata_gt=genotypes if "GT" in fields else None,
             samples=fam.get_column("IID").to_numpy() if "IID" in fields and "IID" in fam.columns else None,
             sample_fid=fid_col,
+            sample_sex=sex_col,
             **{f'variants_{k.lower()}': bim.get_column(v).to_numpy() if v in fields and v in bim.columns else None
-               for k, v in {'ref': 'REF', 'alt': 'ALT', 'chrom': '#CHROM', 'id': 'ID', 'pos': 'POS'}.items()}
+               for k, v in {'ref': 'REF', 'alt': 'ALT', 'chrom': '#CHROM', 'cm': 'CM', 'id': 'ID', 'pos': 'POS'}.items()}
         )
 
         log.info("Finished constructing SNPObject")

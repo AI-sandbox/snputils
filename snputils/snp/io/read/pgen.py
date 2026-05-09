@@ -38,10 +38,10 @@ class PGENReader(SNPBaseReader):
 
         Args:
             fields (str, None, or list of str, optional): Fields to extract data for that should be included in the returned SNPObject.
-                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'ID', 'POS', 'FILTER', 'QUAL'.
+                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS', 'FILTER', 'QUAL', 'INFO'.
                 To extract all fields, set fields to None. Defaults to None.
             exclude_fields (str, None, or list of str, optional): Fields to exclude from the returned SNPObject.
-                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'ID', 'POS', 'FILTER', 'QUAL'.
+                Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS', 'FILTER', 'QUAL', 'INFO'.
                 To exclude no fields, set exclude_fields to None. Defaults to None.
             sample_ids: List of sample IDs to read. If None and sample_idxs is None, all samples are read.
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
@@ -69,7 +69,7 @@ class PGENReader(SNPBaseReader):
         if isinstance(exclude_fields, str):
             exclude_fields = [exclude_fields]
 
-        fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "ID", "POS", "FILTER", "QUAL"]
+        fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS", "FILTER", "QUAL", "INFO"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
         only_read_pgen = fields == ["GT"] and variant_idxs is None and sample_idxs is None
@@ -129,10 +129,14 @@ class PGENReader(SNPBaseReader):
                 'new_columns': None if pvar_has_header else header,
                 'schema_overrides': {
                     "#CHROM": pl.String,
+                    "CM": pl.Float64,
                     "POS": pl.UInt32,
                     "ID": pl.String,
                     "REF": pl.String,
                     "ALT": pl.String,
+                    "QUAL": pl.String,
+                    "FILTER": pl.String,
+                    "INFO": pl.String,
                 },
                 'null_values': ["NA"],
             }
@@ -186,6 +190,16 @@ class PGENReader(SNPBaseReader):
                 separator=separator,
                 has_header=psam_has_header,
                 new_columns=None if psam_has_header else ["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
+                schema_overrides={
+                    "#FID": pl.String,
+                    "FID": pl.String,
+                    "#IID": pl.String,
+                    "IID": pl.String,
+                    "PAT": pl.String,
+                    "MAT": pl.String,
+                    "SEX": pl.String,
+                    "PHENO1": pl.String,
+                },
                 null_values=["NA"],
             ).with_row_index()
             if "#IID" in psam.columns:
@@ -242,14 +256,18 @@ class PGENReader(SNPBaseReader):
 
         fid_col = None
         if "IID" in fields and "FID" in psam.columns:
-            fid_col = psam.get_column("FID").to_numpy()
+            fid_col = psam.get_column("FID").fill_null("NA").cast(pl.String).to_numpy()
+        sex_col = None
+        if "IID" in fields and "SEX" in psam.columns:
+            sex_col = psam.get_column("SEX").fill_null("NA").cast(pl.String).to_numpy()
 
         snpobj = SNPObject(
             calldata_gt=genotypes if "GT" in fields else None,
             samples=psam.get_column("IID").to_numpy() if "IID" in fields and "IID" in psam.columns else None,
             sample_fid=fid_col,
+            sample_sex=sex_col,
             **{f'variants_{k.lower()}': pvar.get_column(v).to_numpy() if v in fields and v in pvar.columns else None
-               for k, v in {'ref': 'REF', 'alt': 'ALT', 'chrom': '#CHROM', 'id': 'ID', 'pos': 'POS', 'filter_pass': 'FILTER', 'qual': 'QUAL'}.items()}
+               for k, v in {'ref': 'REF', 'alt': 'ALT', 'chrom': '#CHROM', 'cm': 'CM', 'id': 'ID', 'pos': 'POS', 'filter_pass': 'FILTER', 'qual': 'QUAL', 'info': 'INFO'}.items()}
         )
 
         log.info("Finished constructing SNPObject")
@@ -312,10 +330,14 @@ class PGENReader(SNPBaseReader):
             "new_columns": None if pvar_has_header else header,
             "schema_overrides": {
                 "#CHROM": pl.String,
+                "CM": pl.Float64,
                 "POS": pl.UInt32,
                 "ID": pl.String,
                 "REF": pl.String,
                 "ALT": pl.String,
+                "QUAL": pl.String,
+                "FILTER": pl.String,
+                "INFO": pl.String,
             },
             "null_values": ["NA"],
         }

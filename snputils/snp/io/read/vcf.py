@@ -460,6 +460,7 @@ class VCFReaderPolars(SNPBaseReader):
             variants_id=vcf["ID"].to_numpy() if "ID" in field_columns else np.array([]),
             variants_pos=vcf["POS"].to_numpy() if "POS" in field_columns else np.array([]),
             variants_qual=vcf["QUAL"].to_numpy() if "QUAL" in field_columns else np.array([]),
+            variants_info=vcf["INFO"].to_numpy() if "INFO" in field_columns else np.array([]),
         )
 
     def read(self,
@@ -558,6 +559,10 @@ class VCFReaderPolars(SNPBaseReader):
         exclude_fields: Optional[List[str]] = None,
         region: Optional[str] = None,
         samples: Optional[List[str]] = None,
+        sample_ids: Optional[List[str]] = None,
+        sample_idxs: Optional[np.ndarray] = None,
+        variant_ids: Optional[np.ndarray] = None,
+        variant_idxs: Optional[np.ndarray] = None,
         sum_strands: Optional[bool] = False,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
@@ -569,15 +574,37 @@ class VCFReaderPolars(SNPBaseReader):
             raise ValueError("chunk_size must be >= 1.")
         if region is not None:
             raise NotImplementedError("VCFReaderPolars.iter_read does not support `region` yet.")
+        if samples is not None and (sample_ids is not None or sample_idxs is not None):
+            raise ValueError("Only one of samples, sample_ids, and sample_idxs can be specified.")
+        if sample_idxs is not None and sample_ids is not None:
+            raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
+        if variant_idxs is not None and variant_ids is not None:
+            raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
 
-        field_columns, sample_columns, selected_column_idxs, col_dtypes, detected_separator = self._resolve_columns(
+        if samples is not None:
+            selected_samples = samples
+        elif sample_idxs is not None:
+            selected_samples = [int(idx) for idx in np.asarray(sample_idxs).ravel()]
+        else:
+            selected_samples = None if sample_ids is None else list(np.asarray(sample_ids).ravel())
+
+        field_columns, sample_columns, _, col_dtypes, detected_separator = self._resolve_columns(
             fields=fields,
             exclude_fields=exclude_fields,
-            samples=samples,
+            samples=selected_samples,
             separator=separator,
         )
 
         selected_columns = field_columns + sample_columns
+        filter_columns = []
+        chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
+        if variant_ids is not None:
+            filter_columns.extend(["ID", "POS", "REF", "ALT"])
+            if chrom_column is not None:
+                filter_columns.append(chrom_column)
+        scan_columns = list(dict.fromkeys(selected_columns + [col for col in filter_columns if col in col_dtypes]))
+        wanted_variant_ids = None if variant_ids is None else np.asarray(variant_ids, dtype=str).ravel()
+        wanted_variant_idxs = None if variant_idxs is None else np.asarray(variant_idxs, dtype=np.uint64).ravel()
         try:
             reader = (
                 pl.scan_csv(
@@ -587,15 +614,41 @@ class VCFReaderPolars(SNPBaseReader):
                     separator=detected_separator,
                     schema_overrides=col_dtypes,
                 )
-                .select(selected_columns)
+                .select(scan_columns)
                 .collect_batches(chunk_size=int(chunk_size))
             )
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize VCF batched reader for {self._filename}: {exc}") from exc
 
         pending: Optional[pl.DataFrame] = None
+        row_offset = 0
 
         for batch in reader:
+            original_height = batch.height
+            if wanted_variant_idxs is not None:
+                row_idxs = np.arange(row_offset, row_offset + original_height, dtype=np.uint64)
+                batch = batch.filter(np.isin(row_idxs, wanted_variant_idxs))
+            row_offset += original_height
+
+            if wanted_variant_ids is not None and batch.height > 0:
+                id_expr = pl.col("ID").cast(pl.Utf8).is_in(wanted_variant_ids)
+                if chrom_column is not None and all(col in batch.columns for col in (chrom_column, "POS", "REF", "ALT")):
+                    computed_id_expr = pl.concat_str(
+                        [
+                            pl.col(chrom_column).cast(pl.Utf8),
+                            pl.col("POS").cast(pl.Utf8),
+                            pl.col("REF").cast(pl.Utf8),
+                            pl.col("ALT").cast(pl.Utf8),
+                        ],
+                        separator=":",
+                    ).is_in(wanted_variant_ids)
+                    batch = batch.filter(id_expr | computed_id_expr)
+                else:
+                    batch = batch.filter(id_expr)
+
+            if batch.height == 0:
+                continue
+
             if pending is None:
                 pending = batch
             else:

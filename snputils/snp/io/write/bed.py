@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Union
 
 from snputils.snp.genobj import SNPObject
+from snputils.snp.io.write._plink import coerce_sex_codes
 
 log = logging.getLogger(__name__)
 
@@ -27,8 +28,6 @@ class BEDWriter:
             rename_missing_values: bool = True, 
             before: Union[int, float, str] = -1, 
             after: Union[int, float, str] = '.',
-            sample_fid: Optional[Union[np.ndarray, Sequence[str]]] = None,
-            sample_sex: Optional[Union[np.ndarray, Sequence[Union[str, int]]]] = None,
             sample_phenotype: Optional[Union[np.ndarray, Sequence[Union[str, int, float]], str, int, float]] = None,
         ):
         """
@@ -43,10 +42,6 @@ class BEDWriter:
                 Default is -1.
             after (int, float, or str, default='.'): 
                 The value that will replace `before`. Default is '.'.
-            sample_fid (optional): PLINK Family ID per sample (same order as ``snpobj.samples``).
-                If None, uses ``snpobj.sample_fid`` when set; otherwise writes ``samples`` as both FID and IID.
-            sample_sex (optional): PLINK sex code per sample. Accepted values include ``1``/``M``/``male``,
-                ``2``/``F``/``female``, and ``0``/unknown. Defaults to ``0`` for all samples.
             sample_phenotype (optional): PLINK phenotype value per sample, or a scalar used for all samples.
                 Defaults to ``-9`` for all samples.
         """
@@ -113,21 +108,21 @@ class BEDWriter:
         # Fill .fam file
         fam_file = pd.DataFrame(columns=['fid', 'iid', 'father', 'mother', 'gender', 'trait'])
         fam_file['iid'] = self.__snpobj.samples
-        fid = sample_fid
-        if fid is None:
-            fid = getattr(self.__snpobj, "sample_fid", None)
+        fid = getattr(self.__snpobj, "sample_fid", None)
         if fid is None:
             fam_file['fid'] = self.__snpobj.samples
         else:
             fid_arr = np.asarray(fid)
             if fid_arr.shape[0] != len(self.__snpobj.samples):
                 raise ValueError(
-                    f"sample_fid length ({fid_arr.shape[0]}) must match number of samples ({len(self.__snpobj.samples)})."
+                    f"snpobj.sample_fid length ({fid_arr.shape[0]}) must match number of samples "
+                    f"({len(self.__snpobj.samples)})."
                 )
             fam_file['fid'] = fid_arr
         fam_file['father'] = 0
         fam_file['mother'] = 0
-        fam_file['gender'] = self._coerce_sex_codes(sample_sex, len(self.__snpobj.samples))
+        sample_sex = getattr(self.__snpobj, "sample_sex", None)
+        fam_file['gender'] = coerce_sex_codes(sample_sex, len(self.__snpobj.samples), missing_code="0")
         fam_file['trait'] = self._coerce_phenotypes(sample_phenotype, len(self.__snpobj.samples))
 
         # Save .fam file
@@ -141,8 +136,7 @@ class BEDWriter:
         bim_file = pd.DataFrame(columns=['chrom', 'snp', 'cm', 'pos', 'a0', 'a1'])
         bim_file['chrom'] = self.__snpobj.variants_chrom
         bim_file['snp'] = self.__snpobj.variants_id
-        bim_file['cm'] = 0  # TODO: read, save and write too if available?
-        log.warning("The .bim file is being saved with 0 cM values.")
+        bim_file['cm'] = self._coerce_centimorgans(self.__snpobj.variants_cm, self.__snpobj.n_snps)
         bim_file['pos'] = self.__snpobj.variants_pos
         bim_file['a0'] = self.__snpobj.variants_alt
         bim_file['a1'] = self.__snpobj.variants_ref
@@ -152,31 +146,16 @@ class BEDWriter:
         log.info(f"Finished writing .bim file: {self.__filename}")
 
     @staticmethod
-    def _coerce_sex_codes(
-        sample_sex: Optional[Union[np.ndarray, Sequence[Union[str, int]]]],
-        n_samples: int,
+    def _coerce_centimorgans(
+        variants_cm: Optional[Union[np.ndarray, Sequence[Union[str, int, float]]]],
+        n_variants: int,
     ) -> np.ndarray:
-        if sample_sex is None:
-            return np.repeat("0", n_samples)
-        sex = np.asarray(sample_sex)
-        if sex.shape[0] != n_samples:
-            raise ValueError(f"sample_sex length ({sex.shape[0]}) must match number of samples ({n_samples}).")
-        mapping = {
-            "1": "1",
-            "m": "1",
-            "male": "1",
-            "2": "2",
-            "f": "2",
-            "female": "2",
-            "0": "0",
-            "u": "0",
-            "unknown": "0",
-            "": "0",
-            ".": "0",
-            "nan": "0",
-            "none": "0",
-        }
-        return np.asarray([mapping.get(str(value).strip().lower(), "0") for value in sex], dtype=object)
+        if variants_cm is None:
+            return np.zeros(n_variants)
+        cm = np.asarray(variants_cm)
+        if cm.shape[0] != n_variants:
+            raise ValueError(f"variants_cm length ({cm.shape[0]}) must match number of variants ({n_variants}).")
+        return cm
 
     @staticmethod
     def _coerce_phenotypes(

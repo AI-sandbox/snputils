@@ -4,9 +4,10 @@ import polars as pl
 import pgenlib as pg
 from pathlib import Path
 import zstandard as zstd
-from typing import Union
+from typing import Optional, Sequence, Union
 
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.write._plink import coerce_sex_codes
 
 log = logging.getLogger(__name__)
 
@@ -82,14 +83,14 @@ class PGENWriter:
                 "ID": self.__snpobj.variants_id,
                 "REF": self.__snpobj.variants_ref,
                 "ALT": self.__snpobj.variants_alt,
-                "FILTER": self.__snpobj.variants_filter_pass,
-                # TODO: add INFO column to SNPObject and write it to the .pvar file? (if not it's lost)
+                "QUAL": self._coerce_variant_column(self.__snpobj.variants_qual, self.__snpobj.n_snps),
+                "FILTER": self._coerce_variant_column(self.__snpobj.variants_filter_pass, self.__snpobj.n_snps),
+                "INFO": self._coerce_variant_column(self.__snpobj.variants_info, self.__snpobj.n_snps),
             }
         )
-        # TODO: add header to the .pvar file, if not it's lost
 
         # Write the DataFrame to a CSV string
-        csv_data = df.write_csv(None, separator="\t")
+        csv_data = "##fileformat=VCFv4.2\n##source=snputils\n" + df.write_csv(None, separator="\t")
 
         if vzs:
             # Compress the CSV data using zstd
@@ -106,14 +107,53 @@ class PGENWriter:
         Writes sample metadata to the .psam file.
         """
         log.info(f"Writing {self.__filename}.psam")
-        df = pl.DataFrame(
-            {
-                "#IID": self.__snpobj.samples,
-                "SEX": "NA",  # Add SEX as nan for now
-                # TODO: add SEX as Optional column to SNPObject and write it to the .psam file (if not it's lost)
-            }
-        )
+        columns = {}
+        if self.__snpobj.sample_fid is not None:
+            columns["#FID"] = self._coerce_sample_column(
+                self.__snpobj.sample_fid,
+                self.__snpobj.n_samples,
+                column_name="sample_fid",
+            )
+            columns["IID"] = self.__snpobj.samples
+        else:
+            columns["#IID"] = self.__snpobj.samples
+        columns["SEX"] = coerce_sex_codes(self.__snpobj.sample_sex, self.__snpobj.n_samples, missing_code="NA")
+        df = pl.DataFrame(columns)
         df.write_csv(f"{self.__filename}.psam", separator="\t")
+
+    @staticmethod
+    def _coerce_variant_column(
+        values: Optional[Union[np.ndarray, Sequence[Union[str, int, float]]]],
+        n_variants: int,
+        default: str = ".",
+    ) -> np.ndarray:
+        if values is None:
+            return np.repeat(default, n_variants)
+        arr = np.asarray(values)
+        if arr.shape[0] != n_variants:
+            raise ValueError(f"variant metadata length ({arr.shape[0]}) must match number of variants ({n_variants}).")
+        return np.asarray([PGENWriter._missing_to_default(value, default) for value in arr], dtype=object)
+
+    @staticmethod
+    def _coerce_sample_column(
+        values: Union[np.ndarray, Sequence[Union[str, int, float]]],
+        n_samples: int,
+        *,
+        column_name: str,
+    ) -> np.ndarray:
+        arr = np.asarray(values)
+        if arr.shape[0] != n_samples:
+            raise ValueError(f"{column_name} length ({arr.shape[0]}) must match number of samples ({n_samples}).")
+        return arr
+
+    @staticmethod
+    def _missing_to_default(value, default: str) -> str:
+        if value is None:
+            return default
+        text = str(value)
+        if text == "" or text.lower() in {"nan", "none"}:
+            return default
+        return text
 
     def write_pgen(self):
         """

@@ -10,27 +10,19 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import urllib.request
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
+from snputils.datasets import load_dataset
 from snputils.snp.genobj import SNPObject
 from snputils.snp.io.read.auto import SNPReader
 from snputils.stats import f2, f3, f4, genomic_block_labels
 
 
-DEFAULT_PANEL_URL = (
-    "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/"
-    "integrated_call_samples_v3.20130502.ALL.panel"
-)
-PHASE3_1000G_RELEASE_DIR = (
-    "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/"
-)
-AUTOSOME_CHROMOSOMES: tuple[int, ...] = tuple(range(1, 23))
-DEFAULT_POPULATIONS = (
+DEFAULT_BENCHMARK_POPULATIONS = (
     "YRI",
     "LWK",
     "MSL",
@@ -44,180 +36,6 @@ DEFAULT_POPULATIONS = (
     "GIH",
     "PEL",
 )
-
-
-def default_phase3_autosome_vcf_url(chromosome: int) -> str:
-    if chromosome not in AUTOSOME_CHROMOSOMES:
-        raise ValueError(f"chromosome must be in {AUTOSOME_CHROMOSOMES[0]}..{AUTOSOME_CHROMOSOMES[-1]}, got {chromosome}")
-    return (
-        f"{PHASE3_1000G_RELEASE_DIR}"
-        f"ALL.chr{chromosome}.phase3_shapeit2_mvncall_integrated_v5b.20130502.genotypes.vcf.gz"
-    )
-
-
-def download_if_missing(url: str, path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.stat().st_size > 0:
-        return path
-    print(f"Downloading {url} -> {path}")
-    with urllib.request.urlopen(url) as response, path.open("wb") as out:
-        shutil.copyfileobj(response, out)
-    return path
-
-
-def read_1000g_panel(panel_path: Path) -> pd.DataFrame:
-    panel = pd.read_csv(panel_path, sep="\t", dtype=str)
-    rename = {
-        "pop": "population",
-        "super_pop": "super_population",
-        "gender": "sex",
-    }
-    panel = panel.rename(columns={k: v for k, v in rename.items() if k in panel.columns})
-    required = {"sample", "population"}
-    missing = required.difference(panel.columns)
-    if missing:
-        raise ValueError(f"1000 Genomes panel is missing columns: {sorted(missing)}")
-    if "sex" not in panel.columns:
-        panel["sex"] = "U"
-    panel["sex"] = panel["sex"].map({"male": "M", "female": "F", "M": "M", "F": "F"}).fillna("U")
-    return panel
-
-
-def select_samples(panel: pd.DataFrame, populations: Sequence[str], samples_per_pop: int) -> pd.DataFrame:
-    selected = []
-    for pop in populations:
-        rows = panel.loc[panel["population"] == pop].head(samples_per_pop)
-        if len(rows) < samples_per_pop:
-            raise ValueError(f"Population {pop!r} has only {len(rows)} samples in the panel")
-        selected.append(rows)
-    return pd.concat(selected, ignore_index=True)
-
-
-def sample_populations(selected_samples: pd.DataFrame, samples: Sequence[str]) -> list[str]:
-    sample_to_pop = dict(zip(selected_samples["sample"], selected_samples["population"]))
-    return [sample_to_pop[sample] for sample in samples]
-
-
-def sample_sexes(selected_samples: pd.DataFrame, samples: Sequence[str]) -> list[str]:
-    sample_to_sex = dict(zip(selected_samples["sample"], selected_samples["sex"]))
-    return [sample_to_sex.get(sample, "U") for sample in samples]
-
-
-def _fill_missing_variant_ids(snpobj: SNPObject) -> SNPObject:
-    if snpobj.variants_id is None:
-        return snpobj
-    ids = np.asarray(snpobj.variants_id, dtype=object).copy()
-    missing = (ids == ".") | (ids == "")
-    if np.any(missing):
-        ids[missing] = np.asarray(
-            [
-                f"{chrom}:{pos}:{ref}:{alt}"
-                for chrom, pos, ref, alt in zip(
-                    snpobj.variants_chrom[missing],
-                    snpobj.variants_pos[missing],
-                    snpobj.variants_ref[missing],
-                    snpobj.variants_alt[missing],
-                )
-            ],
-            dtype=object,
-        )
-        snpobj = snpobj.copy()
-        snpobj.variants_id = ids
-    return snpobj
-
-
-def read_snp_subset(
-    source: str | Path,
-    selected_samples: pd.DataFrame,
-    *,
-    max_variants: int,
-    require_complete: bool = True,
-    require_polymorphic: bool = True,
-) -> SNPObject:
-    if str(source).startswith(("http://", "https://", "ftp://")):
-        raise ValueError("Remote VCF streaming is not supported here; download the VCF before reading it.")
-
-    selected = selected_samples["sample"].tolist()
-    chunks: list[SNPObject] = []
-    n_variants = 0
-    reader = SNPReader(source)
-    for chunk in reader.iter_read(samples=selected, sum_strands=False, chunk_size=50_000):
-        chunk = chunk.filter_biallelic_variants(snv_only=True)
-        if require_complete:
-            chunk = chunk.filter_complete_genotypes()
-        if require_polymorphic:
-            chunk = chunk.filter_polymorphic_variants()
-        if chunk.n_snps == 0:
-            continue
-        remaining = max_variants - n_variants
-        if chunk.n_snps > remaining:
-            chunk = chunk.filter_variants(indexes=np.arange(remaining), include=True)
-        chunks.append(_fill_missing_variant_ids(chunk))
-        n_variants += chunk.n_snps
-        if n_variants >= max_variants:
-            break
-
-    if n_variants < max_variants:
-        raise RuntimeError(f"Only found {n_variants} eligible variants; requested {max_variants}")
-
-    subset = SNPObject.concat_variants(chunks)
-    subset.sample_fid = np.asarray(sample_populations(selected_samples, subset.samples), dtype=object)
-    return subset
-
-
-def split_int_evenly(total: int, n_parts: int) -> list[int]:
-    if n_parts <= 0:
-        raise ValueError("n_parts must be positive")
-    base = total // n_parts
-    rem = total % n_parts
-    return [base + (1 if i < rem else 0) for i in range(n_parts)]
-
-
-def read_snp_subset_autosomes(
-    selected_samples: pd.DataFrame,
-    vcf_sources: Sequence[str | Path],
-    *,
-    max_variants_total: int,
-    require_complete: bool = True,
-    require_polymorphic: bool = True,
-) -> SNPObject:
-    if len(vcf_sources) == 0:
-        raise ValueError("vcf_sources is empty")
-    if max_variants_total < len(vcf_sources):
-        raise ValueError(
-            f"max_variants_total ({max_variants_total}) must be >= len(vcf_sources) ({len(vcf_sources)}) "
-            "so every source contributes at least one variant."
-        )
-    quotas = split_int_evenly(max_variants_total, len(vcf_sources))
-    parts = [
-        read_snp_subset(
-            src,
-            selected_samples,
-            max_variants=q,
-            require_complete=require_complete,
-            require_polymorphic=require_polymorphic,
-        )
-        for src, q in zip(vcf_sources, quotas)
-    ]
-    return SNPObject.concat_variants(parts)
-
-
-def write_plink(snpobj: SNPObject, prefix: Path, sample_sex: Sequence[str]) -> None:
-    """
-    Write PLINK 1.0 binary (.bed/.bim/.fam) with native snputils I/O.
-
-    Population labels use PLINK FID (field 1), matching ADMIXTOOLS2 `pops` and the
-    [data formats](https://uqrmaie1.github.io/admixtools/articles/io.html) convention for binary PLINK.
-    """
-    prefix.parent.mkdir(parents=True, exist_ok=True)
-    snpobj.save_bed(
-        prefix.with_suffix(".bed"),
-        rename_missing_values=False,
-        sample_fid=snpobj.sample_fid,
-        sample_sex=sample_sex,
-        sample_phenotype="-9",
-    )
-
 
 def statistic_combinations(populations: Sequence[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     pairs = pd.DataFrame(list(itertools.combinations(populations, 2)), columns=["pop1", "pop2"])
@@ -292,10 +110,6 @@ def run_snputils(
     return {"f2": f2_df, "f3": f3_df, "f4": f4_df}
 
 
-def r_vector(values: Sequence[str]) -> str:
-    return "c(" + ", ".join(json.dumps(v) for v in values) + ")"
-
-
 def write_admixtools_runner(
     prefix: Path,
     populations: Sequence[str],
@@ -314,7 +128,7 @@ def write_admixtools_runner(
 
             prefix <- {json.dumps(str(prefix.resolve()))}
             outdir <- {json.dumps(str(outdir.resolve()))}
-            pops <- {r_vector(populations)}
+            pops <- {"c(" + ", ".join(json.dumps(pop) for pop in populations) + ")"}
             block_size_bp <- {int(block_size_bp)}
 
             f2_combos <- as.matrix(read.csv(file.path(outdir, "f2_combinations.csv"), stringsAsFactors = FALSE))
@@ -517,7 +331,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--work-dir", type=Path, default=Path(".cache/fstats_admixtools2_concordance"))
-    parser.add_argument("--panel-url", default=DEFAULT_PANEL_URL)
+    parser.add_argument(
+        "--panel-url",
+        default=None,
+        help="Population panel URL. Default: the 1000 Genomes panel registered in snputils.datasets.",
+    )
     parser.add_argument(
         "--vcf",
         default=None,
@@ -536,7 +354,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.set_defaults(download_vcf=True)
-    parser.add_argument("--populations", nargs="+", default=list(DEFAULT_POPULATIONS))
+    parser.add_argument("--populations", nargs="+", default=list(DEFAULT_BENCHMARK_POPULATIONS))
     parser.add_argument(
         "--samples-per-pop",
         type=int,
@@ -574,64 +392,54 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     args.work_dir.mkdir(parents=True, exist_ok=True)
 
-    panel_path = download_if_missing(args.panel_url, args.work_dir / "integrated_call_samples_v3.20130502.ALL.panel")
-    panel = read_1000g_panel(panel_path)
-    selected = select_samples(panel, args.populations, args.samples_per_pop)
+    subset = load_dataset(
+        "1kgp",
+        resource="phase3",
+        output_dir=args.work_dir,
+        genotype_sources=None if args.vcf is None else [args.vcf],
+        download_genotypes=args.download_vcf,
+        populations=args.populations,
+        samples_per_population=args.samples_per_pop,
+        max_variants=args.max_variants,
+        require_biallelic=True,
+        require_complete=True,
+        require_polymorphic=not args.include_monomorphic,
+        snv_only=True,
+        panel_url=args.panel_url,
+        sum_strands=False,
+    )
+    if subset.sample_fid is None or subset.sample_sex is None:
+        raise RuntimeError("load_dataset did not return population and sex labels on SNPObject.")
 
     if args.vcf is None:
-        autosome_urls = [default_phase3_autosome_vcf_url(c) for c in AUTOSOME_CHROMOSOMES]
-        if args.download_vcf:
-            vcf_sources = [
-                download_if_missing(url, args.work_dir / Path(url).name) for url in autosome_urls
-            ]
-        else:
-            raise ValueError("Remote VCF streaming is not supported by this benchmark; keep VCF downloading enabled.")
         print(
-            f"Building subset: {len(selected)} samples, {args.max_variants} biallelic SNPs across "
-            f"autosomes chr{AUTOSOME_CHROMOSOMES[0]}-chr{AUTOSOME_CHROMOSOMES[-1]} "
-            f"(~{args.max_variants // len(AUTOSOME_CHROMOSOMES)} per chromosome), "
+            f"Built subset: {subset.n_samples} samples, {subset.n_snps} biallelic SNPs across "
+            "1000 Genomes Phase 3 autosomes, "
             f"populations={','.join(args.populations)}"
-        )
-        subset = read_snp_subset_autosomes(
-            selected,
-            vcf_sources,
-            max_variants_total=args.max_variants,
-            require_polymorphic=not args.include_monomorphic,
         )
         prefix = args.work_dir / "kg_autosomes_subset"
-        subset_meta_sources: list[str] = [str(u) for u in vcf_sources]
     else:
-        vcf_source: str | Path = args.vcf
-        if args.download_vcf and str(vcf_source).startswith(("http://", "https://", "ftp://")):
-            vcf_source = download_if_missing(str(vcf_source), args.work_dir / Path(str(vcf_source)).name)
-        elif str(vcf_source).startswith(("http://", "https://", "ftp://")):
-            raise ValueError("Remote VCF streaming is not supported by this benchmark; keep VCF downloading enabled.")
         print(
-            f"Building subset: {len(selected)} samples, {args.max_variants} biallelic SNPs from {vcf_source}, "
+            f"Built subset: {subset.n_samples} samples, {subset.n_snps} biallelic SNPs from {args.vcf}, "
             f"populations={','.join(args.populations)}"
         )
-        subset = read_snp_subset(
-            vcf_source,
-            selected,
-            max_variants=args.max_variants,
-            require_polymorphic=not args.include_monomorphic,
-        )
         prefix = args.work_dir / "kg_single_vcf_subset"
-        subset_meta_sources = [str(vcf_source)]
 
-    subset_sample_sex = sample_sexes(selected, subset.samples)
     subset_sample_pops = [str(pop) for pop in subset.sample_fid]
-    write_plink(subset, prefix, sample_sex=subset_sample_sex)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    subset.save_bed(
+        prefix.with_suffix(".bed"),
+        rename_missing_values=False,
+        sample_phenotype="-9",
+    )
     n_blocks = int(len(np.unique(genomic_block_labels(subset.variants_chrom, subset.variants_pos, args.block_size_bp))))
     with (args.work_dir / "subset_metadata.json").open("w") as handle:
         json.dump(
             {
                 "genotype_format": "plink",
                 "plink_prefix": str(prefix.resolve()),
-                "source_vcfs": subset_meta_sources,
                 "single_vcf_mode": args.vcf is not None,
                 "autosomes_chr1_chr22": args.vcf is None,
-                "panel_url": args.panel_url,
                 "download_vcf_before_subset": bool(args.download_vcf),
                 "samples": subset.samples.tolist(),
                 "sample_populations": subset_sample_pops,

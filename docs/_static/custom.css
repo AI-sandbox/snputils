@@ -10,6 +10,10 @@
   max-width: 10rem;
 }
 
+.sidebar-brand-text {
+  display: none;
+}
+
 .sd-card {
   border-radius: 0.45rem;
 }

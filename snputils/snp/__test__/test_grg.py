@@ -12,7 +12,7 @@ from snputils.snp.io.read.pgen import PGENReader
 from snputils.snp.io.read.auto import SNPReader
 from snputils.snp.io.read.functional import read_grg
 from snputils.snp.io.read.grg import GRGReader
-from snputils.snp.io.read.vcf import VCFReader
+from snputils.snp.io.write.grg_from_vcf import vcf_to_grg
 from snputils.snp.io.write.pgen import PGENWriter
 
 
@@ -270,11 +270,10 @@ def test_vcf_to_grg_builds_expected_construct_command(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
 
-    monkeypatch.setattr("snputils.snp.io.read.vcf.subprocess.run", fake_run)
+    monkeypatch.setattr("snputils.snp.io.write.grg_from_vcf.subprocess.run", fake_run)
 
-    reader = VCFReader("/tmp/input.vcf.gz")
-    reader.debug = False
-    reader.to_grg(
+    vcf_to_grg(
+        "/tmp/input.vcf.gz",
         range="100-200",
         parts=4,
         jobs=3,
@@ -340,9 +339,7 @@ def test_vcf_to_grg_cli_integration(tmp_path):
     )
 
     out_grg = tmp_path / "tiny.grg"
-    reader = VCFReader(vcf)
-    reader.debug = False
-    reader.to_grg(parts=1, jobs=1, trees=1, force=True, out_file=str(out_grg))
+    vcf_to_grg(vcf, parts=1, jobs=1, trees=1, force=True, out_file=str(out_grg))
 
     assert out_grg.exists()
     loaded = pyg.load_immutable_grg(str(out_grg), True)

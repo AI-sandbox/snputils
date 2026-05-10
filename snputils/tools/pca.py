@@ -65,8 +65,8 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         "--vcf-backend",
         dest="vcf_backend",
         required=False,
-        choices=("polars", "scikit-allel"),
-        default="polars",
+        choices=("default", "polars"),
+        default="default",
         help="VCF reader backend (used only when input is VCF).",
     )
 

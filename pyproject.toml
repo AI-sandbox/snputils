@@ -27,7 +27,6 @@ dependencies = [
     "pandas",
     "pandas-stubs",
     "scikit-learn",
-    "scikit-allel",
     "Pgenlib",
     "matplotlib",
     "joblib",

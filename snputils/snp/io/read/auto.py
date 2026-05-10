@@ -7,13 +7,13 @@ from typing import Union
 class SNPReader:
     def __new__(cls,
                 filename: Union[str, pathlib.Path],
-                vcf_backend: str = 'polars') -> SNPReader:
+                vcf_backend: str = 'default') -> SNPReader:
         """
         Automatically detect the SNP file format from the file extension, and return its corresponding reader.
 
         Args:
             filename: Filename of the file to read.
-            vcf_backend: Backend to use for reading the VCF file. Options are 'polars' or 'scikit-allel'. Default is 'polars'.
+            vcf_backend: Backend to use for reading the VCF file. Options are 'default' or 'polars'. Default is 'default'.
 
         Raises:
             ValueError: If the filename does not have an extension or the extension is not supported.
@@ -27,14 +27,14 @@ class SNPReader:
         extension = extension.lower()
 
         if extension == ".vcf":
-            if vcf_backend == 'polars':
-                from snputils.snp.io.read.vcf import VCFReaderPolars
-
-                return VCFReaderPolars(filename)
-            elif vcf_backend == 'scikit-allel':
+            if vcf_backend == 'default':
                 from snputils.snp.io.read.vcf import VCFReader
 
                 return VCFReader(filename)
+            elif vcf_backend == 'polars':
+                from snputils.snp.io.read.vcf import VCFReaderPolars
+
+                return VCFReaderPolars(filename)
             else:
                 raise ValueError(f"VCF backend not supported: {vcf_backend}")
         elif extension in (".bed", ".bim", ".fam"):

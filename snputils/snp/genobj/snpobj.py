@@ -852,26 +852,33 @@ class SNPObject:
         ]
 
         # Apply filtering based on inplace parameter
+        def _apply_mask(snpobj: SNPObject) -> None:
+            for key in keys:
+                val = snpobj[key]
+                if val is None:
+                    continue
+                arr = np.asarray(val)
+                if arr.shape[0] != n_snps:
+                    # VCF (and similar) readers use length-0 arrays as placeholders when a column
+                    # was not loaded; those are not aligned to the SNP axis.
+                    if arr.shape[0] == 0 and n_snps > 0:
+                        snpobj[key] = None
+                        continue
+                    raise ValueError(
+                        f"Cannot filter '{key}': length along SNP axis is {arr.shape[0]}, expected {n_snps}."
+                    )
+                if arr.ndim > 1:
+                    snpobj[key] = arr[mask_combined, ...]
+                else:
+                    snpobj[key] = arr[mask_combined]
+
         if inplace:
-            for key in keys:
-                if self[key] is not None:
-                    if self[key].ndim > 1:
-                        self[key] = np.asarray(self[key])[mask_combined, ...]
-                    else:
-                        self[key] = np.asarray(self[key])[mask_combined]
-
+            _apply_mask(self)
             return None
-        else:
-            # Create A new `SNPObject` with filtered data
-            snpobj = self.copy()
-            for key in keys:
-                if snpobj[key] is not None:
-                    if snpobj[key].ndim > 1:
-                        snpobj[key] = np.asarray(snpobj[key])[mask_combined, ...]
-                    else:
-                        snpobj[key] = np.asarray(snpobj[key])[mask_combined]
 
-            return snpobj
+        snpobj = self.copy()
+        _apply_mask(snpobj)
+        return snpobj
 
     def filter_biallelic_variants(
             self,

@@ -48,6 +48,22 @@ def test_filter_variants_accepts_boolean_mask():
     assert filtered.variants_id.tolist() == ["v1", "v3"]
 
 
+def test_filter_variants_drops_unloaded_placeholder_info_column():
+    """VCF reader uses length-0 arrays when INFO was not loaded; mask must still apply."""
+    snpobj = SNPObject(
+        calldata_gt=np.zeros((4, 1, 2), dtype=np.int8),
+        samples=np.array(["s1"], dtype=object),
+        variants_ref=np.array(["A", "C", "G", "T"], dtype=object),
+        variants_alt=np.array(["G", "T", "A", "C"], dtype=object),
+        variants_chrom=np.array(["1", "1", "1", "1"], dtype=object),
+        variants_pos=np.array([1, 2, 3, 4], dtype=np.int32),
+        variants_info=np.array([], dtype=object),
+    )
+    filtered = snpobj.filter_variants(mask=[True, False, True, False])
+    assert filtered.n_snps == 2
+    assert filtered.variants_info is None
+
+
 def test_filter_samples_by_index_works_without_sample_ids():
     calldata_gt = np.array(
         [

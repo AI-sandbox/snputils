@@ -5,6 +5,94 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 
+def _membership_matrix(pop_indices: np.ndarray, n_pops: int, weights: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Build a sample-by-population matrix for BLAS-backed population aggregation.
+    """
+    membership = np.zeros((pop_indices.size, n_pops), dtype=float)
+    membership[np.arange(pop_indices.size), pop_indices] = 1.0
+    if weights is not None:
+        membership *= np.asarray(weights, dtype=float)[:, np.newaxis]
+    return membership
+
+
+def _dot_by_chunks(
+    values: np.ndarray,
+    membership: np.ndarray,
+    *,
+    missing_is_negative: bool = False,
+    chunk_rows: int = 100_000,
+) -> np.ndarray:
+    """
+    Multiply a SNP-by-sample matrix by a sample-by-population matrix without
+    materializing a full float copy of large integer genotype arrays.
+    """
+    n_snps = values.shape[0]
+    out = np.empty((n_snps, membership.shape[1]), dtype=float)
+    chunk_rows = max(1, int(chunk_rows))
+    for start in range(0, n_snps, chunk_rows):
+        end = min(start + chunk_rows, n_snps)
+        chunk = values[start:end]
+        if missing_is_negative:
+            chunk = np.where(chunk >= 0, chunk, 0)
+        out[start:end] = chunk.astype(float, copy=False) @ membership
+    return out
+
+
+def _aggregate_2d_integer_genotypes(
+    gt: np.ndarray,
+    pop_indices: np.ndarray,
+    pops: np.ndarray,
+    *,
+    pseudohaploid: Union[bool, int] = False,
+) -> Tuple[np.ndarray, np.ndarray, List[Any]]:
+    """
+    Fast path for 2D integer dosage/haploid calls.
+
+    The generic path below converts the whole genotype matrix to float and
+    builds per-sample count matrices. For large complete PLINK dosages this is
+    unnecessarily expensive; a population membership matrix lets BLAS aggregate
+    all populations in one pass.
+    """
+    n_snps, n_samples = gt.shape
+    n_pops = pops.size
+    min_val = gt.min(initial=0)
+    max_val = gt.max(initial=0)
+    has_missing = min_val < 0
+
+    if max_val <= 1:
+        ploidy_per_sample = np.ones(n_samples, dtype=float)
+        alt_weights = None
+    else:
+        ploidy_per_sample = np.full(n_samples, 2.0, dtype=float)
+        alt_weights = None
+        if pseudohaploid is not False:
+            n_test = 1000 if pseudohaploid is True else int(pseudohaploid)
+            n_check = min(n_snps, n_test)
+            g_check = gt[:n_check, :]
+            is_pseudohaploid = np.sum(g_check == 1, axis=0) == 0
+            if np.any(is_pseudohaploid):
+                ploidy_per_sample[is_pseudohaploid] = 1.0
+                alt_weights = np.ones(n_samples, dtype=float)
+                alt_weights[is_pseudohaploid] = 0.5
+
+    alt_membership = _membership_matrix(pop_indices, n_pops, alt_weights)
+    alt_sum = _dot_by_chunks(gt, alt_membership, missing_is_negative=has_missing)
+
+    if has_missing:
+        count_membership = _membership_matrix(pop_indices, n_pops, ploidy_per_sample)
+        called = _dot_by_chunks(gt >= 0, count_membership)
+        counts = np.rint(called).astype(np.int64, copy=False)
+    else:
+        counts_per_pop = np.bincount(pop_indices, weights=ploidy_per_sample, minlength=n_pops)
+        counts = np.broadcast_to(np.rint(counts_per_pop).astype(np.int64), (n_snps, n_pops)).copy()
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        afs = np.divide(alt_sum, counts, out=np.full_like(alt_sum, np.nan, dtype=float), where=counts > 0)
+
+    return afs, counts, pops.tolist()
+
+
 def _normalize_lai_for_mask(
     calldata_lai: np.ndarray,
     *,
@@ -78,6 +166,9 @@ def aggregate_pop_allele_freq(
         mask = lai.astype(str) == str(ancestry)
         gt = gt.astype(float, copy=True)
         gt[~mask] = np.nan
+
+    if ancestry is None and gt.ndim == 2 and np.issubdtype(gt.dtype, np.integer):
+        return _aggregate_2d_integer_genotypes(gt, pop_indices, pops, pseudohaploid=pseudohaploid)
 
     # Compute alt allele counts and haplotype counts per SNP and sample
     if gt.ndim == 3:

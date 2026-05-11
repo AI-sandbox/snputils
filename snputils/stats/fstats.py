@@ -239,6 +239,74 @@ def _build_blocks(
     return _compute_block_indices(n_snps=n_snps, size=block_size)
 
 
+def _block_ids_are_contiguous(block_ids: np.ndarray, block_lengths: np.ndarray) -> bool:
+    if block_ids.size == 0:
+        return True
+    if int(block_lengths.sum()) != block_ids.size:
+        return False
+    if np.any(np.diff(block_ids) < 0):
+        return False
+    counts = np.bincount(block_ids, minlength=block_lengths.size)
+    return bool(np.array_equal(counts[: block_lengths.size], block_lengths))
+
+
+def _complete_block_product_sums(
+    afs: np.ndarray,
+    counts: np.ndarray,
+    block_ids: np.ndarray,
+    block_lengths: np.ndarray,
+    *,
+    require_counts_gt: int,
+    need_correction: bool,
+) -> Optional[Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]]:
+    """
+    Precompute block sums of p_i * p_j for complete-data f-stat calculations.
+
+    This fast path is exact for cases where every requested SNP has valid allele
+    frequencies and sufficient haplotype counts for all populations. Missing or
+    low-count data falls back to the per-statistic masking logic.
+    """
+    afs = np.asarray(afs, dtype=float)
+    counts = np.asarray(counts)
+    if afs.ndim != 2 or counts.shape != afs.shape:
+        return None
+    if not np.isfinite(afs).all() or not np.all(counts > require_counts_gt):
+        return None
+
+    n_snps, n_pops = afs.shape
+    n_blocks = block_lengths.size
+    den_block_sums = block_lengths.astype(float, copy=False)
+    pair_sums = np.empty((n_blocks, n_pops, n_pops), dtype=float)
+    corr_sums = np.empty((n_blocks, n_pops), dtype=float) if need_correction else None
+
+    if _block_ids_are_contiguous(block_ids, block_lengths):
+        starts = np.r_[0, np.cumsum(block_lengths[:-1])]
+        for b_idx, start in enumerate(starts):
+            end = int(start + block_lengths[b_idx])
+            block_afs = afs[int(start):end]
+            pair_sums[b_idx] = block_afs.T @ block_afs
+            if need_correction and corr_sums is not None:
+                block_counts = counts[int(start):end].astype(float, copy=False)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    corr_sums[b_idx] = np.sum(block_afs * (1.0 - block_afs) / (block_counts - 1.0), axis=0)
+    else:
+        for i in range(n_pops):
+            ai = afs[:, i]
+            for j in range(n_pops):
+                pair_sums[:, i, j] = np.bincount(
+                    block_ids,
+                    weights=ai * afs[:, j],
+                    minlength=n_blocks,
+                )
+            if need_correction and corr_sums is not None:
+                ci = counts[:, i].astype(float, copy=False)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    corr = ai * (1.0 - ai) / (ci - 1.0)
+                corr_sums[:, i] = np.bincount(block_ids, weights=corr, minlength=n_blocks)
+
+    return pair_sums, corr_sums, den_block_sums
+
+
 def f2(
     data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
     pop1: Optional[Sequence[str]] = None,
@@ -297,6 +365,38 @@ def f2(
     name_to_idx = {p: i for i, p in enumerate(pops)}
 
     rows: List[Dict[str, Union[str, float, int]]] = []
+    fast = _complete_block_product_sums(
+        afs,
+        counts,
+        block_ids,
+        block_lengths,
+        require_counts_gt=1 if apply_correction else 0,
+        need_correction=apply_correction,
+    )
+    if fast is not None:
+        pair_sums, corr_sums, den_block_sums = fast
+        for p1, p2 in pop_pairs:
+            i = name_to_idx[p1]
+            j = name_to_idx[p2]
+            num_block_sums = pair_sums[:, i, i] + pair_sums[:, j, j] - 2.0 * pair_sums[:, i, j]
+            if apply_correction:
+                assert corr_sums is not None
+                num_block_sums = num_block_sums - corr_sums[:, i] - corr_sums[:, j]
+            res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+            rows.append(
+                {
+                    "pop1": p1,
+                    "pop2": p2,
+                    "est": res.est,
+                    "se": res.se,
+                    "z": res.z,
+                    "p": res.p,
+                    "n_blocks": res.n_blocks,
+                    "n_snps": res.n_snps,
+                }
+            )
+        return pd.DataFrame(rows)
+
     # Precompute per-block index lists for efficiency
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
@@ -390,8 +490,48 @@ def f3(
         triples = list(zip(target, ref1, ref2))
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
-    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
     rows: List[Dict[str, Union[str, float, int]]] = []
+
+    fast = _complete_block_product_sums(
+        afs,
+        counts,
+        block_ids,
+        block_lengths,
+        require_counts_gt=1 if apply_correction else 0,
+        need_correction=apply_correction,
+    )
+    if fast is not None:
+        pair_sums, corr_sums, den_block_sums = fast
+        for t, r1, r2 in triples:
+            it = name_to_idx[t]
+            i1 = name_to_idx[r1]
+            i2 = name_to_idx[r2]
+            num_block_sums = (
+                pair_sums[:, it, it]
+                - pair_sums[:, it, i1]
+                - pair_sums[:, it, i2]
+                + pair_sums[:, i1, i2]
+            )
+            if apply_correction:
+                assert corr_sums is not None
+                num_block_sums = num_block_sums - corr_sums[:, it]
+            res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+            rows.append(
+                {
+                    "target": t,
+                    "ref1": r1,
+                    "ref2": r2,
+                    "est": res.est,
+                    "se": res.se,
+                    "z": res.z,
+                    "p": res.p,
+                    "n_blocks": res.n_blocks,
+                    "n_snps": res.n_snps,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
     for t, r1, r2 in triples:
         it = name_to_idx[t]
@@ -479,8 +619,47 @@ def f4(
         quads = list(zip(a, b, c, d))
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
-    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
     rows: List[Dict[str, Union[str, float, int]]] = []
+
+    fast = _complete_block_product_sums(
+        afs,
+        counts,
+        block_ids,
+        block_lengths,
+        require_counts_gt=0,
+        need_correction=False,
+    )
+    if fast is not None:
+        pair_sums, _, den_block_sums = fast
+        for pa, pb, pc, dpop in quads:
+            ia = name_to_idx[pa]
+            ib = name_to_idx[pb]
+            ic = name_to_idx[pc]
+            id_ = name_to_idx[dpop]
+            num_block_sums = (
+                pair_sums[:, ia, ic]
+                - pair_sums[:, ia, id_]
+                - pair_sums[:, ib, ic]
+                + pair_sums[:, ib, id_]
+            )
+            res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+            rows.append(
+                {
+                    "a": pa,
+                    "b": pb,
+                    "c": pc,
+                    "d": dpop,
+                    "est": res.est,
+                    "se": res.se,
+                    "z": res.z,
+                    "p": res.p,
+                    "n_blocks": res.n_blocks,
+                    "n_snps": res.n_snps,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
     for pa, pb, pc, dpop in quads:
         ia = name_to_idx[pa]

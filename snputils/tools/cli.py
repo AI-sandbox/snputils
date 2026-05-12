@@ -66,6 +66,16 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         help="Number of principal components to compute.",
     )
     parser.add_argument(
+        "--fitting",
+        dest="fitting",
+        choices=("exact", "lowrank"),
+        default="exact",
+        help=(
+            "SVD mode: exact (standard PCA; sklearn uses svd_solver='full') or "
+            "lowrank approximate (sklearn randomized / torch svd_lowrank)."
+        ),
+    )
+    parser.add_argument(
         "--sum-strands",
         dest="sum_strands",
         action="store_true",

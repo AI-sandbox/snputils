@@ -48,6 +48,29 @@ def _sklearn_svd_solver_for_fitting(fitting: str) -> str:
     raise AssertionError(fitting)
 
 
+_PCA_FITTING_OPTIONS = frozenset({"exact", "lowrank"})
+
+
+def _parse_pca_fitting(fitting: str) -> str:
+    if not isinstance(fitting, str):
+        raise TypeError(f"fitting must be str, not {type(fitting).__name__}")
+    f = fitting.lower().strip()
+    if f not in _PCA_FITTING_OPTIONS:
+        raise ValueError(
+            f"fitting must be one of {sorted(_PCA_FITTING_OPTIONS)!r}, got {fitting!r}"
+        )
+    return f
+
+
+def _sklearn_svd_solver_for_fitting(fitting: str) -> str:
+    """Map ``fitting`` to :class:`sklearn.decomposition.PCA` ``svd_solver``."""
+    if fitting == "exact":
+        return "full"
+    if fitting == "lowrank":
+        return "randomized"
+    raise AssertionError(fitting)
+
+
 def _svd_flip(u, v, u_based_decision=True):
     """
     Sign correction to ensure deterministic output from SVD.

@@ -405,8 +405,39 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
     p_j = afs[:, j]
     within_sum = np.sum(p_i * (1.0 - p_i) + p_j * (1.0 - p_j))
     den_sum = f2_unc_sum + within_sum
-    expected = num_sum / den_sum
-    assert np.isclose(fst_row.est, expected, rtol=1e-12, atol=1e-12)
+    # Raw Hudson identity on the complete data:
+    # num = corrected f2 sum, den = uncorrected f2 + within-pop het sum.
+    raw_ratio = num_sum / den_sum
+
+    # The reported fst() estimate uses weighted delete-one-block jackknife
+    # over block-level ratios, matching ADMIXTOOLS style estimation.
+    block_ids = np.arange(afs.shape[0]) // 2
+    n_blocks = int(block_ids.max()) + 1
+    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
+    num_block = np.zeros(n_blocks, dtype=float)
+    den_block = np.zeros(n_blocks, dtype=float)
+    for b in range(n_blocks):
+        idx = block_ids == b
+        pi = p_i[idx]
+        pj = p_j[idx]
+        ni = counts[idx, i]
+        nj = counts[idx, j]
+        dxy = pi * (1.0 - pj) + pj * (1.0 - pi)
+        num_snp = dxy - pi * (1.0 - pi) * (ni / (ni - 1.0)) - pj * (1.0 - pj) * (nj / (nj - 1.0))
+        num_block[b] = float(np.sum(num_snp))
+        den_block[b] = float(np.sum(dxy))
+
+    block_est = num_block / den_block
+    weights = block_lengths
+    weight_sum = float(np.sum(weights))
+    tot = float(np.average(block_est, weights=weights))
+    rel = weights / weight_sum
+    loo = (tot - block_est * rel) / (1.0 - rel)
+    h = weight_sum / weights
+    jk_expected = float(np.average(loo, weights=(1.0 - 1.0 / h)))
+
+    assert np.isclose(raw_ratio, num_block.sum() / den_block.sum(), rtol=1e-12, atol=1e-12)
+    assert np.isclose(fst_row.est, jk_expected, rtol=1e-12, atol=1e-12)
 
 
 def test_fst_and_f2_pseudohaploid():

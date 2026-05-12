@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
-
-
-ArrayLike = Union[np.ndarray, Sequence[float]]
 
 
 def genomic_block_labels(
@@ -125,6 +122,133 @@ def _jackknife_ratio_from_block_sums(
     return BlockJackknifeResult(est, se, z, p, nb, int(np.sum(den_b)))
 
 
+def _weighted_jackknife_from_block_estimates(
+    block_estimates: np.ndarray,
+    block_lengths: np.ndarray,
+) -> BlockJackknifeResult:
+    block_estimates = np.asarray(block_estimates, dtype=float)
+    block_lengths = np.asarray(block_lengths, dtype=float)
+
+    valid = (
+        np.isfinite(block_estimates)
+        & np.isfinite(block_lengths)
+        & (block_lengths > 0)
+    )
+    if not np.any(valid):
+        return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), 0, 0)
+
+    x = block_estimates[valid]
+    w = block_lengths[valid]
+    n_snps = int(np.sum(w))
+    nb = int(w.size)
+
+    if nb < 2:
+        est = float(np.average(x, weights=w))
+        return BlockJackknifeResult(est, float("nan"), float("nan"), float("nan"), nb, n_snps)
+
+    weight_sum = float(np.sum(w))
+    tot = float(np.average(x, weights=w))
+    rel = w / weight_sum
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        loo = (tot - x * rel) / (1.0 - rel)
+
+    finite = np.isfinite(loo)
+    if not np.any(finite):
+        return BlockJackknifeResult(tot, float("nan"), float("nan"), float("nan"), nb, n_snps)
+
+    loo = loo[finite]
+    w = w[finite]
+    weight_sum = float(np.sum(w))
+    nb = int(w.size)
+
+    h = weight_sum / w
+    est = float(np.average(loo, weights=(1.0 - 1.0 / h)))
+    se = float(np.sqrt(np.mean((est - loo) ** 2 * (h - 1.0))))
+    z = float(est / se) if se > 0 else float("nan")
+    p = float(math.erfc(abs(z) / math.sqrt(2))) if np.isfinite(z) else float("nan")
+
+    return BlockJackknifeResult(est, se, z, p, nb, int(weight_sum))
+
+
+
+def _jackknife_block_ratio_estimates(
+    num_block_sums: np.ndarray,
+    den_block_sums: np.ndarray,
+    block_lengths: np.ndarray,
+    *,
+    min_abs_den: float = 1e-12,
+) -> BlockJackknifeResult:
+    den_block_sums = np.asarray(den_block_sums, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        block_estimates = np.asarray(num_block_sums, dtype=float) / den_block_sums
+    block_estimates = np.where(np.abs(den_block_sums) > min_abs_den, block_estimates, np.nan)
+    return _weighted_jackknife_from_block_estimates(block_estimates, block_lengths)
+
+def _weighted_jackknife_ratio_from_block_sums(
+    num_block_sums: np.ndarray,
+    den_block_sums: np.ndarray,
+    block_lengths: np.ndarray,
+    *,
+    denominator_est_threshold: float = 1e-6,
+) -> BlockJackknifeResult:
+    """
+    Compute a weighted delete-one block jackknife for a ratio of block means.
+    """
+    num_block_sums = np.asarray(num_block_sums, dtype=float)
+    den_block_sums = np.asarray(den_block_sums, dtype=float)
+    block_lengths = np.asarray(block_lengths, dtype=float)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        num_blocks = num_block_sums / block_lengths
+        den_blocks = den_block_sums / block_lengths
+
+    valid = (
+        np.isfinite(num_blocks)
+        & np.isfinite(den_blocks)
+        & np.isfinite(block_lengths)
+        & (block_lengths > 0)
+        & (np.abs(den_blocks) >= denominator_est_threshold)
+    )
+    if not np.any(valid):
+        return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), 0, 0)
+
+    num_b = num_blocks[valid]
+    den_b = den_blocks[valid]
+    weights = block_lengths[valid]
+    n_snps = int(np.sum(weights))
+    nb = int(weights.size)
+
+    weight_sum = float(np.sum(weights))
+    tot_num = float(np.sum(num_b * weights) / weight_sum)
+    tot_den = float(np.sum(den_b * weights) / weight_sum)
+    if tot_den == 0:
+        return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), nb, n_snps)
+
+    tot = tot_num / tot_den
+    rel = weights / weight_sum
+    with np.errstate(divide="ignore", invalid="ignore"):
+        loo_num = (tot_num - num_b * rel) / (1.0 - rel)
+        loo_den = (tot_den - den_b * rel) / (1.0 - rel)
+        loo_ratio = loo_num / loo_den
+
+    finite = np.isfinite(loo_ratio)
+    if not np.any(finite):
+        return BlockJackknifeResult(tot, 0.0, float("nan"), float("nan"), nb, n_snps)
+
+    loo_ratio = loo_ratio[finite]
+    weights = weights[finite]
+    nb2 = int(weights.size)
+    weight_sum = float(np.sum(weights))
+    est = float(np.mean(tot - loo_ratio) * nb2 + np.sum(loo_ratio * weights) / weight_sum)
+    h = weight_sum / weights
+    tau = h * tot - (h - 1.0) * loo_ratio
+    se = float(np.sqrt(np.mean((tau - est) ** 2 / (h - 1.0))))
+    z = float(est / se) if se > 0 else float("nan")
+    p = float(math.erfc(abs(z) / math.sqrt(2))) if np.isfinite(z) else float("nan")
+    return BlockJackknifeResult(est, se, z, p, nb2, n_snps)
+
+
 def _aggregate_to_pop_allele_freq(
     calldata_gt: np.ndarray,
     sample_labels: Sequence[str],
@@ -169,8 +293,7 @@ def _default_sample_labels_from_snpobj(snpobj: Any) -> List[str]:
     Default per-sample group labels for SNPObject inputs.
 
     If ``sample_fid`` is set on the object and differs from ``samples`` for at least
-    one individual (PLINK FID vs IID), use ``sample_fid`` — matching the usual
-    ADMIXTOOLS2 binary PLINK convention. Otherwise use ``samples`` (IID) as the label
+    one individual (PLINK FID vs IID), use ``sample_fid``. Otherwise use ``samples`` (IID) as the label
     for each individual.
     """
     if snpobj.samples is None:
@@ -305,6 +428,109 @@ def _complete_block_product_sums(
                 corr_sums[:, i] = np.bincount(block_ids, weights=corr, minlength=n_blocks)
 
     return pair_sums, corr_sums, den_block_sums
+
+
+def _complete_block_hudson_fst_sums(
+    afs: np.ndarray,
+    counts: np.ndarray,
+    block_ids: np.ndarray,
+    block_lengths: np.ndarray,
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """
+    Precompute complete-data block sums needed by Hudson F_ST.
+    """
+    afs = np.asarray(afs, dtype=float)
+    counts = np.asarray(counts)
+    if afs.ndim != 2 or counts.shape != afs.shape:
+        return None
+    if not np.isfinite(afs).all() or not np.all(counts > 1):
+        return None
+
+    n_snps, n_pops = afs.shape
+    n_blocks = block_lengths.size
+    af_sums = np.empty((n_blocks, n_pops), dtype=float)
+    pair_sums = np.empty((n_blocks, n_pops, n_pops), dtype=float)
+    pi_sums = np.empty((n_blocks, n_pops), dtype=float)
+
+    if _block_ids_are_contiguous(block_ids, block_lengths):
+        starts = np.r_[0, np.cumsum(block_lengths[:-1])]
+        for b_idx, start in enumerate(starts):
+            end = int(start + block_lengths[b_idx])
+            block_afs = afs[int(start):end]
+            block_counts = counts[int(start):end].astype(float, copy=False)
+            af_sums[b_idx] = np.sum(block_afs, axis=0)
+            pair_sums[b_idx] = block_afs.T @ block_afs
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pi_sums[b_idx] = np.sum(
+                    2.0 * block_afs * (1.0 - block_afs) * (block_counts / (block_counts - 1.0)),
+                    axis=0,
+                )
+    else:
+        for i in range(n_pops):
+            ai = afs[:, i]
+            af_sums[:, i] = np.bincount(block_ids, weights=ai, minlength=n_blocks)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pi = 2.0 * ai * (1.0 - ai) * (counts[:, i].astype(float, copy=False) / (counts[:, i] - 1.0))
+            pi_sums[:, i] = np.bincount(block_ids, weights=pi, minlength=n_blocks)
+            for j in range(n_pops):
+                pair_sums[:, i, j] = np.bincount(
+                    block_ids,
+                    weights=ai * afs[:, j],
+                    minlength=n_blocks,
+                )
+
+    return af_sums, pair_sums, pi_sums
+
+
+def _complete_block_pair_het_product_sums(
+    afs: np.ndarray,
+    counts: np.ndarray,
+    block_ids: np.ndarray,
+    block_lengths: np.ndarray,
+    pairs: Sequence[Tuple[int, int]],
+) -> Optional[Tuple[np.ndarray, Dict[Tuple[int, int], int]]]:
+    """
+    Precompute block sums of h_ij * h_kl, where h_ij = p_i + p_j - 2 p_i p_j.
+    """
+    afs = np.asarray(afs, dtype=float)
+    counts = np.asarray(counts)
+    if afs.ndim != 2 or counts.shape != afs.shape:
+        return None
+    if not np.isfinite(afs).all() or not np.all(counts > 0):
+        return None
+
+    norm_pairs = sorted({(min(i, j), max(i, j)) for i, j in pairs})
+    if not norm_pairs:
+        return None
+
+    pair_to_idx = {pair: idx for idx, pair in enumerate(norm_pairs)}
+    n_blocks = block_lengths.size
+    n_pairs = len(norm_pairs)
+    out = np.empty((n_blocks, n_pairs, n_pairs), dtype=float)
+
+    if _block_ids_are_contiguous(block_ids, block_lengths):
+        starts = np.r_[0, np.cumsum(block_lengths[:-1])]
+        for b_idx, start in enumerate(starts):
+            end = int(start + block_lengths[b_idx])
+            block_afs = afs[int(start):end]
+            h = np.empty((block_afs.shape[0], n_pairs), dtype=float)
+            for pair_idx, (i, j) in enumerate(norm_pairs):
+                pi = block_afs[:, i]
+                pj = block_afs[:, j]
+                h[:, pair_idx] = pi + pj - 2.0 * pi * pj
+            out[b_idx] = h.T @ h
+    else:
+        block_ids = np.asarray(block_ids, dtype=np.int64)
+        for b_idx in range(n_blocks):
+            block_afs = afs[block_ids == b_idx]
+            h = np.empty((block_afs.shape[0], n_pairs), dtype=float)
+            for pair_idx, (i, j) in enumerate(norm_pairs):
+                pi = block_afs[:, i]
+                pj = block_afs[:, j]
+                h[:, pair_idx] = pi + pj - 2.0 * pi * pj
+            out[b_idx] = h.T @ h
+
+    return out, pair_to_idx
 
 
 def f2(
@@ -749,15 +975,57 @@ def d_stat(
         quads = list(zip(a, b, c, d))
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
-    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
+    bids = np.asarray(block_ids, dtype=np.int64)
     rows: List[Dict[str, Union[str, float, int]]] = []
+    indexed_quads = [
+        (pa, pb, pc, dpop, name_to_idx[pa], name_to_idx[pb], name_to_idx[pc], name_to_idx[dpop])
+        for pa, pb, pc, dpop in quads
+    ]
 
-    for pa, pb, pc, dpop in quads:
-        ia = name_to_idx[pa]
-        ib = name_to_idx[pb]
-        ic = name_to_idx[pc]
-        id_ = name_to_idx[dpop]
+    fast_products = _complete_block_product_sums(
+        afs,
+        counts,
+        block_ids,
+        block_lengths,
+        require_counts_gt=0,
+        need_correction=False,
+    )
+    den_pairs = [(ia, ib) for _, _, _, _, ia, ib, _, _ in indexed_quads]
+    den_pairs.extend((ic, id_) for _, _, _, _, _, _, ic, id_ in indexed_quads)
+    fast_den = _complete_block_pair_het_product_sums(afs, counts, block_ids, block_lengths, den_pairs)
+    if fast_products is not None and fast_den is not None:
+        pair_sums, _, _ = fast_products
+        hetprod_sums, pair_to_idx = fast_den
+        n_snps_used = int(block_lengths.sum())
+        for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
+            num_block_sums = (
+                pair_sums[:, ia, ic]
+                - pair_sums[:, ia, id_]
+                - pair_sums[:, ib, ic]
+                + pair_sums[:, ib, id_]
+            )
+            p_ab = pair_to_idx[(min(ia, ib), max(ia, ib))]
+            p_cd = pair_to_idx[(min(ic, id_), max(ic, id_))]
+            den_block_sums = hetprod_sums[:, p_ab, p_cd].copy()
+            den_block_sums[np.isfinite(den_block_sums) & (np.abs(den_block_sums) <= 1e-12)] = np.nan
+            res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+            rows.append(
+                {
+                    "a": pa,
+                    "b": pb,
+                    "c": pc,
+                    "d": dpop,
+                    "est": res.est,
+                    "se": res.se,
+                    "z": res.z,
+                    "p": res.p,
+                    "n_blocks": res.n_blocks,
+                    "n_snps": n_snps_used,
+                }
+            )
+        return pd.DataFrame(rows)
 
+    for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
         A = afs[:, ia]
         B = afs[:, ib]
         C = afs[:, ic]
@@ -773,21 +1041,17 @@ def d_stat(
 
         snp_mask = np.isfinite(num) & np.isfinite(den) & (na > 0) & (nb > 0) & (nc > 0) & (nd > 0)
 
-        num_block_sums = np.full(n_blocks, np.nan, dtype=float)
-        den_block_sums = np.full(n_blocks, np.nan, dtype=float)
-        ct_block_sums = np.zeros(n_blocks, dtype=int)
-        for b_idx, idx in enumerate(block_bins):
-            if idx.size == 0:
-                continue
-            idx2 = idx[snp_mask[idx]]
-            if idx2.size == 0:
-                continue
-            num_block_sums[b_idx] = float(np.nansum(num[idx2]))
-            # drop near-zero denominators within a block for stability
-            block_den = float(np.nansum(den[idx2]))
-            den_block_sums[b_idx] = block_den if abs(block_den) > 1e-12 else np.nan
-            ct_block_sums[b_idx] = int(idx2.size)
-            
+        num_sel = np.where(snp_mask, num.astype(np.float64, copy=False), 0.0)
+        den_sel = np.where(snp_mask, den.astype(np.float64, copy=False), 0.0)
+        num_block_sums = np.bincount(bids, weights=num_sel, minlength=n_blocks).astype(np.float64, copy=False)
+        den_raw = np.bincount(bids, weights=den_sel, minlength=n_blocks).astype(np.float64, copy=False)
+        ct_block_sums = np.bincount(bids, weights=snp_mask.astype(np.int64), minlength=n_blocks)
+
+        empty = ct_block_sums == 0
+        num_block_sums[empty] = np.nan
+        den_raw[empty] = np.nan
+        den_raw[np.isfinite(den_raw) & (np.abs(den_raw) <= 1e-12)] = np.nan
+        den_block_sums = den_raw
         res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
         rows.append(
             {
@@ -837,10 +1101,55 @@ def f4_ratio(
     n_snps, _ = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
-    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
     name_to_idx = {p: i for i, p in enumerate(pops)}
 
     rows: List[Dict[str, Union[str, float, int]]] = []
+    fast = _complete_block_product_sums(
+        afs,
+        counts,
+        block_ids,
+        block_lengths,
+        require_counts_gt=0,
+        need_correction=False,
+    )
+    if fast is not None:
+        pair_sums, _, _ = fast
+        for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
+            ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
+            ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
+
+            num_block_sums = (
+                pair_sums[:, ia, ic]
+                - pair_sums[:, ia, id_]
+                - pair_sums[:, ib, ic]
+                + pair_sums[:, ib, id_]
+            )
+            den_block_sums = (
+                pair_sums[:, ja, jc]
+                - pair_sums[:, ja, jd]
+                - pair_sums[:, jb, jc]
+                + pair_sums[:, jb, jd]
+            )
+            res = _weighted_jackknife_ratio_from_block_sums(
+                num_block_sums,
+                den_block_sums,
+                block_lengths,
+            )
+            rows.append(
+                {
+                    "num": f"({na},{nb};{nc},{nd})",
+                    "den": f"({da},{db};{dc},{dd})",
+                    "est": res.est,
+                    "se": res.se,
+                    "z": res.z,
+                    "p": res.p,
+                    "n_blocks": res.n_blocks,
+                    "n_snps": res.n_snps,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
     for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
         ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
         ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
@@ -867,11 +1176,14 @@ def f4_ratio(
             if idx2.size == 0:
                 continue
             num_block_sums[b_idx] = float(np.nansum(num_snp[idx2]))
-            block_den = float(np.nansum(den_snp[idx2]))
-            den_block_sums[b_idx] = block_den if abs(block_den) > 1e-12 else np.nan
+            den_block_sums[b_idx] = float(np.nansum(den_snp[idx2]))
             ct_block_sums[b_idx] = int(idx2.size)
             
-        res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+        res = _weighted_jackknife_ratio_from_block_sums(
+            num_block_sums,
+            den_block_sums,
+            ct_block_sums,
+        )
         rows.append(
             {
                 "num": f"({na},{nb};{nc},{nd})",
@@ -881,7 +1193,7 @@ def f4_ratio(
                 "z": res.z,
                 "p": res.p,
                 "n_blocks": res.n_blocks,
-                "n_snps": int(ct_block_sums.sum()),
+                "n_snps": res.n_snps,
             }
         )
 
@@ -921,14 +1233,9 @@ def fst(
       * SNPs with n<=1 in either pop or with invalid denominators are ignored.
       * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
-    method = str(method).strip().lower().replace(" ", "_").replace("-", "_")
-    if method in ("wc", "weir", "weir_cockerham", "weir-cockerham"):
-        method = "weir_cockerham"
-    elif method in ("h", "hudson", "bhatia", "ratio", "ratio_of_averages", "ratio-of-averages"):
-        method = "hudson"
-    elif method not in ("hudson", "weir_cockerham"):
-        # only raise if it's neither a known alias nor a canonical name
-        raise ValueError(f"Unknown method for fst: {method!r}")
+    method = str(method).strip().lower().replace("-", "_")
+    if method not in {"hudson", "weir_cockerham"}:
+        raise ValueError("method must be 'hudson' or 'weir_cockerham'")
 
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, n_pops = afs.shape
@@ -946,9 +1253,38 @@ def fst(
         pairs = list(zip(pop1, pop2))
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
-    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
-
     out_rows: List[Dict[str, Union[str, float, int]]] = []
+
+    if method == "hudson":
+        fast = _complete_block_hudson_fst_sums(afs, counts, block_ids, block_lengths)
+        if fast is not None:
+            af_sums, pair_sums, pi_sums = fast
+            for pA, pB in pairs:
+                i = name_to_idx[pA]
+                j = name_to_idx[pB]
+                den_block_sums = af_sums[:, i] + af_sums[:, j] - 2.0 * pair_sums[:, i, j]
+                num_block_sums = den_block_sums - 0.5 * (pi_sums[:, i] + pi_sums[:, j])
+                res = _jackknife_block_ratio_estimates(
+                    num_block_sums,
+                    den_block_sums,
+                    block_lengths,
+                )
+                out_rows.append(
+                    {
+                        "pop1": pA,
+                        "pop2": pB,
+                        "method": method,
+                        "est": res.est,
+                        "se": res.se,
+                        "z": res.z,
+                        "p": res.p,
+                        "n_blocks": res.n_blocks,
+                        "n_snps": n_snps,
+                    }
+                )
+            return pd.DataFrame(out_rows)
+
+    block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
     for pA, pB in pairs:
         i = name_to_idx[pA]
@@ -1007,7 +1343,10 @@ def fst(
             num_block_sums[b_idx] = ns
             ct_block_sums[b_idx] = int(idx2.size)
 
-        res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
+        if method == "hudson":
+            res = _jackknife_block_ratio_estimates(num_block_sums, den_block_sums, ct_block_sums)
+        else:
+            res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
         out_rows.append(
             {
                 "pop1": pA,

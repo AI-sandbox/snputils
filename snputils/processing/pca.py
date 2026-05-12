@@ -26,6 +26,29 @@ def _require_torch():
     return torch
 
 
+_PCA_FITTING_OPTIONS = frozenset({"exact", "lowrank"})
+
+
+def _parse_pca_fitting(fitting: str) -> str:
+    if not isinstance(fitting, str):
+        raise TypeError(f"fitting must be str, not {type(fitting).__name__}")
+    f = fitting.lower().strip()
+    if f not in _PCA_FITTING_OPTIONS:
+        raise ValueError(
+            f"fitting must be one of {sorted(_PCA_FITTING_OPTIONS)!r}, got {fitting!r}"
+        )
+    return f
+
+
+def _sklearn_svd_solver_for_fitting(fitting: str) -> str:
+    """Map ``fitting`` to :class:`sklearn.decomposition.PCA` ``svd_solver``."""
+    if fitting == "exact":
+        return "full"
+    if fitting == "lowrank":
+        return "randomized"
+    raise AssertionError(fitting)
+
+
 def _svd_flip(u, v, u_based_decision=True):
     """
     Sign correction to ensure deterministic output from SVD.
@@ -58,46 +81,25 @@ class TorchPCA:
     This implementation leverages GPU acceleration to achieve significant performance improvements,
     being up to 25 times faster than `sklearn.decomposition.PCA` when running on a compatible GPU.
     """
-    def __init__(self, n_components: int = 2, fitting: str = 'reduced'):
+    def __init__(self, n_components: int = 2, fitting: str = "exact"):
         """
         Args:
             n_components (int, default=2): 
                 The number of principal components. If None, defaults to the minimum of `n_samples` and `n_snps`.
-            fitting (str, default='reduced'): 
-                The fitting approach for the SVD computation. Options:
-                - `'full'`: Full Singular Value Decomposition (SVD).
-                - `'reduced'`: Economy SVD.
-                - `'lowrank'`: Low-rank approximation, which provides a faster but approximate solution.
-                Default is 'reduced'.
+            fitting (str, default='exact'): 
+                SVD mode for PCA:
+                - ``'exact'``: economy SVD via ``torch.linalg.svd`` (``full_matrices=False``),
+                  i.e. standard PCA up to float precision.
+                - ``'lowrank'``: ``torch.svd_lowrank`` for speed; approximate.
         """
         _require_torch()
 
         self.__n_components = n_components
-        self.__fitting = fitting
+        self.__fitting = _parse_pca_fitting(fitting)
         self.__n_components_ = None
         self.__components_ = None
         self.__mean_ = None
         self.__X_new_ = None  # Store transformed SNP data
-
-    def __getitem__(self, key):
-        """
-        To access an attribute of the class using the square bracket notation,
-        similar to a dictionary.
-        """
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(f'Invalid key: {key}')
-
-    def __setitem__(self, key, value):
-        """
-        To set an attribute of the class using the square bracket notation,
-        similar to a dictionary.
-        """
-        try:
-            setattr(self, key, value)
-        except AttributeError:
-            raise KeyError(f'Invalid key: {key}')
 
     @property
     def n_components(self) -> Optional[int]:
@@ -124,8 +126,7 @@ class TorchPCA:
         Retrieve `fitting`.
 
         Returns:
-            **str:** 
-                The fitting approach for the SVD computation.
+            **str:** ``'exact'`` (economy SVD) or ``'lowrank'`` (approximate).
         """
         return self.__fitting
 
@@ -134,10 +135,7 @@ class TorchPCA:
         """
         Update `fitting`.
         """
-        allowed = {"full", "reduced", "lowrank"}
-        if x not in allowed:
-            raise ValueError(f"fitting must be one of {sorted(allowed)}")
-        self.__fitting = x
+        self.__fitting = _parse_pca_fitting(x)
 
     @property
     def n_components_(self) -> Optional[int]:
@@ -247,16 +245,13 @@ class TorchPCA:
         # Compute the mean to center the data
         self.mean_ = torch.mean(X, dim=0)
 
-        # Choose SVD method based on the fitting type
-        if self.fitting == "full":
-            U, S, Vt = torch.linalg.svd(X - self.mean_, full_matrices=True)
-        elif self.fitting == "reduced":
+        if self.fitting == "exact":
             U, S, Vt = torch.linalg.svd(X - self.mean_, full_matrices=False)
         elif self.fitting == "lowrank":
             U, S, V = torch.svd_lowrank(X, q=self.n_components_, M=self.mean_)
-            Vt = V.mT  # Transpose V to get Vt
+            Vt = V.mT
         else:
-            raise ValueError(f"Unrecognized fitting method: {self.fitting}")
+            raise AssertionError(self.fitting)
 
         # Select the first `n_components` columns and singular values
         U = U[:, :self.n_components_]
@@ -329,6 +324,8 @@ class PCA:
     [sklearn.decomposition.PCA](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html) 
     or the custom `TorchPCA` implementation for efficient GPU-accelerated analysis.
     
+    The ``fitting`` parameter selects exact vs approximate SVD on both backends (see ``__init__``).
+
     The PCA class supports both separate and averaged strand processing for SNP data. If the `snpobj` parameter is 
     provided during instantiation, the `fit_transform` method will be automatically called, 
     applying PCA to transform the data according to the selected configuration.
@@ -338,7 +335,7 @@ class PCA:
         snpobj: Optional['SNPObject'] = None, 
         backend: str = 'sklearn',
         n_components: int = 2, 
-        fitting: str = 'full', 
+        fitting: str = "exact",
         device: str = 'cpu',
         average_strands: bool = True, 
         samples_subset: Optional[Union[int, List]] = None, 
@@ -352,12 +349,13 @@ class PCA:
                 The backend to use (`'sklearn'` or `'pytorch'`). Default is 'sklearn'.
             n_components (int, default=2): 
                 The number of principal components. Default is 2.
-            fitting (str, default='full'): 
-                The fitting approach to use for the SVD computation (only for `backend='pytorch'`). 
-                - `'full'`: Full Singular Value Decomposition (SVD).
-                - `'reduced'`: Economy SVD.
-                - `'lowrank'`: Low-rank approximation, which provides a faster but approximate solution.
-                Default is 'full'.
+            fitting (str, default='exact'): 
+                SVD mode for both backends:
+                - ``'exact'``: full economy SVD (``torch.linalg.svd`` with ``full_matrices=False``,
+                  or ``sklearn.decomposition.PCA(..., svd_solver='full')``).
+                - ``'lowrank'``: ``torch.svd_lowrank`` (PyTorch) or ``svd_solver='randomized'`` (sklearn);
+                  faster, approximate.
+                Default is ``'exact'``.
             device (str, default='cpu'): 
                 Device to use (`'cpu'`, `'gpu'`, `'cuda'`, or `'cuda:<index>'`). Default is 'cpu'.
             average_strands (bool, default=True): 
@@ -370,7 +368,7 @@ class PCA:
         self.__snpobj = snpobj
         self.__backend = backend.lower()
         self.__n_components = n_components
-        self.__fitting = fitting
+        self.__fitting = _parse_pca_fitting(fitting)
         self.__device = self._process_device_argument(device) if self.__backend == "pytorch" else device
         self.__average_strands = average_strands
         self.__samples_subset = samples_subset
@@ -385,7 +383,10 @@ class PCA:
         if self.backend == "pytorch":
             self.pca = TorchPCA(n_components=self.n_components, fitting=self.fitting)
         elif self.backend == "sklearn":
-            self.pca = skPCA(n_components=self.n_components)
+            self.pca = skPCA(
+                n_components=self.n_components,
+                svd_solver=_sklearn_svd_solver_for_fitting(self.fitting),
+            )
         else:
             raise ValueError("Unknown backend for PCA: ", backend)
 
@@ -450,10 +451,7 @@ class PCA:
         Retrieve `fitting`.
 
         Returns:
-            **str:** 
-                The fitting approach to use for the SVD computation (only for `backend='pytorch'`). 
-                - `'full'`: Full Singular Value Decomposition (SVD).
-                - `'lowrank'`: Low-rank approximation, which provides a faster but approximate solution.
+            **str:** ``'exact'`` or ``'lowrank'`` (same meaning for sklearn and PyTorch backends).
         """
         return self.__fitting
 
@@ -462,6 +460,11 @@ class PCA:
         """
         Update `fitting`.
         """
+        x = _parse_pca_fitting(x)
+        if self.backend == "pytorch":
+            self.pca.fitting = x
+        elif self.backend == "sklearn":
+            self.pca.set_params(svd_solver=_sklearn_svd_solver_for_fitting(x))
         self.__fitting = x
 
     @property

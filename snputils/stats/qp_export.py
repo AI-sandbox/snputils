@@ -36,6 +36,11 @@ def export_qp(
     tools: Sequence[str] = ("qpAdm", "qpGraph", "qpWave"),
     block_size: int = 5000,
     blocks: Optional[np.ndarray] = None,
+    block_size_cm: Optional[float] = None,
+    block_size_bp: Optional[int] = None,
+    chrom: Optional[Sequence[Any]] = None,
+    pos: Optional[Sequence[Union[int, float]]] = None,
+    cm: Optional[Sequence[Union[int, float]]] = None,
     apply_correction: bool = True,
     overwrite: bool = False,
     ancestry: Optional[Union[str, int]] = None,
@@ -59,12 +64,19 @@ def export_qp(
             to all populations in the prepared allele-frequency table.
         tools: Any subset of ``{"qpAdm", "qpGraph", "qpWave"}``. The default
             writes everything needed by all three tools.
-        block_size: Number of SNPs per jackknife block. Ignored if ``blocks``
-            is provided.
+        block_size: Number of SNPs per jackknife block. Ignored if ``blocks``,
+            ``block_size_cm``, or ``block_size_bp`` is provided.
         blocks: Optional explicit block label per SNP.
-        apply_correction: Apply the small-sample f2 correction. SNPs with
-            haplotype count <= 1 in either population are excluded from f2
-            blocks when correction is enabled.
+        block_size_cm: Optional genetic-distance block size in centimorgans.
+            Uses ``cm`` if provided, otherwise ``SNPObject.variants_cm``.
+        block_size_bp: Optional physical-distance block size in base pairs.
+            Uses ``pos`` if provided, otherwise ``SNPObject.variants_pos``.
+        chrom, pos, cm: Optional variant metadata for distance-based blocking.
+            ``chrom`` is required when using ``block_size_cm`` or
+            ``block_size_bp`` unless it is present on a ``SNPObject``.
+        apply_correction: Apply the small-sample f2 correction. The correction
+            denominator is clamped to at least 1, so count-1 observations are
+            retained when allele frequencies are finite.
         overwrite: Replace existing files if ``True``. Existing target files
             raise ``FileExistsError`` by default.
         ancestry, laiobj, pseudohaploid: Passed through to the allele-frequency
@@ -99,7 +111,17 @@ def export_qp(
     _validate_population_names(pops)
 
     n_snps = int(afs.shape[0])
-    block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
+    block_ids, block_lengths, block_scheme = _resolve_blocks(
+        data,
+        n_snps,
+        blocks=blocks,
+        block_size=block_size,
+        block_size_cm=block_size_cm,
+        block_size_bp=block_size_bp,
+        chrom=chrom,
+        pos=pos,
+        cm=cm,
+    )
     block_ids = np.asarray(block_ids, dtype=np.int64)
     block_lengths = np.asarray(block_lengths, dtype=np.int32)
     n_blocks = int(block_lengths.size)
@@ -160,6 +182,7 @@ def export_qp(
         requested_tools=tuple(sorted(requested)),
         statistics=tuple(statistics),
         block_lengths=block_lengths,
+        block_scheme=block_scheme,
         n_snps=n_snps,
         apply_correction=apply_correction,
         overwrite=overwrite,
@@ -204,6 +227,85 @@ def _subset_populations(pops: Sequence[str], populations: Sequence[str]) -> Tupl
     return requested, [name_to_idx[pop] for pop in requested]
 
 
+def _resolve_blocks(
+    data: Any,
+    n_snps: int,
+    *,
+    blocks: Optional[np.ndarray],
+    block_size: int,
+    block_size_cm: Optional[float],
+    block_size_bp: Optional[int],
+    chrom: Optional[Sequence[Any]],
+    pos: Optional[Sequence[Union[int, float]]],
+    cm: Optional[Sequence[Union[int, float]]],
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    specified = sum(x is not None for x in (blocks, block_size_cm, block_size_bp))
+    if specified > 1:
+        raise ValueError("Specify only one of blocks, block_size_cm, or block_size_bp.")
+
+    if blocks is not None:
+        block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
+        return block_ids, block_lengths, {"type": "explicit"}
+
+    if block_size_cm is not None or block_size_bp is not None:
+        chrom_arr = _metadata_array(data, "variants_chrom", chrom, n_snps, "chrom")
+        if block_size_cm is not None:
+            dist = _metadata_array(data, "variants_cm", cm, n_snps, "cm")
+            labels = _distance_block_labels(chrom_arr, dist, float(block_size_cm))
+            block_ids, block_lengths = _build_blocks(n_snps, labels, block_size)
+            return block_ids, block_lengths, {"type": "genetic", "block_size_cm": float(block_size_cm)}
+
+        dist = _metadata_array(data, "variants_pos", pos, n_snps, "pos")
+        labels = _distance_block_labels(chrom_arr, dist, float(block_size_bp))
+        block_ids, block_lengths = _build_blocks(n_snps, labels, block_size)
+        return block_ids, block_lengths, {"type": "physical", "block_size_bp": int(block_size_bp)}
+
+    block_ids, block_lengths = _build_blocks(n_snps, None, block_size)
+    return block_ids, block_lengths, {"type": "snp_count", "block_size": int(block_size)}
+
+
+def _metadata_array(
+    data: Any,
+    attr: str,
+    explicit: Optional[Sequence[Any]],
+    n_snps: int,
+    name: str,
+) -> np.ndarray:
+    values = explicit
+    if values is None and hasattr(data, attr):
+        values = getattr(data, attr)
+    if values is None:
+        raise ValueError(f"'{name}' is required for distance-based blocking.")
+    arr = np.asarray(values)
+    if arr.shape[0] != n_snps:
+        raise ValueError(f"'{name}' must have length n_snps.")
+    return arr
+
+
+def _distance_block_labels(chrom: Sequence[Any], distance: Sequence[Union[int, float]], block_size: float) -> np.ndarray:
+    if block_size <= 0:
+        raise ValueError("Distance-based block size must be positive.")
+    chrom_arr = np.asarray(chrom, dtype=object)
+    dist_arr = np.asarray(distance, dtype=float)
+    if chrom_arr.shape[0] != dist_arr.shape[0]:
+        raise ValueError("'chrom' and distance arrays must have the same length.")
+    if np.any(~np.isfinite(dist_arr)):
+        raise ValueError("Distance values must be finite for distance-based blocking.")
+
+    labels: List[str] = []
+    current_chrom: Optional[str] = None
+    block_start = -np.inf
+    block_index = -1
+    for chrom_value, dist_value in zip(chrom_arr, dist_arr):
+        chrom_key = str(chrom_value)
+        if current_chrom != chrom_key or float(dist_value) - block_start >= block_size:
+            current_chrom = chrom_key
+            block_start = float(dist_value)
+            block_index += 1
+        labels.append(f"{chrom_key}:{block_index}")
+    return np.asarray(labels, dtype=object)
+
+
 def _validate_population_names(pops: Sequence[str]) -> None:
     if len(set(pops)) != len(pops):
         raise ValueError("Population labels must be unique.")
@@ -246,11 +348,11 @@ def _pair_f2_blocks(
 ) -> Tuple[np.ndarray, np.ndarray]:
     valid = np.isfinite(p1) & np.isfinite(p2)
     if apply_correction:
-        valid &= (n1 > 1) & (n2 > 1)
         with np.errstate(divide="ignore", invalid="ignore"):
-            values = (p1 - p2) ** 2 - (p1 * (1.0 - p1)) / (n1 - 1.0) - (p2 * (1.0 - p2)) / (n2 - 1.0)
+            denom1 = np.maximum(1.0, n1 - 1.0)
+            denom2 = np.maximum(1.0, n2 - 1.0)
+            values = (p1 - p2) ** 2 - (p1 * (1.0 - p1)) / denom1 - (p2 * (1.0 - p2)) / denom2
     else:
-        valid &= (n1 > 0) & (n2 > 0)
         with np.errstate(invalid="ignore"):
             values = (p1 - p2) ** 2
     values = np.where(valid, values, 0.0)
@@ -268,7 +370,7 @@ def _pair_ap_blocks(
     block_ids: np.ndarray,
     block_lengths: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    valid = np.isfinite(p1) & np.isfinite(p2) & (n1 > 0) & (n2 > 0)
+    valid = np.isfinite(p1) & np.isfinite(p2)
     with np.errstate(invalid="ignore"):
         values = (p1 * p2 + (1.0 - p1) * (1.0 - p2)) / 2.0
     values = np.where(valid, values, 0.0)
@@ -309,6 +411,7 @@ def _write_manifest(
     requested_tools: Sequence[str],
     statistics: Sequence[str],
     block_lengths: np.ndarray,
+    block_scheme: Dict[str, Any],
     n_snps: int,
     apply_correction: bool,
     overwrite: bool,
@@ -322,6 +425,7 @@ def _write_manifest(
         "n_populations": len(populations),
         "n_snps": int(n_snps),
         "n_blocks": int(block_lengths.size),
+        "block_scheme": block_scheme,
         "block_lengths": [int(x) for x in block_lengths],
         "apply_correction": bool(apply_correction),
         "layout": {

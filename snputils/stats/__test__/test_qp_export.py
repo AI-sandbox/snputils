@@ -104,6 +104,45 @@ def test_export_qp_f2_weighted_mean_matches_native_f2(tmp_path):
     assert not (tmp_path / "block_lengths_ap.rds").exists()
 
 
+def test_export_qp_corrected_f2_retains_count_one_observations(tmp_path):
+    afs, counts, pops = _toy_data()
+    counts[0, 0] = 1.0
+    counts[0, 1] = 1.0
+
+    result = export_qp((afs, counts, pops), tmp_path, tools="qpGraph", block_size=2)
+    ab = _read_pair_file(tmp_path / "A" / "B_f2.rds", result.n_blocks)
+
+    pa = afs[0:2, 0]
+    pb = afs[0:2, 1]
+    na = counts[0:2, 0]
+    nb = counts[0:2, 1]
+    expected_first_block = np.mean(
+        (pa - pb) ** 2
+        - pa * (1.0 - pa) / np.maximum(1.0, na - 1.0)
+        - pb * (1.0 - pb) / np.maximum(1.0, nb - 1.0)
+    )
+
+    assert np.isclose(ab[0, 0], expected_first_block, atol=1e-15)
+    assert np.isclose(ab[0, 1], 1.0, atol=1e-15)
+
+
+def test_export_qp_supports_physical_distance_blocks(tmp_path):
+    afs, counts, pops = _toy_data()
+
+    export_qp(
+        (afs, counts, pops),
+        tmp_path,
+        tools="qpGraph",
+        block_size_bp=100,
+        chrom=["1", "1", "1", "1"],
+        pos=[1, 50, 120, 130],
+    )
+
+    manifest = json.loads((tmp_path / "qp_export.json").read_text())
+    assert _read_rds_int_vector(tmp_path / "block_lengths_f2.rds").tolist() == [2, 2]
+    assert manifest["block_scheme"] == {"type": "physical", "block_size_bp": 100}
+
+
 def test_export_qp_ap_values_for_qpadm_qpwave(tmp_path):
     afs, counts, pops = _toy_data()
     result = export_qp((afs, counts, pops), tmp_path, tools=("qpAdm", "qpWave"), block_size=2)

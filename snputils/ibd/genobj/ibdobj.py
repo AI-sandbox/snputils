@@ -91,7 +91,7 @@ class IBDObject:
         Retrieve `sample_id_1`.
 
         Returns:
-            **array of shape (n_segments,):** Sample identifiers for the first individual.
+            array of shape (n_segments,): Sample identifiers for the first individual.
         """
         return self.__sample_id_1
 
@@ -108,7 +108,7 @@ class IBDObject:
         Retrieve `haplotype_id_1`.
 
         Returns:
-            **array of shape (n_segments,):** Haplotype identifiers for the first individual (values in {1, 2}).
+            array of shape (n_segments,): Haplotype identifiers for the first individual (values in {1, 2}).
         """
         return self.__haplotype_id_1
 
@@ -125,7 +125,7 @@ class IBDObject:
         Retrieve `sample_id_2`.
 
         Returns:
-            **array of shape (n_segments,):** Sample identifiers for the second individual.
+            array of shape (n_segments,): Sample identifiers for the second individual.
         """
         return self.__sample_id_2
 
@@ -142,7 +142,7 @@ class IBDObject:
         Retrieve `haplotype_id_2`.
 
         Returns:
-            **array of shape (n_segments,):** Haplotype identifiers for the second individual (values in {1, 2}).
+            array of shape (n_segments,): Haplotype identifiers for the second individual (values in {1, 2}).
         """
         return self.__haplotype_id_2
 
@@ -159,7 +159,7 @@ class IBDObject:
         Retrieve `chrom`.
 
         Returns:
-            **array of shape (n_segments,):** Chromosome identifier for each IBD segment.
+            array of shape (n_segments,): Chromosome identifier for each IBD segment.
         """
         return self.__chrom
 
@@ -176,7 +176,7 @@ class IBDObject:
         Retrieve `start`.
 
         Returns:
-            **array of shape (n_segments,):** Start physical position (1-based, bp) for each IBD segment.
+            array of shape (n_segments,): Start physical position (1-based, bp) for each IBD segment.
         """
         return self.__start
 
@@ -193,7 +193,7 @@ class IBDObject:
         Retrieve `end`.
 
         Returns:
-            **array of shape (n_segments,):** End physical position (1-based, bp) for each IBD segment.
+            array of shape (n_segments,): End physical position (1-based, bp) for each IBD segment.
         """
         return self.__end
 
@@ -210,7 +210,7 @@ class IBDObject:
         Retrieve `length_cm`.
 
         Returns:
-            **array of shape (n_segments,):** Genetic length (cM) for each segment if available; otherwise None.
+            array of shape (n_segments,): Genetic length (cM) for each segment if available; otherwise None.
         """
         return self.__length_cm
 
@@ -227,7 +227,7 @@ class IBDObject:
         Retrieve `segment_type`.
 
         Returns:
-            **array of shape (n_segments,):** Segment type labels (e.g., 'IBD1', 'IBD2'), or None if unavailable.
+            array of shape (n_segments,): Segment type labels (e.g., 'IBD1', 'IBD2'), or None if unavailable.
         """
         return self.__segment_type
 
@@ -244,7 +244,7 @@ class IBDObject:
         Retrieve `n_segments`.
 
         Returns:
-            **int:** The total number of IBD segments.
+            int: The total number of IBD segments.
         """
         return self.__chrom.shape[0]
 
@@ -276,7 +276,7 @@ class IBDObject:
         Retrieve `pairs`.
 
         Returns:
-            **array of shape (n_segments, 2):** Per-segment sample identifier pairs.
+            array of shape (n_segments, 2): Per-segment sample identifier pairs.
         """
         return np.column_stack([self.__sample_id_1, self.__sample_id_2])
 
@@ -286,7 +286,7 @@ class IBDObject:
         Retrieve `haplotype_pairs`.
 
         Returns:
-            **array of shape (n_segments, 2):** Per-segment haplotype identifier pairs.
+            array of shape (n_segments, 2): Per-segment haplotype identifier pairs.
         """
         return np.column_stack([self.__haplotype_id_1, self.__haplotype_id_2])
 
@@ -295,7 +295,7 @@ class IBDObject:
         Create and return a copy of `self`.
 
         Returns:
-            **IBDObject:** A new instance of the current object.
+            IBDObject: A new instance of the current object.
         """
         return copy.deepcopy(self)
 
@@ -304,7 +304,7 @@ class IBDObject:
         Retrieve a list of public attribute names for `self`.
 
         Returns:
-            **list of str:** A list of attribute names, with internal name-mangling removed.
+            list of str: A list of attribute names, with internal name-mangling removed.
         """
         return [attr.replace('_IBDObject__', '') for attr in vars(self)]
 
@@ -326,7 +326,7 @@ class IBDObject:
             inplace (bool, default=False): If True, modifies `self` in place. If False, returns a new `IBDObject`.
 
         Returns:
-            **Optional[IBDObject]:** A filtered IBDObject if `inplace=False`. If `inplace=True`, returns None.
+            Optional[IBDObject]: A filtered IBDObject if `inplace=False`. If `inplace=True`, returns None.
         """
         mask = np.ones(self.n_segments, dtype=bool)
 
@@ -387,21 +387,19 @@ class IBDObject:
         Filter and/or trim IBD segments to intervals where both individuals carry the specified ancestry
         according to a `LocalAncestryObject`.
 
-        This performs an interval intersection per segment against ancestry tracts:
-        - If haplotype IDs are known (e.g., Hap-IBD), ancestry is checked on the specific
-          haplotype of each individual.
-        - If haplotype IDs are unknown (e.g., ancIBD; haplotype_id_* == -1), ancestry is
-          considered present for an individual if at least one of their haplotypes matches
-          the requested ancestry (unless `require_both_haplotypes=True`).
+        This performs an interval intersection per segment against ancestry
+        tracts. If haplotype IDs are known (for example Hap-IBD), ancestry is
+        checked on those specific haplotypes. If haplotype IDs are unknown
+        (for example ancIBD, where ``haplotype_id_* == -1``), ancestry is
+        considered present for an individual if at least one haplotype matches
+        the target ancestry, unless ``require_both_haplotypes=True``.
 
-        Method 'strict':
-            Drop entire IBD segments if ANY overlapping LAI window contains non-target ancestry
-            for either individual. No trimming occurs - segments are kept whole or dropped completely.
+        ``method='strict'`` drops entire segments when any overlapping LAI
+        window has non-target ancestry for either individual.
 
-        Method 'clip':
-            Trim IBD segments to contiguous regions where both individuals have the target ancestry.
-            Resulting subsegments are clipped to LAI window boundaries and original IBD start/end,
-            with optional length filtering by bp or cM.
+        ``method='clip'`` trims segments to contiguous regions where both
+        individuals carry target ancestry, clipped to LAI window boundaries
+        and original IBD segment boundaries.
 
         Args:
             laiobj: LocalAncestryObject containing 2D `lai` of shape (n_windows, n_haplotypes),

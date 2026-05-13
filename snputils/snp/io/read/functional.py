@@ -50,23 +50,24 @@ def read_pgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
 
 
 def read_vcf(filename: Union[str, pathlib.Path], 
-             backend: str = 'polars',
+             backend: str = 'default',
              **kwargs) -> SNPObject:
     """
     Read a VCF fileset into a SNPObject.
 
     Args:
         filename: Filename of the VCF fileset to read.
-        backend: Backend to use for reading the VCF file. Options are 'polars' or 'scikit-allel'.
+        backend: Backend to use for reading the VCF file. Options are 'default' or 'polars'.
         **kwargs: Additional arguments passed to the reader method. See :class:`snputils.snp.io.read.vcf.VCFReader` for possible parameters.
     """
     from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
+    if backend == 'default':
+        print(f"Reading {filename} with default backend")
+        return VCFReader(filename).read(**kwargs)
     if backend == 'polars':
         print(f"Reading {filename} with polars backend")
         return VCFReaderPolars(filename).read(**kwargs)
-    else:
-        print(f"Reading {filename} with scikit-allel backend")
-        return VCFReader(filename).read(**kwargs)
+    raise ValueError(f"VCF backend not supported: {backend}")
 
 
 def read_grg(filename: Union[str, pathlib.Path], **kwargs) -> "GRGObject":

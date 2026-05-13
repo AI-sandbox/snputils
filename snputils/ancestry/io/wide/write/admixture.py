@@ -42,7 +42,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `wideobj`.
 
         Returns:
-            **GlobalAncestryObject:** A GlobalAncestryObject instance.
+            GlobalAncestryObject: A GlobalAncestryObject instance.
         """
         return self.__wideobj
 
@@ -52,7 +52,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `file_prefix`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Prefix for output file names, including directory path but excluding file extensions. 
                 The prefix is used to generate specific file names for each output, with file-specific 
                 suffixes appended as described above (e.g., `file_prefix.n_ancestries.Q` for the Q matrix file).
@@ -65,7 +65,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `Q_file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the `.Q` file that will store the Q matrix (per-sample ancestry proportions).
         """
         return self.__Q_file
@@ -76,7 +76,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `P_file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the `.P` file that will store the P/F matrix (per-ancestry SNP frequencies).
         """
         return self.__P_file
@@ -87,7 +87,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `sample_file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the `.txt` the file that will store sample identifiers. 
                 If None, sample identifiers are not saved.
         """
@@ -99,7 +99,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `snp_file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the `.txt` file that will store SNP identifiers. 
                 If None, SNP identifiers are not saved.
         """
@@ -111,7 +111,7 @@ class AdmixtureWriter(WideBaseWriter):
         Retrieve `ancestry_file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the `.map` file that will store ancestry labels for each sample. 
                 If None, ancestries are not saved.
         """
@@ -150,7 +150,7 @@ class AdmixtureWriter(WideBaseWriter):
         Write the data contained in the `wideobj` instance into the multiple ADMIXTURE files
         with the specified `file_prefix`. If the files already exist, they will be overwritten.
 
-        **Output files:**
+        Output files:
 
         - `<file_prefix>.K.Q`: Q matrix file. The file uses space (' ') as the delimiter.
         - `<file_prefix>.K.P`: P matrix file. The file uses space (' ') as the delimiter.

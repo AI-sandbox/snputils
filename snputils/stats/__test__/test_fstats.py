@@ -1,5 +1,6 @@
 import numpy as np
 
+from snputils.snp.genobj.snpobj import SNPObject
 from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
 
 
@@ -16,6 +17,32 @@ def _toy_data():
     counts = np.full_like(afs, 20)
     pops = ["A", "B", "C", "D"]
     return afs, counts, pops
+
+
+def test_f2_uses_plink_fid_when_fid_differs_from_iid():
+    gt = np.array(
+        [
+            [0, 0, 2, 2],
+            [0, 0, 2, 2],
+            [1, 1, 1, 1],
+        ],
+        dtype=np.int8,
+    )
+    samples = np.array(["i1", "i2", "i3", "i4"])
+    fids = np.array(["A", "A", "B", "B"])
+    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=fids)
+    explicit = f2(obj, pop1=["A"], pop2=["B"], sample_labels=["A", "A", "B", "B"], apply_correction=False, block_size=2)
+    inferred = f2(obj, pop1=["A"], pop2=["B"], sample_labels=None, apply_correction=False, block_size=2)
+    assert np.isclose(explicit.est.iloc[0], inferred.est.iloc[0], atol=1e-15)
+
+
+def test_f2_ignores_fid_when_same_as_iid():
+    gt = np.array([[0, 1], [1, 0]], dtype=np.int8)
+    samples = np.array(["s0", "s1"])
+    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=samples.copy())
+    res = f2(obj, apply_correction=False, block_size=1)
+    assert res.shape[0] == 1
+    assert {res.pop1.iloc[0], res.pop2.iloc[0]} == {"s0", "s1"}
 
 
 def test_f2_basic():
@@ -378,5 +405,70 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
     p_j = afs[:, j]
     within_sum = np.sum(p_i * (1.0 - p_i) + p_j * (1.0 - p_j))
     den_sum = f2_unc_sum + within_sum
-    expected = num_sum / den_sum
-    assert np.isclose(fst_row.est, expected, rtol=1e-12, atol=1e-12)
+    # Raw Hudson identity on the complete data:
+    # num = corrected f2 sum, den = uncorrected f2 + within-pop het sum.
+    raw_ratio = num_sum / den_sum
+
+    # The reported fst() estimate uses weighted delete-one-block jackknife
+    # over block-level ratios, matching ADMIXTOOLS style estimation.
+    block_ids = np.arange(afs.shape[0]) // 2
+    n_blocks = int(block_ids.max()) + 1
+    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
+    num_block = np.zeros(n_blocks, dtype=float)
+    den_block = np.zeros(n_blocks, dtype=float)
+    for b in range(n_blocks):
+        idx = block_ids == b
+        pi = p_i[idx]
+        pj = p_j[idx]
+        ni = counts[idx, i]
+        nj = counts[idx, j]
+        dxy = pi * (1.0 - pj) + pj * (1.0 - pi)
+        num_snp = dxy - pi * (1.0 - pi) * (ni / (ni - 1.0)) - pj * (1.0 - pj) * (nj / (nj - 1.0))
+        num_block[b] = float(np.sum(num_snp))
+        den_block[b] = float(np.sum(dxy))
+
+    block_est = num_block / den_block
+    weights = block_lengths
+    weight_sum = float(np.sum(weights))
+    tot = float(np.average(block_est, weights=weights))
+    rel = weights / weight_sum
+    loo = (tot - block_est * rel) / (1.0 - rel)
+    h = weight_sum / weights
+    jk_expected = float(np.average(loo, weights=(1.0 - 1.0 / h)))
+
+    assert np.isclose(raw_ratio, num_block.sum() / den_block.sum(), rtol=1e-12, atol=1e-12)
+    assert np.isclose(fst_row.est, jk_expected, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_and_f2_pseudohaploid():
+    # A: 2 diploid samples
+    # B: 2 pseudohaploid samples (no hets)
+    gt = np.array([
+        # S0(A) S1(A) S2(B) S3(B)
+        [ 1.0,  0.0,  0.0,  2.0],
+        [ 0.0,  1.0,  2.0,  0.0],
+        [ 2.0,  1.0,  2.0,  2.0],
+    ])
+    samples = np.array(["s0", "s1", "s2", "s3"])
+    labels = np.array(["A", "A", "B", "B"])
+    obj = SNPObject(calldata_gt=gt, samples=samples)
+
+    # 1. Fst
+    res_fst_false = fst(obj, pop1=["A"], pop2=["B"], sample_labels=labels, method="hudson", pseudohaploid=False)
+    res_fst_true = fst(obj, pop1=["A"], pop2=["B"], sample_labels=labels, method="hudson", pseudohaploid=True)
+    
+    # Frequencies are exactly the same (0.5, 0.5, 1.0) for pop B in both cases.
+    # But counts differ: n=4 (False) vs n=2 (True).
+    # Since pi_B uses n/(n-1), it will be larger for n=2.
+    # Therefore, the numerator of Fst (d_xy - 0.5(pi_x + pi_y)) will be smaller.
+    assert res_fst_false.est.iloc[0] != res_fst_true.est.iloc[0]
+    assert res_fst_true.est.iloc[0] < res_fst_false.est.iloc[0]
+
+    # 2. f2
+    res_f2_false = f2(obj, pop1=["A"], pop2=["B"], sample_labels=labels, pseudohaploid=False)
+    res_f2_true = f2(obj, pop1=["A"], pop2=["B"], sample_labels=labels, pseudohaploid=True)
+    
+    # Similarly, f2 uses p*(1-p)/(n-1) correction.
+    # With n=2, correction is larger, so corrected f2 is smaller.
+    assert res_f2_false.est.iloc[0] != res_f2_true.est.iloc[0]
+    assert res_f2_true.est.iloc[0] < res_f2_false.est.iloc[0]

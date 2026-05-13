@@ -120,7 +120,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `haplotypes`.
 
         Returns:
-            **list of length n_haplotypes:** A list of unique haplotype identifiers.
+            list of length n_haplotypes: A list of unique haplotype identifiers.
         """
         return self.__haplotypes
 
@@ -137,7 +137,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `lai`.
 
         Returns:
-            **array of shape (n_windows, n_haplotypes):** 
+            array of shape (n_windows, n_haplotypes): 
                 A 2D array containing local ancestry inference values, where each row represents a 
                 genomic window, and each column corresponds to a haplotype phase for each sample.
         """
@@ -156,7 +156,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `samples`.
 
         Returns:
-            **list of str:** A list of unique sample identifiers.
+            list of str: A list of unique sample identifiers.
         """
         if self.__samples is not None:
             return self.__samples
@@ -178,7 +178,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `ancestry_map`.
 
         Returns:
-            **dict of str to str:** A dictionary mapping ancestry codes to region names.
+            dict of str to str: A dictionary mapping ancestry codes to region names.
         """
         return self.__ancestry_map
 
@@ -195,7 +195,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `window_sizes`.
 
         Returns:
-            **array of shape (n_windows,):** 
+            array of shape (n_windows,): 
                 An array specifying the number of SNPs in each genomic window.
         """
         return self.__window_sizes
@@ -213,7 +213,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `centimorgan_pos`.
 
         Returns:
-            **array of shape (n_windows, 2):** 
+            array of shape (n_windows, 2): 
                 A 2D array containing the start and end centimorgan positions for each window.
         """
         return self.__centimorgan_pos
@@ -231,7 +231,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `chromosomes`.
 
         Returns:
-            **array of shape (n_windows,):** 
+            array of shape (n_windows,): 
                 An array with chromosome numbers corresponding to each genomic window.
         """
         return self.__chromosomes
@@ -249,7 +249,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `physical_pos`.
 
         Returns:
-            **array of shape (n_windows, 2):** 
+            array of shape (n_windows, 2): 
                 A 2D array containing the start and end physical positions for each window.
         """
         return self.__physical_pos
@@ -267,7 +267,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `n_samples`.
 
         Returns:
-            **int:** 
+            int: 
                 The total number of samples.
         """
         if self.__samples is not None:
@@ -285,7 +285,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `n_ancestries`.
 
         Returns:
-            **int:** The total number of unique ancestries.
+            int: The total number of unique ancestries.
         """
         return len(np.unique(self.__lai))
     
@@ -295,7 +295,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `n_haplotypes`.
 
         Returns:
-            **int:** The total number of haplotypes.
+            int: The total number of haplotypes.
         """
         if self.__haplotypes is not None:
             return len(self.__haplotypes)
@@ -308,7 +308,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve `n_windows`.
 
         Returns:
-            **int:** The total number of genomic windows.
+            int: The total number of genomic windows.
         """
         return self.__lai.shape[0]
 
@@ -330,7 +330,7 @@ class LocalAncestryObject(AncestryObject):
         Create and return a copy of `self`.
 
         Returns:
-            **LocalAncestryObject:** 
+            LocalAncestryObject: 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -340,7 +340,7 @@ class LocalAncestryObject(AncestryObject):
         Retrieve a list of public attribute names for `self`.
 
         Returns:
-            **list of str:** 
+            list of str: 
                 A list of attribute names, with internal name-mangling removed, 
                 for easier reference to public attributes in the instance.
         """
@@ -374,7 +374,7 @@ class LocalAncestryObject(AncestryObject):
                 the windows filtered. Default is False.
 
         Returns:
-            **Optional[LocalAncestryObject]:** 
+            Optional[LocalAncestryObject]: 
                 A new `LocalAncestryObject` with the specified windows filtered if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
@@ -467,7 +467,7 @@ class LocalAncestryObject(AncestryObject):
                 samples filtered. Default is False.
 
         Returns:
-            **Optional[LocalAncestryObject]:** 
+            Optional[LocalAncestryObject]: 
                 A new `LocalAncestryObject` with the specified samples filtered if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
@@ -626,7 +626,7 @@ class LocalAncestryObject(AncestryObject):
                     - `"2D"`: Shape `(n_snps, n_samples * 2)`.
 
         Returns:
-            **SNPObject**: 
+            SNPObject: 
                 A `SNPObject` containing SNP-level ancestry data and updated SNP attributes.
         """
         from snputils.snp.genobj.snpobj import SNPObject
@@ -787,7 +787,7 @@ class LocalAncestryObject(AncestryObject):
         The format of the saved file is determined by the file extension provided in the `file` 
         argument.
 
-        **Supported formats:**
+        Supported formats:
 
         - `.msp`: Text-based MSP format.
         - `.msp.tsv`: Text-based MSP format with TSV extension.

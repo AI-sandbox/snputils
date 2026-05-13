@@ -91,7 +91,7 @@ class GRGObject:
         Retrieve `calldata_gt`.
 
         Returns:
-            **GRG | MutableGRG:** 
+            GRG | MutableGRG: 
                 An GRG containing genotype data for all samples.
         """
         return self.__calldata_gt
@@ -110,7 +110,7 @@ class GRGObject:
         Retrieve `filename`.
 
         Returns:
-            **str** 
+            str 
                 A string containing the file name.
         """
         return self.__filename
@@ -324,7 +324,7 @@ class GRGObject:
         Create and return a copy of `self`.
 
         Returns:
-            **GRGObject:** 
+            GRGObject: 
                 A new instance of the current object.
         """
         return copy.deepcopy(self)
@@ -334,7 +334,7 @@ class GRGObject:
         Retrieve a list of public attribute names for `self`.
 
         Returns:
-            **list of str:** 
+            list of str: 
                 A list of attribute names, with internal name-mangling removed, 
                 for easier reference to public attributes in the instance.
         """

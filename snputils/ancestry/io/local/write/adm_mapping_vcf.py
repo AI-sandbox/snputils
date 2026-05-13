@@ -44,7 +44,7 @@ class AdmixtureMappingVCFWriter:
         Retrieve `laiobj`. 
 
         Returns:
-            **LocalAncestryObject:** 
+            LocalAncestryObject: 
                 A LocalAncestryObject instance.
         """
         return self.__laiobj
@@ -55,7 +55,7 @@ class AdmixtureMappingVCFWriter:
         Retrieve `file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the file where the data will be saved. It should end with `.vcf` or `.bcf`. 
                 If the provided path does not have one of these extensions, the `.vcf` extension will be appended.
         """
@@ -67,7 +67,7 @@ class AdmixtureMappingVCFWriter:
         Retrieve `ancestry_map`.
 
         Returns:
-            **dict of str to str:** 
+            dict of str to str: 
                 A dictionary mapping ancestry codes to region names. If not explicitly 
                 provided, it will default to the `ancestry_map` from `laiobj`.
         """
@@ -86,7 +86,7 @@ class AdmixtureMappingVCFWriter:
         Write VCF or BCF files for each ancestry type defined in the ancestry map.
         If the file already exists, it will be overwritten.
 
-        **Output VCF/BCF content:**
+        Output VCF/BCF content:
         
         For each ancestry, this method converts LAI data to SNP alleles and writes it in a VCF-compatible format.
         SNPs are encoded as follows:
@@ -107,7 +107,7 @@ class AdmixtureMappingVCFWriter:
         - `FORMAT`: Genotype format. Set to `'GT'`, representing the genotype as phased alleles.
         - `<SampleID>`: One column per sample, containing the genotype data (`1|0`, `0|1`, etc.).
 
-        **Output files:**
+        Output files:
 
         - A separate VCF file is written for each ancestry type, with filenames formatted as:
           `<filename>_<ancestry>.vcf` (e.g., `output_African.vcf`).

@@ -81,7 +81,6 @@ suppress_warnings = ["myst.header"]
 
 autodoc_mock_imports = [
     "adjustText",
-    "allel",
     "joblib",
     "matplotlib",
     "nbformat",

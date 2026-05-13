@@ -168,6 +168,74 @@ def test_vcf_polars_iter_read_reconstructs_eager_object(data_path, tmp_path):
     np.testing.assert_array_equal(chunks[0].samples, eager.samples)
 
 
+def test_vcf_polars_iter_read_supports_standard_sample_and_variant_ids(data_path, tmp_path):
+    mini_vcf = tmp_path / "subset_10k.vcf"
+    _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
+    reader = VCFReaderPolars(str(mini_vcf))
+    eager = reader.read(sum_strands=False)
+    sample_ids = eager.samples[[1, 2]].tolist()
+    variant_ids = eager.variants_id[[3, 5, 8]].tolist()
+
+    eager_subset = (
+        eager
+        .filter_samples(samples=sample_ids)
+        .filter_variants(mask=np.isin(eager.variants_id, variant_ids))
+    )
+    chunks = list(
+        reader.iter_read(
+            sample_ids=sample_ids,
+            variant_ids=variant_ids,
+            sum_strands=False,
+            chunk_size=2,
+        )
+    )
+
+    assert len(chunks) > 1
+    gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
+
+    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(var_id, eager_subset.variants_id)
+    np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
+    np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
+    np.testing.assert_array_equal(var_alt, eager_subset.variants_alt)
+    np.testing.assert_array_equal(var_chrom, eager_subset.variants_chrom)
+    np.testing.assert_array_equal(chunks[0].samples, eager_subset.samples)
+
+
+def test_vcf_polars_iter_read_supports_standard_sample_and_variant_idxs(data_path, tmp_path):
+    mini_vcf = tmp_path / "subset_10k.vcf"
+    _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
+    reader = VCFReaderPolars(str(mini_vcf))
+    eager = reader.read(sum_strands=False)
+    sample_idxs = np.array([0, 3], dtype=np.uint32)
+    variant_idxs = np.array([1, 4, 9], dtype=np.uint32)
+
+    eager_subset = (
+        eager
+        .filter_samples(indexes=sample_idxs)
+        .filter_variants(indexes=variant_idxs)
+    )
+    chunks = list(
+        reader.iter_read(
+            sample_idxs=sample_idxs,
+            variant_idxs=variant_idxs,
+            sum_strands=False,
+            chunk_size=2,
+        )
+    )
+
+    assert len(chunks) > 1
+    gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
+
+    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(var_id, eager_subset.variants_id)
+    np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
+    np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
+    np.testing.assert_array_equal(var_alt, eager_subset.variants_alt)
+    np.testing.assert_array_equal(var_chrom, eager_subset.variants_chrom)
+    np.testing.assert_array_equal(chunks[0].samples, eager_subset.samples)
+
+
 def test_allele_freq_stream_from_bed_reader_matches_eager(data_path):
     reader = BEDReader(data_path + "/bed/subset")
     subset = _first_n_variant_idxs(reader)

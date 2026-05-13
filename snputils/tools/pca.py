@@ -55,6 +55,16 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         help="Number of principal components to compute.",
     )
     parser.add_argument(
+        "--fitting",
+        dest="fitting",
+        choices=("exact", "lowrank"),
+        default="exact",
+        help=(
+            "SVD mode: exact (standard PCA; sklearn uses svd_solver='full') or "
+            "lowrank approximate (sklearn randomized / torch svd_lowrank)."
+        ),
+    )
+    parser.add_argument(
         "--sum-strands",
         dest="sum_strands",
         required=False,
@@ -65,8 +75,8 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         "--vcf-backend",
         dest="vcf_backend",
         required=False,
-        choices=("polars", "scikit-allel"),
-        default="polars",
+        choices=("default", "polars"),
+        default="default",
         help="VCF reader backend (used only when input is VCF).",
     )
 
@@ -78,21 +88,6 @@ def parse_pca_args(argv):
     )
     add_pca_arguments(parser)
     return parser.parse_args(argv)
-
-
-def _compute_sklearn_components(snpobj, n_components: int) -> np.ndarray:
-    from sklearn.decomposition import PCA as SklearnPCA
-
-    if snpobj.calldata_gt.ndim == 2:
-        X = np.transpose(snpobj.calldata_gt.astype(float), (1, 0))
-    elif snpobj.calldata_gt.ndim == 3:
-        X = np.transpose(snpobj.calldata_gt.astype(float), (1, 0, 2))
-        X = np.mean(X, axis=2)
-    else:
-        raise ValueError(
-            f"Invalid shape for calldata_gt: expected 2D or 3D, got {snpobj.calldata_gt.ndim}D."
-        )
-    return SklearnPCA(n_components=n_components).fit_transform(X)
 
 
 def run_pca_command(args: argparse.Namespace) -> int:
@@ -113,11 +108,22 @@ def run_pca_command(args: argparse.Namespace) -> int:
 
         from ..processing import PCA
 
-        pca = PCA(backend=args.backend, n_components=args.n_components)
+        pca = PCA(
+            backend=args.backend,
+            n_components=args.n_components,
+            fitting=args.fitting,
+        )
         components = pca.fit_transform(snpobj)
         components = components.cpu().numpy()
     elif args.backend == "sklearn":
-        components = _compute_sklearn_components(snpobj, n_components=args.n_components)
+        from ..processing import PCA
+
+        pca = PCA(
+            backend="sklearn",
+            n_components=args.n_components,
+            fitting=args.fitting,
+        )
+        components = np.asarray(pca.fit_transform(snpobj), dtype=float)
     else:
         raise ValueError("Unknown backend for PCA. Use 'sklearn' or 'pytorch'.")
 

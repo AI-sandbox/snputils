@@ -19,6 +19,8 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "BEDWriter": (".snp", "BEDWriter"),
     "PGENWriter": (".snp", "PGENWriter"),
     "VCFWriter": (".snp", "VCFWriter"),
+    "vcf_to_grg": (".snp", "vcf_to_grg"),
+    "vcf_to_igd": (".snp", "vcf_to_igd"),
     "read_snp": (".snp", "read_snp"),
     "read_bed": (".snp", "read_bed"),
     "read_pgen": (".snp", "read_pgen"),

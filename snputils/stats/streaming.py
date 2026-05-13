@@ -303,6 +303,7 @@ def allele_freq_stream(
     laiobj: Optional[Any] = None,
     lai_chunk_size: int = 1024,
     lai_iter_kwargs: Optional[Dict[str, Any]] = None,
+    pseudohaploid: Union[bool, int] = False,
     return_counts: bool = False,
     as_dataframe: bool = False,
     **iter_kwargs,
@@ -334,6 +335,10 @@ def allele_freq_stream(
             Number of LAI windows per chunk when `laiobj` is a streaming LAI reader/path.
         lai_iter_kwargs:
             Optional kwargs forwarded to `laiobj.iter_windows(...)`.
+        pseudohaploid:
+            If True, detects pseudo-haploid samples (samples with no heterozygotes in the first 1000 SNPs)
+            and treats them as haploid. If an integer `n` is provided, checks the first `n` SNPs.
+            If False, treats all samples as diploid.
         return_counts:
             If True, also return called haplotype counts.
         as_dataframe:
@@ -427,6 +432,7 @@ def allele_freq_stream(
             sample_labels=labels,
             ancestry=ancestry,
             calldata_lai=calldata_lai,
+            pseudohaploid=pseudohaploid,
         )
 
         if pops_ref is None:

@@ -146,7 +146,7 @@ class maasMDS:
         Create and return a copy of `self`.
 
         Returns:
-            **maasMDS:** 
+            maasMDS: 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -157,7 +157,7 @@ class maasMDS:
         Retrieve `snpobj`.
         
         Returns:
-            **SNPObject:** A SNPObject instance.
+            SNPObject: A SNPObject instance.
         """
         return self.__snpobj
 
@@ -174,7 +174,7 @@ class maasMDS:
         Retrieve `laiobj`.
         
         Returns:
-            **LocalAncestryObject:** A LAIObject instance.
+            LocalAncestryObject: A LAIObject instance.
         """
         return self.__laiobj
 
@@ -191,7 +191,7 @@ class maasMDS:
         Retrieve `labels_file`.
         
         Returns:
-            **str:** 
+            str: 
                 Path to the labels file in `.tsv` format.
         """
         return self.__labels_file
@@ -209,7 +209,7 @@ class maasMDS:
         Retrieve `ancestry`.
         
         Returns:
-            **int:** Ancestry index for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
+            int: Ancestry index for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
         """
         return self.__ancestry
 
@@ -226,7 +226,7 @@ class maasMDS:
         Retrieve `is_masked`.
         
         Returns:
-            **bool:** True if an ancestry file is passed for ancestry-specific masking, or False otherwise.
+            bool: True if an ancestry file is passed for ancestry-specific masking, or False otherwise.
         """
         return self.__is_masked
 
@@ -243,7 +243,7 @@ class maasMDS:
         Retrieve `average_strands`.
         
         Returns:
-            **bool:** True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+            bool: True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
         return self.__average_strands
 
@@ -260,7 +260,7 @@ class maasMDS:
         Retrieve `force_nan_incomplete_strands`.
         
         Returns:
-            **bool**: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
+            bool: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
                       Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
         """
         return self.__force_nan_incomplete_strands
@@ -278,7 +278,7 @@ class maasMDS:
         Retrieve `is_weighted`.
         
         Returns:
-            **bool:** True if weights are provided in the labels file, or False otherwise.
+            bool: True if weights are provided in the labels file, or False otherwise.
         """
         return self.__is_weighted
 
@@ -295,7 +295,7 @@ class maasMDS:
         Retrieve `groups_to_remove`.
         
         Returns:
-            **dict of int to list of str:** Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
+            dict of int to list of str: Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
                 lists of groups to remove for each array. Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
         """
         return self.__groups_to_remove
@@ -313,7 +313,7 @@ class maasMDS:
         Retrieve `min_percent_snps`.
         
         Returns:
-            **float:** 
+            float: 
                 Minimum percentage of SNPs to be known in an individual for an individual to be included in the analysis. 
                 All individuals with fewer percent of unmasked SNPs than this threshold will be excluded.
         """
@@ -332,7 +332,7 @@ class maasMDS:
         Retrieve `group_snp_frequencies_only`.
         
         Returns:
-            **bool:** 
+            bool: 
                 If True, maasMDS is performed exclusively on group-level SNP frequencies, ignoring individual-level data. This applies 
                 when `is_weighted` is set to True and a `combination` column is provided in the `labels_file`,  meaning individuals are 
                 aggregated into groups based on their assigned labels. If False, maasMDS is performed on individual-level SNP data alone 
@@ -353,7 +353,7 @@ class maasMDS:
         Retrieve `save_masks`.
         
         Returns:
-            **bool:** True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
+            bool: True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
         """
         return self.__save_masks
 
@@ -370,7 +370,7 @@ class maasMDS:
         Retrieve `load_masks`.
         
         Returns:
-            **bool:** 
+            bool: 
                 True if the masked matrices are to be loaded from a pre-existing `.npz` file specified 
                 by `masks_file`, or False otherwise.
         """
@@ -389,7 +389,7 @@ class maasMDS:
         Retrieve `masks_file`.
         
         Returns:
-            **str or pathlib.Path:** Path to the `.npz` file used for saving/loading masked matrices.
+            str or pathlib.Path: Path to the `.npz` file used for saving/loading masked matrices.
         """
         return self.__masks_file
 
@@ -406,7 +406,7 @@ class maasMDS:
         Retrieve `distance_type`.
         
         Returns:
-            **str:** 
+            str: 
                 Distance metric to use. Options to choose from are: 'Manhattan', 'RMS' (Root Mean Square), 'AP' (Average Pairwise).
                 If `average_strands=True`, use 'distance_type=AP'.
         """
@@ -425,7 +425,7 @@ class maasMDS:
         Retrieve `n_components`.
         
         Returns:
-            **int:** The number of principal components.
+            int: The number of principal components.
         """
         return self.__n_components
 
@@ -442,7 +442,7 @@ class maasMDS:
         Retrieve `rsid_or_chrompos`.
         
         Returns:
-            **int:** Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
+            int: Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
         """
         return self.__rsid_or_chrompos
 
@@ -459,9 +459,9 @@ class maasMDS:
         Retrieve `X_new_`.
 
         Returns:
-            **array of shape (n_haplotypes_, n_components):** 
+            array of shape (n_haplotypes_, n_components): 
                 The transformed SNP data projected onto the `n_components` principal components.
-                n_haplotypes_ is the number of haplotypes, potentially reduced if filtering is applied 
+                ``n_haplotypes_`` is the number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`). For diploid individuals without filtering, the shape is 
                 `(n_samples * 2, n_components)`.
         """
@@ -532,7 +532,7 @@ class maasMDS:
         Retrieve `variants_id_`.
 
         Returns:
-            **array of shape (n_snp,):** 
+            array of shape (n_snp,): 
                 An array containing unique identifiers (IDs) for each SNP,
                 potentially reduced if there are SNPs not present in the `laiobj`.
                 The format will depend on `rsid_or_chrompos`.
@@ -552,7 +552,7 @@ class maasMDS:
         Retrieve `n_haplotypes`.
 
         Returns:
-            **int:**
+            int:
                 The total number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`).
         """
@@ -564,7 +564,7 @@ class maasMDS:
         Retrieve `n_samples`.
 
         Returns:
-            **int:**
+            int:
                 The total number of samples, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`).
         """
@@ -632,7 +632,7 @@ class maasMDS:
                 If None, defaults to `self.average_strands`.
 
         Returns:
-            **array of shape (n_samples, n_components):** 
+            array of shape (n_samples, n_components): 
                 The transformed SNP data projected onto the `n_components` principal components, stored in `self.X_new_`.
         """
         if snpobj is None:

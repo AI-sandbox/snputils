@@ -56,7 +56,7 @@ class AdmixtureReader(WideBaseReader):
         Retrieve Q_file.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the file containing the Q matrix (per-sample ancestry proportions).
                 It should end with .Q or .txt.
                 The file should use space (' ') as the delimiter.
@@ -69,7 +69,7 @@ class AdmixtureReader(WideBaseReader):
         Retrieve P_file.
 
         Returns:
-            **pathlib.Path or None:** 
+            pathlib.Path or None: 
                 Path to the file containing the P/F matrix (per-ancestry SNP frequencies).
                 It should end with .P or .txt.
                 The file should use space (' ') as the delimiter. If None, P is not loaded.
@@ -82,7 +82,7 @@ class AdmixtureReader(WideBaseReader):
         Retrieve sample_file.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the single-column file containing sample identifiers. 
                 It should end with .fam or .txt.
                 If None, sample identifiers are not loaded.
@@ -95,7 +95,7 @@ class AdmixtureReader(WideBaseReader):
         Retrieve snp_file.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the single-column file containing SNP identifiers. 
                 It should end with .bim or .txt.
                 If None, SNP identifiers are not loaded.
@@ -108,7 +108,7 @@ class AdmixtureReader(WideBaseReader):
         Retrieve ancestry_file.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the single-column file containing ancestry labels for each sample.
                 It should end with .map or .txt.
                 If None, ancestries are not loaded.
@@ -120,7 +120,7 @@ class AdmixtureReader(WideBaseReader):
         Read data from the provided ADMIXTURE files and construct a 
         snputils.ancestry.genobj.GlobalAncestryObject instance.
 
-        **Expected ADMIXTURE files content:**
+        Expected ADMIXTURE files content:
 
         - **Q_file**: 
             A text file containing the Q matrix with per-sample ancestry proportions. 
@@ -135,7 +135,7 @@ class AdmixtureReader(WideBaseReader):
         - **ancestry_file**: A single-column text file containing ancestry labels for each sample.
 
         Returns:
-            **GlobalAncestryObject:** 
+            GlobalAncestryObject: 
                 A GlobalAncestryObject instance.
         """
         log.info(f"Reading Q matrix from '{self.Q_file}'...")

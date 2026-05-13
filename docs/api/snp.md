@@ -6,36 +6,44 @@ Objects, readers, writers, and convenience functions for genotype data.
 
 ```{eval-rst}
 .. autoclass:: snputils.SNPObject
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.GRGObject
+   :members:
 ```
 
 ## Readers
 
 ```{eval-rst}
 .. autoclass:: snputils.SNPReader
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.BEDReader
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.PGENReader
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.VCFReader
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.snp.io.read.vcf.VCFReaderPolars
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.GRGReader
+   :members:
 ```
 
 ## Read Functions
@@ -64,16 +72,20 @@ Objects, readers, writers, and convenience functions for genotype data.
 
 ```{eval-rst}
 .. autoclass:: snputils.BEDWriter
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.PGENWriter
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.VCFWriter
+   :members:
 ```
 
 ```{eval-rst}
 .. autoclass:: snputils.GRGWriter
+   :members:
 ```

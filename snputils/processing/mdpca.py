@@ -185,7 +185,7 @@ class mdPCA:
         Retrieve `method`.
         
         Returns:
-            **str:** The PCA method to use for dimensionality reduction.
+            str: The PCA method to use for dimensionality reduction.
         """
         return self.__method
 
@@ -202,7 +202,7 @@ class mdPCA:
         Retrieve `snpobj`.
         
         Returns:
-            **SNPObject:** A SNPObject instance.
+            SNPObject: A SNPObject instance.
         """
         return self.__snpobj
 
@@ -219,7 +219,7 @@ class mdPCA:
         Retrieve `laiobj`.
         
         Returns:
-            **LocalAncestryObject:** A LocalAncestryObject instance.
+            LocalAncestryObject: A LocalAncestryObject instance.
         """
         return self.__laiobj
 
@@ -236,7 +236,7 @@ class mdPCA:
         Retrieve `labels_file`.
         
         Returns:
-            **str:** Path to the labels file in `.tsv` format.
+            str: Path to the labels file in `.tsv` format.
         """
         return self.__labels_file
 
@@ -253,7 +253,7 @@ class mdPCA:
         Retrieve `ancestry`.
         
         Returns:
-            **str:** Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
+            str: Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
         """
         return self.__ancestry
 
@@ -270,7 +270,7 @@ class mdPCA:
         Retrieve `is_masked`.
         
         Returns:
-            **bool:** True if an ancestry file is passed for ancestry-specific masking, or False otherwise.
+            bool: True if an ancestry file is passed for ancestry-specific masking, or False otherwise.
         """
         return self.__is_masked
 
@@ -287,7 +287,7 @@ class mdPCA:
         Retrieve `average_strands`.
         
         Returns:
-            **bool:** True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+            bool: True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
         return self.__average_strands
 
@@ -304,7 +304,7 @@ class mdPCA:
         Retrieve `force_nan_incomplete_strands`.
         
         Returns:
-            **bool**: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
+            bool: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
                       Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
         """
         return self.__force_nan_incomplete_strands
@@ -322,7 +322,7 @@ class mdPCA:
         Retrieve `is_weighted`.
         
         Returns:
-            **bool:** True if weights are provided in the labels file, or False otherwise.
+            bool: True if weights are provided in the labels file, or False otherwise.
         """
         return self.__is_weighted
 
@@ -339,7 +339,7 @@ class mdPCA:
         Retrieve `groups_to_remove`.
         
         Returns:
-            **dict of int to list of str:** Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
+            dict of int to list of str: Dictionary specifying groups to exclude from analysis. Keys are array numbers, and values are 
                 lists of groups to remove for each array. Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
         """
         return self.__groups_to_remove
@@ -357,7 +357,7 @@ class mdPCA:
         Retrieve `min_percent_snps`.
         
         Returns:
-            **float:** 
+            float: 
                 Minimum percentage of SNPs that must be known for an individual to be included in the analysis.
                 All individuals with fewer percent of unmasked SNPs than this threshold will be excluded.
         """
@@ -376,7 +376,7 @@ class mdPCA:
         Retrieve `group_snp_frequencies_only`.
         
         Returns:
-            **bool:** 
+            bool: 
                 If True, mdPCA is performed exclusively on group-level SNP frequencies, ignoring individual-level data. This applies 
                 when `is_weighted` is set to True and a `combination` column is provided in the `labels_file`,  meaning individuals are 
                 aggregated into groups based on their assigned labels. If False, mdPCA is performed on individual-level SNP data alone 
@@ -397,7 +397,7 @@ class mdPCA:
         Retrieve `save_masks`.
         
         Returns:
-            **bool:** True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
+            bool: True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
         """
         return self.__save_masks
 
@@ -414,7 +414,7 @@ class mdPCA:
         Retrieve `load_masks`.
         
         Returns:
-            **bool:** 
+            bool: 
                 True if the masked matrices are to be loaded from a pre-existing `.npz` file specified 
                 by `masks_file`, or False otherwise.
         """
@@ -433,7 +433,7 @@ class mdPCA:
         Retrieve `masks_file`.
         
         Returns:
-            **str or pathlib.Path:** Path to the `.npz` file used for saving/loading masked matrices.
+            str or pathlib.Path: Path to the `.npz` file used for saving/loading masked matrices.
         """
         return self.__masks_file
 
@@ -450,7 +450,7 @@ class mdPCA:
         Retrieve `output_file`.
         
         Returns:
-            **str or pathlib.Path:** Path to the output `.tsv` file where mdPCA results are saved.
+            str or pathlib.Path: Path to the output `.tsv` file where mdPCA results are saved.
         """
         return self.__output_file
 
@@ -467,7 +467,7 @@ class mdPCA:
         Retrieve `covariance_matrix_file`.
         
         Returns:
-            **str:** Path to save the covariance matrix file in `.npy` format.
+            str: Path to save the covariance matrix file in `.npy` format.
         """
         return self.__covariance_matrix_file
     
@@ -484,7 +484,7 @@ class mdPCA:
         Retrieve `n_components`.
         
         Returns:
-            **int:** The number of principal components.
+            int: The number of principal components.
         """
         return self.__n_components
 
@@ -501,7 +501,7 @@ class mdPCA:
         Retrieve `rsid_or_chrompos`.
         
         Returns:
-            **int:** Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
+            int: Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
         """
         return self.__rsid_or_chrompos
 
@@ -518,7 +518,7 @@ class mdPCA:
         Retrieve `percent_vals_masked`.
         
         Returns:
-            **float:** 
+            float: 
                 Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
                 `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
         """
@@ -537,9 +537,9 @@ class mdPCA:
         Retrieve `X_new_`.
 
         Returns:
-            **array of shape (n_samples, n_components):** 
+            array of shape (n_samples, n_components): 
                 The transformed SNP data projected onto the `n_components` principal components.
-                n_haplotypes_ is the number of haplotypes, potentially reduced if filtering is applied 
+                ``n_haplotypes_`` is the number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`). For diploid individuals without filtering, the shape is 
                 `(n_samples * 2, n_components)`.
         """
@@ -610,7 +610,7 @@ class mdPCA:
         Retrieve `variants_id_`.
 
         Returns:
-            **array of shape (n_snp,):** 
+            array of shape (n_snp,): 
                 An array containing unique identifiers (IDs) for each SNP,
                 potentially reduced if there are SNPs not present in the `laiobj`.
                 The format will depend on `rsid_or_chrompos`.
@@ -630,7 +630,7 @@ class mdPCA:
         Retrieve `n_haplotypes`.
 
         Returns:
-            **int:**
+            int:
                 The total number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`).
         """
@@ -642,7 +642,7 @@ class mdPCA:
         Retrieve `n_samples`.
 
         Returns:
-            **int:**
+            int:
                 The total number of samples, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`).
         """
@@ -653,7 +653,7 @@ class mdPCA:
         Create and return a copy of `self`.
 
         Returns:
-            **mdPCA:** 
+            mdPCA: 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -1037,7 +1037,7 @@ class mdPCA:
                 If None, defaults to `self.average_strands`.
 
         Returns:
-            **array of shape (n_samples, n_components):** 
+            array of shape (n_samples, n_components): 
                 The transformed SNP data projected onto the `n_components` principal components, stored in `self.X_new_`.
         """
         if snpobj is None:

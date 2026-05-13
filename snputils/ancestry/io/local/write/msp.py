@@ -34,7 +34,7 @@ class MSPWriter(LAIBaseWriter):
         Retrieve `laiobj`. 
 
         Returns:
-            **LocalAncestryObject:** 
+            LocalAncestryObject: 
                 A LocalAncestryObject instance.
         """
         return self.__laiobj
@@ -45,7 +45,7 @@ class MSPWriter(LAIBaseWriter):
         Retrieve `file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the file where the data will be saved. It should end with `.msp` or `.msp.tsv`. 
                 If the provided path does not have one of these extensions, the `.msp` extension will be appended.
         """
@@ -63,7 +63,7 @@ class MSPWriter(LAIBaseWriter):
         Write the data contained in the `laiobj` instance to the specified output `file`. 
         If the file already exists, it will be overwritten.
 
-        **Output MSP content:**
+        Output MSP content:
 
         The output `.msp` file will contain local ancestry assignments for each haplotype across genomic windows.
         Each row corresponds to a genomic window and includes the following columns:

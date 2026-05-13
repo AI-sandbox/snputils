@@ -45,7 +45,7 @@ class MSPReader(LAIBaseReader):
         Retrieve `file`.
 
         Returns:
-            **pathlib.Path:** 
+            pathlib.Path: 
                 Path to the file to be read. It should end with `.msp` or `.msp.tsv`.
         """
         return self.__file
@@ -336,7 +336,7 @@ class MSPReader(LAIBaseReader):
         Read data from the provided `.msp` or `msp.tsv` `file` and construct a 
         `snputils.ancestry.genobj.LocalAncestryObject`.
 
-        **Expected MSP content:**
+        Expected MSP content:
 
         The `.msp` file should contain local ancestry assignments for each haplotype across genomic windows.
         Each row should correspond to a genomic window and include the following columns:
@@ -351,7 +351,7 @@ class MSPReader(LAIBaseReader):
         - `SampleID.1`: Local ancestry for the second haplotype of the sample for each window.
 
         Returns:
-            **LocalAncestryObject:**
+            LocalAncestryObject:
                 A LocalAncestryObject instance.
         """
         log.info(f"Reading '{self.file}'...")

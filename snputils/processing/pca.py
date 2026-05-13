@@ -76,10 +76,10 @@ def _svd_flip(u, v, u_based_decision=True):
 
 class TorchPCA:
     """
-    A class for GPU-based Principal Component Analysis (PCA) with PyTorch tensors.
-    
-    This implementation leverages GPU acceleration to achieve significant performance improvements,
-    being up to 25 times faster than `sklearn.decomposition.PCA` when running on a compatible GPU.
+    GPU-based Principal Component Analysis (PCA) using PyTorch tensors.
+
+    This implementation supports exact and approximate SVD fitting modes and is
+    intended for accelerated execution on CUDA-capable hardware.
     """
     def __init__(self, n_components: int = 2, fitting: str = "exact"):
         """
@@ -87,10 +87,9 @@ class TorchPCA:
             n_components (int, default=2): 
                 The number of principal components. If None, defaults to the minimum of `n_samples` and `n_snps`.
             fitting (str, default='exact'): 
-                SVD mode for PCA:
-                - ``'exact'``: economy SVD via ``torch.linalg.svd`` (``full_matrices=False``),
-                  i.e. standard PCA up to float precision.
-                - ``'lowrank'``: ``torch.svd_lowrank`` for speed; approximate.
+                SVD mode for PCA. Use ``'exact'`` for economy SVD via
+                ``torch.linalg.svd`` (``full_matrices=False``), or ``'lowrank'``
+                for faster approximate SVD via ``torch.svd_lowrank``.
         """
         _require_torch()
 
@@ -107,7 +106,7 @@ class TorchPCA:
         Retrieve `n_components`.
 
         Returns:
-            **int:** The number of principal components.
+            int: The number of principal components.
         """
         return self.__n_components
     
@@ -126,7 +125,7 @@ class TorchPCA:
         Retrieve `fitting`.
 
         Returns:
-            **str:** ``'exact'`` (economy SVD) or ``'lowrank'`` (approximate).
+            str: ``'exact'`` (economy SVD) or ``'lowrank'`` (approximate).
         """
         return self.__fitting
 
@@ -143,7 +142,7 @@ class TorchPCA:
         Retrieve `n_components_`.
         
         Returns:
-            **int:** 
+            int: 
                 The effective number of components retained after fitting, 
                 calculated as `min(self.n_components, min(n_samples, n_snps))`.
         """
@@ -162,7 +161,7 @@ class TorchPCA:
         Retrieve `components_`.
         
         Returns:
-            **tensor of shape (n_components_, n_snps):** 
+            tensor of shape (n_components_, n_snps): 
                 Matrix of principal components, where each row is a principal component vector.
         """
         return self.__components_
@@ -180,7 +179,7 @@ class TorchPCA:
         Retrieve `mean_`.
 
         Returns:
-            **tensor of shape (n_snps,):** 
+            tensor of shape (n_snps,): 
                 Per-feature mean vector of the input data used for centering.
         """
         return self.__mean_
@@ -198,7 +197,7 @@ class TorchPCA:
         Retrieve `X_new_`.
 
         Returns:
-            **tensor of shape (n_samples, n_components_):** 
+            tensor of shape (n_samples, n_components_): 
                 The transformed SNP data projected onto the `n_components_` principal components.
         """
         return self.__X_new_
@@ -215,7 +214,7 @@ class TorchPCA:
         Create and return a copy of `self`.
 
         Returns:
-            **TorchPCA:** 
+            TorchPCA: 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -273,7 +272,7 @@ class TorchPCA:
                 The SNP data matrix to fit the model.
 
         Returns:
-            **TorchPCA:** 
+            TorchPCA: 
                 The fitted instance of `self`.
         """
         self._fit(X)
@@ -288,7 +287,7 @@ class TorchPCA:
                 The SNP data matrix to be transformed.
 
         Returns:
-            **tensor of shape (n_samples, n_components_):** 
+            tensor of shape (n_samples, n_components_): 
                 The transformed SNP data projected onto the `n_components_` principal components, 
                 stored in `self.X_new_`.
         """
@@ -308,7 +307,7 @@ class TorchPCA:
                 The SNP data matrix used for both fitting and transformation.
 
         Returns:
-            **tensor of shape (n_samples, n_components_):** 
+            tensor of shape (n_samples, n_components_): 
                 The transformed SNP data projected onto the `n_components_` principal components, 
                 stored in `self.X_new_`.
         """
@@ -319,16 +318,16 @@ class TorchPCA:
 
 class PCA:
     """
-    A class for Principal Component Analysis (PCA) on SNP data stored in a `snputils.snp.genobj.SNPObject`. 
-    This class employs either 
-    [sklearn.decomposition.PCA](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html) 
-    or the custom `TorchPCA` implementation for efficient GPU-accelerated analysis.
-    
-    The ``fitting`` parameter selects exact vs approximate SVD on both backends (see ``__init__``).
+    Principal Component Analysis (PCA) for SNP data.
 
-    The PCA class supports both separate and averaged strand processing for SNP data. If the `snpobj` parameter is 
-    provided during instantiation, the `fit_transform` method will be automatically called, 
-    applying PCA to transform the data according to the selected configuration.
+    This class wraps either ``sklearn.decomposition.PCA`` or the custom
+    :class:`TorchPCA` backend.
+
+    The ``fitting`` parameter selects exact vs approximate SVD on both
+    backends (see ``__init__``).
+
+    The class supports separate or averaged strand processing. If ``snpobj`` is
+    provided at construction time, ``fit_transform`` is called automatically.
     """
     def __init__(
         self, 
@@ -350,12 +349,11 @@ class PCA:
             n_components (int, default=2): 
                 The number of principal components. Default is 2.
             fitting (str, default='exact'): 
-                SVD mode for both backends:
-                - ``'exact'``: full economy SVD (``torch.linalg.svd`` with ``full_matrices=False``,
-                  or ``sklearn.decomposition.PCA(..., svd_solver='full')``).
-                - ``'lowrank'``: ``torch.svd_lowrank`` (PyTorch) or ``svd_solver='randomized'`` (sklearn);
-                  faster, approximate.
-                Default is ``'exact'``.
+                SVD mode for both backends. Use ``'exact'`` for standard
+                decomposition (PyTorch ``torch.linalg.svd`` or sklearn
+                ``svd_solver='full'``), or ``'lowrank'`` for faster approximate
+                decomposition (PyTorch ``torch.svd_lowrank`` or sklearn
+                ``svd_solver='randomized'``). Default is ``'exact'``.
             device (str, default='cpu'): 
                 Device to use (`'cpu'`, `'gpu'`, `'cuda'`, or `'cuda:<index>'`). Default is 'cpu'.
             average_strands (bool, default=True): 
@@ -400,7 +398,7 @@ class PCA:
         Retrieve `snpobj`.
 
         Returns:
-            **SNPObject:** A SNPObject instance.
+            SNPObject: A SNPObject instance.
         """
         return self.__snpobj
 
@@ -417,7 +415,7 @@ class PCA:
         Retrieve `backend`.
         
         Returns:
-            **str:** The backend to use (`'sklearn'` or `'pytorch'`).
+            str: The backend to use (`'sklearn'` or `'pytorch'`).
         """
         return self.__backend
 
@@ -434,7 +432,7 @@ class PCA:
         Retrieve `n_components`.
         
         Returns:
-            **int:** The number of principal components.
+            int: The number of principal components.
         """
         return self.__n_components
     
@@ -451,7 +449,7 @@ class PCA:
         Retrieve `fitting`.
 
         Returns:
-            **str:** ``'exact'`` or ``'lowrank'`` (same meaning for sklearn and PyTorch backends).
+            str: ``'exact'`` or ``'lowrank'`` (same meaning for sklearn and PyTorch backends).
         """
         return self.__fitting
 
@@ -473,7 +471,7 @@ class PCA:
         Retrieve `device`.
 
         Returns:
-            **torch.device:** Device to use (`'cpu'`, `'gpu'`, `'cuda'`, or `'cuda:<index>'`).
+            torch.device: Device to use (`'cpu'`, `'gpu'`, `'cuda'`, or `'cuda:<index>'`).
         """
         return self.__device
 
@@ -490,7 +488,7 @@ class PCA:
         Retrieve `average_strands`.
 
         Returns:
-            **bool:** 
+            bool: 
                 True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
         return self.__average_strands
@@ -508,7 +506,7 @@ class PCA:
         Retrieve `samples_subset`.
 
         Returns:
-            **int or list of int:** 
+            int or list of int: 
                 Subset of samples to include, as an integer for the first samples or a list of sample indices.
         """
         return self.__samples_subset
@@ -526,7 +524,7 @@ class PCA:
         Retrieve `snps_subset`.
 
         Returns:
-            **int or list of int:** Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
+            int or list of int: Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
         """
         return self.__snps_subset
 
@@ -543,7 +541,7 @@ class PCA:
         Retrieve `n_components_`.
 
         Returns:
-            **int:** 
+            int: 
                 The effective number of components retained after fitting, 
                 calculated as `min(self.n_components, min(n_samples, n_snps))`.
         """
@@ -562,7 +560,7 @@ class PCA:
         Retrieve `components_`.
 
         Returns:
-            **tensor or array of shape (n_components_, n_snps):** 
+            tensor or array of shape (n_components_, n_snps): 
                 Matrix of principal components, where each row is a principal component vector.
         """
         return self.__components_
@@ -580,7 +578,7 @@ class PCA:
         Retrieve `mean_`.
 
         Returns:
-            **tensor or array of shape (n_snps,):** 
+            tensor or array of shape (n_snps,): 
                 Per-feature mean vector of the input data used for centering.
         """
         return self.__mean_
@@ -598,7 +596,7 @@ class PCA:
         Retrieve `X_`.
 
         Returns:
-            **tensor or array of shape (n_samples, n_snps):** 
+            tensor or array of shape (n_samples, n_snps): 
                 The SNP data matrix used to fit the model.
         """
         return self.__X_
@@ -616,7 +614,7 @@ class PCA:
         Retrieve `X_new_`.
 
         Returns:
-            **tensor or array of shape (n_samples, n_components_):** 
+            tensor or array of shape (n_samples, n_components_): 
                 The transformed SNP data projected onto the `n_components_` principal components.
         """
         return self.__X_new_
@@ -633,7 +631,7 @@ class PCA:
         Create and return a copy of `self`.
 
         Returns:
-            **PCA:** 
+            PCA: 
                 A new instance of the current object.
         """
         return copy.copy(self)
@@ -768,7 +766,7 @@ class PCA:
                 If None, defaults to `self.snps_subset`.
 
         Returns:
-            **PCA:** 
+            PCA: 
                 The fitted instance of `self`.
         """
         self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
@@ -805,7 +803,7 @@ class PCA:
                 If None, defaults to `self.snps_subset`.
 
         Returns:
-            **tensor or array of shape (n_samples, n_components):**
+            tensor or array of shape (n_samples, n_components):
                 The transformed SNP data projected onto the `n_components_` principal components,
                 stored in `self.X_new_`.
         """
@@ -836,7 +834,7 @@ class PCA:
                 If None, defaults to `self.snps_subset`.
 
         Returns:
-            **tensor or array of shape (n_samples, n_components):** 
+            tensor or array of shape (n_samples, n_components): 
                 The transformed SNP data projected onto the `n_components_` principal components,
                 stored in `self.X_new_`.
         """

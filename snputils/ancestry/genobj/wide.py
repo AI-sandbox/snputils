@@ -131,7 +131,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `Q`.
 
         Returns:
-            **array of shape (n_samples, n_ancestries):** 
+            array of shape (n_samples, n_ancestries): 
                 A 2D array containing per-sample ancestry proportions. Each row corresponds to a sample,
                 and each column corresponds to an ancestry.
         """
@@ -154,7 +154,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `P`.
 
         Returns:
-            **array of shape (n_snps, n_ancestries):** 
+            array of shape (n_snps, n_ancestries): 
                 A 2D array containing per-ancestry SNP frequencies. Each row corresponds to a SNP,
                 and each column corresponds to an ancestry.
         """
@@ -178,7 +178,7 @@ class GlobalAncestryObject(AncestryObject):
         Alias for `P`.
 
         Returns:
-            **array of shape (n_snps, n_ancestries):** 
+            array of shape (n_snps, n_ancestries): 
                 A 2D array containing per-ancestry SNP frequencies. Each row corresponds to a SNP,
                 and each column corresponds to an ancestry.
         """
@@ -201,7 +201,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `samples`.
 
         Returns:
-            **array of shape (n_samples,):** 
+            array of shape (n_samples,): 
                 An array containing unique identifiers for each sample. If None, sample 
                 identifiers are assigned as integers from `0` to `n_samples - 1`.
         """
@@ -225,7 +225,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `snps`.
 
         Returns:
-            **array of shape (n_snps,):** 
+            array of shape (n_snps,): 
                 An array containing identifiers for each SNP. If None, SNPs are assigned as integers 
                 from `0` to `n_snps - 1`.
         """
@@ -249,7 +249,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `ancestries`.
 
         Returns:
-            **array of shape (n_samples,):** 
+            array of shape (n_samples,): 
                 An array containing ancestry labels for each sample.
         """
         return self.__ancestries
@@ -279,7 +279,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `n_samples`.
 
         Returns:
-            **int:** The total number of samples.
+            int: The total number of samples.
         """
         return self.__Q.shape[0]
 
@@ -289,7 +289,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `n_snps`.
 
         Returns:
-            **int:** The total number of SNPs.
+            int: The total number of SNPs.
         """
         return 0 if self.__P is None else self.__P.shape[0]
 
@@ -299,7 +299,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `n_ancestries`.
 
         Returns:
-            **int:** The total number of unique ancestries.
+            int: The total number of unique ancestries.
         """
         return self.__Q.shape[1]
 
@@ -321,7 +321,7 @@ class GlobalAncestryObject(AncestryObject):
         Create and return a copy of `self`.
 
         Returns:
-            **GlobalAncestryObject:** A new instance of the current object.
+            GlobalAncestryObject: A new instance of the current object.
         """
         return copy.copy(self)
 
@@ -330,7 +330,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve a list of public attribute names for `self`.
 
         Returns:
-            **list of str:** 
+            list of str: 
                 A list of attribute names, with internal name-mangling removed, 
                 for easier reference to public attributes in the instance.
         """
@@ -341,7 +341,7 @@ class GlobalAncestryObject(AncestryObject):
         Perform sanity checks to ensure that matrix dimensions are consistent with expected sizes.
         
         Raises:
-            **ValueError:** If any of the matrix dimensions do not match the expected sizes.
+            ValueError: If any of the matrix dimensions do not match the expected sizes.
         """       
         # Check that the Q matrix has the correct shape
         if self.__Q.shape != (self.n_samples, self.n_ancestries):
@@ -392,7 +392,7 @@ class GlobalAncestryObject(AncestryObject):
         argument. If the extension is `.pkl`, the object is serialized as a pickle file. Otherwise, 
         the file is treated as a prefix for saving ADMIXTURE files.
 
-        **Supported formats:**
+        Supported formats:
 
         - `.pkl`: Pickle format for saving `self` in serialized form.
         - Any other extension or no extension: Treated as a prefix for ADMIXTURE files.
@@ -415,7 +415,7 @@ class GlobalAncestryObject(AncestryObject):
         Save the data stored in `self` into multiple ADMIXTURE files.
         If the file already exists, it will be overwritten.
 
-        **Output files:**
+        Output files:
 
         - `<file_prefix>.K.Q`: Q matrix file. The file uses space (' ') as the delimiter.
         - `<file_prefix>.K.P`: P matrix file. The file uses space (' ') as the delimiter.

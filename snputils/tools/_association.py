@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple, Union
@@ -1097,7 +1098,8 @@ def _apply_multiple_testing_adjustment(
     src = Path(output_file)
     tmp = src.with_suffix(src.suffix + ".tmp")
     row_count = 0
-    with gzip.open(src, mode="rt", encoding="utf-8", newline="") as in_handle:
+    use_gzip = str(src).endswith(".gz")
+    with _open_tsv_for_read(src) as in_handle:
         reader = csv.reader(in_handle, delimiter="\t")
         header = next(reader)
         if "ERRCODE" in header:
@@ -1106,7 +1108,13 @@ def _apply_multiple_testing_adjustment(
             err_idx = len(header)
         new_header = header[:err_idx] + ["BONF", "FDR_BH"] + header[err_idx:]
 
-        with gzip.open(tmp, mode="wt", encoding="utf-8", newline="") as out_handle:
+        if use_gzip:
+            out_handle_ctx = gzip.open(
+                tmp, mode="wt", encoding="utf-8", newline="", compresslevel=1
+            )
+        else:
+            out_handle_ctx = tmp.open("w", encoding="utf-8", newline="")
+        with out_handle_ctx as out_handle:
             writer = csv.writer(out_handle, delimiter="\t")
             writer.writerow(new_header)
             for idx, row in enumerate(reader):
@@ -1141,3 +1149,32 @@ def _resolve_output_path(
     out = Path(text + f"{phe_id}{default_suffix}")
     out.parent.mkdir(parents=True, exist_ok=True)
     return out
+
+
+@contextmanager
+def _open_tsv_for_read(path: Union[str, Path]):
+    p = Path(path)
+    if str(p).endswith(".gz"):
+        with gzip.open(p, mode="rt", encoding="utf-8", newline="") as handle:
+            yield handle
+    else:
+        with p.open("r", encoding="utf-8", newline="") as handle:
+            yield handle
+
+
+@contextmanager
+def _open_tsv_for_write(path: Union[str, Path], *, compresslevel: int = 1):
+    """Text TSV writer; gzip with fast compression when path ends with '.gz'."""
+    p = Path(path)
+    if str(p).endswith(".gz"):
+        with gzip.open(
+            p,
+            mode="wt",
+            encoding="utf-8",
+            newline="",
+            compresslevel=int(compresslevel),
+        ) as handle:
+            yield handle
+    else:
+        with p.open("w", encoding="utf-8", newline="") as handle:
+            yield handle

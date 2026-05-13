@@ -1,6 +1,5 @@
 import argparse
 import csv
-import gzip
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -26,6 +25,7 @@ from ._association import (
     _get_process_rss_mb,
     _normalize_chromosome,
     _odds_ratio_batch,
+    _open_tsv_for_write,
     _prepare_fwl,
     _read_covar,
     _read_sample_list,
@@ -508,7 +508,7 @@ def run_admixture_mapping(
     n_windows_processed_total = 0
     chunk_index = 0
     try:
-        with gzip.open(output_file, mode="wt", encoding="utf-8", newline="") as handle:
+        with _open_tsv_for_write(output_file) as handle:
             writer = csv.writer(handle, delimiter="\t")
             writer.writerow(columns_without_adjust)
 

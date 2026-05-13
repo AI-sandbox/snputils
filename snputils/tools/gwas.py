@@ -27,6 +27,7 @@ from ._association import (
     _get_process_rss_mb,
     _normalize_chromosome,
     _odds_ratio_batch,
+    _open_tsv_for_write,
     _prepare_fwl,
     _read_covar,
     _read_sample_list,
@@ -658,7 +659,7 @@ def run_gwas(
     variants_processed_total = 0
     chunk_index = 0
     try:
-        with gzip.open(output_file, mode="wt", encoding="utf-8", newline="") as handle:
+        with _open_tsv_for_write(output_file) as handle:
             writer = csv.writer(handle, delimiter="\t")
             writer.writerow(columns_without_adjust)
 
@@ -724,32 +725,37 @@ def run_gwas(
                     else:
                         ci_low_arr = ci_high_arr = None
 
-                    rows_buf: List[List[object]] = []
-                    for i in range(n_variants):
-                        row_values: List[object] = [
-                            chrom_arr[i],
-                            int(pos_arr[i]),
-                            int(pos_arr[i]),
-                            id_arr[i],
-                            ref_arr[i],
-                            alt_arr[i],
-                            alt_arr[i],
-                            "LINEAR",
-                            obs_ct,
-                            beta_arr[i],
-                            se_arr[i],
-                            t_arr[i],
-                            p_arr[i],
-                        ]
-                        if ci is not None and ci_low_arr is not None and ci_high_arr is not None:
-                            row_values.extend([ci_low_arr[i], ci_high_arr[i]])
-                        row_values.append(errcode_arr[i])
-                        rows_buf.append(row_values)
-                        if return_results:
-                            records.append(dict(zip(columns_without_adjust, row_values)))
-                        if collected_p_values is not None:
-                            collected_p_values.append(float(p_arr[i]))
-                    writer.writerows(rows_buf)
+                    chunk_data: Dict[str, object] = {
+                        "#CHROM": chrom_arr,
+                        "POS": pos_arr.astype(np.int64, copy=False),
+                        "END": pos_arr.astype(np.int64, copy=False),
+                        "ID": id_arr,
+                        "REF": ref_arr,
+                        "ALT": alt_arr,
+                        "A1": alt_arr,
+                        "TEST": "LINEAR",
+                        "OBS_CT": obs_ct,
+                        "BETA": beta_arr,
+                        "SE": se_arr,
+                        "T_STAT": t_arr,
+                        "P": p_arr,
+                    }
+                    if ci is not None and ci_low_arr is not None and ci_high_arr is not None:
+                        chunk_data[ci_cols[0]] = ci_low_arr
+                        chunk_data[ci_cols[1]] = ci_high_arr
+                    chunk_data["ERRCODE"] = errcode_arr
+                    chunk_df = pd.DataFrame(chunk_data)[columns_without_adjust]
+                    chunk_df.to_csv(
+                        handle,
+                        sep="\t",
+                        header=False,
+                        index=False,
+                        lineterminator="\n",
+                    )
+                    if return_results:
+                        records.extend(chunk_df.to_dict("records"))
+                    if collected_p_values is not None:
+                        collected_p_values.extend(float(x) for x in p_arr.ravel())
                 else:
                     if covariates_present:
                         if covar_f64 is None:
@@ -774,33 +780,38 @@ def run_gwas(
                     else:
                         ci_low_arr = ci_high_arr = None
 
-                    rows_buf = []
-                    for i in range(n_variants):
-                        row_values = [
-                            chrom_arr[i],
-                            int(pos_arr[i]),
-                            int(pos_arr[i]),
-                            id_arr[i],
-                            ref_arr[i],
-                            alt_arr[i],
-                            alt_arr[i],
-                            test_arr[i],
-                            obs_ct,
-                            beta_arr[i],
-                            or_arr[i],
-                            se_arr[i],
-                            z_arr[i],
-                            p_arr[i],
-                        ]
-                        if ci is not None and ci_low_arr is not None and ci_high_arr is not None:
-                            row_values.extend([ci_low_arr[i], ci_high_arr[i]])
-                        row_values.append(errcode_arr[i])
-                        rows_buf.append(row_values)
-                        if return_results:
-                            records.append(dict(zip(columns_without_adjust, row_values)))
-                        if collected_p_values is not None:
-                            collected_p_values.append(float(p_arr[i]))
-                    writer.writerows(rows_buf)
+                    chunk_data = {
+                        "#CHROM": chrom_arr,
+                        "POS": pos_arr.astype(np.int64, copy=False),
+                        "END": pos_arr.astype(np.int64, copy=False),
+                        "ID": id_arr,
+                        "REF": ref_arr,
+                        "ALT": alt_arr,
+                        "A1": alt_arr,
+                        "TEST": test_arr,
+                        "OBS_CT": obs_ct,
+                        "BETA": beta_arr,
+                        "OR": or_arr,
+                        "LOG(OR)_SE": se_arr,
+                        "Z_STAT": z_arr,
+                        "P": p_arr,
+                    }
+                    if ci is not None and ci_low_arr is not None and ci_high_arr is not None:
+                        chunk_data[ci_cols[0]] = ci_low_arr
+                        chunk_data[ci_cols[1]] = ci_high_arr
+                    chunk_data["ERRCODE"] = errcode_arr
+                    chunk_df = pd.DataFrame(chunk_data)[columns_without_adjust]
+                    chunk_df.to_csv(
+                        handle,
+                        sep="\t",
+                        header=False,
+                        index=False,
+                        lineterminator="\n",
+                    )
+                    if return_results:
+                        records.extend(chunk_df.to_dict("records"))
+                    if collected_p_values is not None:
+                        collected_p_values.extend(float(x) for x in p_arr.ravel())
 
                 variants_processed_total += n_variants
                 _enforce_memory_budget(memory, rss_baseline_mb, context="GWAS chunk processing")

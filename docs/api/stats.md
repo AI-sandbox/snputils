@@ -29,3 +29,7 @@ Allele-frequency and population-genetic statistics.
 ```{eval-rst}
 .. autofunction:: snputils.stats.fst
 ```
+
+```{eval-rst}
+.. autofunction:: snputils.stats.export_qp
+```

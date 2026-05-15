@@ -346,12 +346,12 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     formatting variant identifiers, and ensuring consistency in allele encoding.
 
     Args:
-        snpobj (SNPObjects): 
+        snpobj (SNPObject):
             A SNPObject instance.
-        rsid_or_chrompos (int): 
-            Specifies the format of variant identifiers:
-            - `1`: rsID format (e.g., "rs12345").
-            - `2`: Uses Chromosome_Position format (e.g., "1.12345" for chromosome 1, position 12345).
+        rsid_or_chrompos (int):
+            Variant ID format: ``1`` for rsID, ``2`` for chromosome/position.
+        variants_ref_map (dict, optional):
+            Existing REF map when harmonizing several arrays; use ``None`` for the first array.
 
     Returns:
         Tuple:
@@ -573,8 +573,8 @@ def process_calldata_gt(
             A SNPObject instance.
         laiobj (LocalAncestryObject): 
             A LocalAncestryObject instance.
-        ancestry (str): 
-            Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
+        ancestry (int or str):
+            Ancestry index (from ``0``) or compatible label from the LAI map.
         average_strands (bool): 
             Whether to average haplotypes for each individual.
         force_nan_incomplete_strands (bool): 
@@ -583,23 +583,23 @@ def process_calldata_gt(
         is_masked (bool): 
             If `True`, applies ancestry-specific masking to the genotype matrix, retaining only genotype data 
             corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
-        rsid_or_chrompos (int): 
-            Specifies the format of variant identifiers:
-            - `1`: rsID format (e.g., "rs12345").
-            - `2`: Uses Chromosome_Position format (e.g., "1.12345" for chromosome 1, position 12345).
+        rsid_or_chrompos (int):
+            Variant ID format: ``1`` for rsID, ``2`` for chromosome/position.
+        variants_ref_map (dict, optional):
+            Running REF-allele map when scanning multiple arrays. Pass ``None`` for the first
+            array; downstream callers should pass the dict returned from the previous
+            ``process_snpobj`` / ``process_calldata_gt`` call so genotypes stay comparable.
 
     Returns:
         tuple:
-            - mask (dict of str to np.ndarray): 
-                A dictionary where key represents the ancestry identifier, and value is the corresponding genotype matrix.  
-                If `is_masked=True`, the matrix contains only genotype data for the specified ancestry, with all other ancestries set to NaN.  
-                If `is_masked=False`, the full, unmasked genotype matrix is returned.
-            - variants_id (list of str): 
-                A list of unique SNP identifiers in the specified format (`rsid_or_chrompos`).  
-                The list may be reduced if some SNPs are not present in the `laiobj`.
-            - haplotypes (list of str): 
-                A list of unique individual sample identifiers.  
-                If haplotypes are averaged (`average_strands=True`), duplicate haplotype labels (e.g., "A" and "B") are removed.
+            mask (dict):
+                Ancestry key to genotype matrix (masked or full), as described above.
+            variants_id (list):
+                SNP identifiers after harmonization and LAI overlap.
+            haplotypes (list of str):
+                Sample or haplotype identifiers after filtering.
+            variants_ref_map (dict):
+                Updated shared REF map to pass into the next array.
     """
     # Obtain the masked genotype matrices, SNP identifiers, and haplotype identifiers
     logging.info("------ Array Processing: ------")

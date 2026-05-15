@@ -93,55 +93,56 @@ def scatter(
     equal_aspect: Optional[bool] = None,
 ) -> None:
     """
-    Plot a scatter plot with centroids for each group, with options for labeling and display styles.
+    Plot a scatter with group centroids and optional label styling.
 
     Args:
-        dimredobj (np.ndarray):
-            Reduced dimensionality data; expected to have `(n_haplotypes, 2)` shape.
+        dimredobj:
+            Object produced by a dimensionality-reduction step, e.g.
+            :class:`~snputils.processing.maasmds.maasMDS`,
+            :class:`~snputils.processing.mdpca.mdPCA`, or
+            :class:`~snputils.processing.pca.PCA`. Must expose ``X_new_`` (``(n, 2)`` embedding) and
+            ``samples_`` (identifiers aligned with embedding rows).
         labels_file (str):
-            Path to a TSV file with columns 'indID' and 'label', providing labels for coloring and annotating points.
+            TSV with columns ``indID`` and ``label``.
         abbreviation_inside_dots (bool):
-            If True, displays abbreviated labels (first 3 characters) inside the centroid markers.
+            If True, show a short acronym inside each centroid marker.
         arrows_for_titles (bool):
-            If True, adds arrows pointing to centroids with group labels displayed near the centroids.
+            If True, draw arrows from text labels to centroids.
+        dots (bool):
+            If True, draw scatter points; if False, print coordinates and use text markers instead.
         legend (bool):
-            If True, includes a legend indicating each group label.
+            If True, include a legend for group labels.
         color_palette (optional):
-            Color map or list of colors to use for unique labels. Defaults to 'tab10' if None.
+            Colormap or indexable color list; default palette is chosen automatically if None.
         show (bool, optional):
-            Whether to display the plot. Defaults to False.
+            If True, call ``plt.show()``; otherwise close the figure after saving. Default True.
         save_path (str, optional):
-            Path to save the plot image. If None, the plot is not saved.
+            If set, save the figure to this path.
         label_mode (str, optional):
             Overrides ``abbreviation_inside_dots``, ``arrows_for_titles``, and ``legend``.
-            ``"legend"`` — show a legend with abbreviations inside centroids.
-            ``"acronym"`` — abbreviations inside centroids, no legend.
-            ``"arrow"`` — population labels placed near centroids with non-overlapping arrows
-            (uses ``adjustText``), no legend, no abbreviations. Best for many populations.
-            Default ``None`` uses the individual boolean flags.
+            ``"legend"`` — legend plus abbreviations inside centroids.
+            ``"acronym"`` — abbreviations inside centroids only.
+            ``"arrow"`` — labels near centroids with ``adjustText`` arrows; best for many groups.
+            ``None`` keeps the individual boolean flags.
         style (str):
-            ``"default"`` — current behaviour. ``"publication"`` — typography, despine, room for legend,
-            slightly larger markers, axis labels suitable for figures.
+            ``"default"`` — legacy appearance. ``"publication"`` — typography, despine, room for an outside legend,
+            slightly larger markers, MDS-oriented axis labels.
         figsize (tuple, optional):
-            Figure size in inches. If None, chosen from ``style``.
+            Figure size in inches; chosen from ``style`` when None.
         label_colors (Mapping, optional):
-            Map from group label (as in the TSV) to a matplotlib color string. Labels not present in the map
-            fall back to ``color_palette`` (or tab10). Useful for study-specific palettes; snputils does not
-            ship fixed maps for particular cohorts.
+            Map group labels (as in the TSV) to matplotlib color strings; unlisted labels use the palette.
         legend_outside (bool, optional):
-            If True, legend is placed outside the axes on the right (avoids covering points).
-            Default: True when ``style=="publication"``, else False.
+            If True, place the legend outside the axes. Default True when ``style=="publication"``.
         despine (bool, optional):
-            Hide top and right spines. Default: True when ``style=="publication"``, else False.
+            Hide top and right spines. Default True when ``style=="publication"``.
         axis_xlabel, axis_ylabel (str, optional):
-            Axis labels. Defaults depend on ``style``.
+            Axis labels; defaults depend on ``style``.
         point_size, centroid_size, point_alpha (float, optional):
-            Override scatter sizes and point transparency.
+            Override scatter sizes and point alpha.
         savefig_kwargs (dict, optional):
-            Extra keyword arguments passed to ``plt.savefig`` when ``save_path`` is set.
+            Extra keyword arguments for ``plt.savefig`` when ``save_path`` is set.
         equal_aspect (bool, optional):
-            If True, set equal data aspect ratio (typical for MDS / PCA). Default: True for
-            ``style="publication"``, else False.
+            If True, equal data aspect (typical for MDS/PCA). Default True when ``style="publication"``.
 
     Returns:
         None

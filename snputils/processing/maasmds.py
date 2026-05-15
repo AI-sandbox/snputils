@@ -17,18 +17,23 @@ from ._utils.gen_tools import process_calldata_gt, process_labels_weights
 
 
 class maasMDS:
-    """
-    A class for performing multiple array ancestry-specific multidimensional scaling (maasMDS) on SNP data.
+    """Multi-array, ancestry-specific multidimensional scaling (maasMDS) on SNP data.
 
-    The maasMDS class focuses on genotype segments from the ancestry of interest when the `is_masked` flag is set to `True`. It offers 
-    flexible processing options, allowing either separate handling of masked haplotype strands or combining (averaging) strands into a 
-    single composite representation for each individual. Moreover, the analysis can be performed on individual-level data, group-level SNP 
-    frequencies, or a combination of both.
+    When ``is_masked`` is True, genotype entries not attributed to the chosen ancestry are set to
+    missing so distances reflect the ancestry segment of interest. You can keep haplotypes separate
+    or average parental strands (see ``average_strands``). The workflow supports individual-level
+    genotypes, group-level allele frequencies, or a mixture when weighting and ``combination``
+    columns are used in the labels file.
 
-    This class supports both separate and averaged strand processing for SNP data. If the `snpobj`, 
-    `laiobj`, `labels_file`, and `ancestry` parameters are all provided during instantiation, 
-    the `fit_transform` method will be automatically called, applying the specified maasMDS method to transform 
-    the data upon instantiation.
+    **Multiple arrays.** Pass a sequence of :class:`~snputils.snp.genobj.snpobj.SNPObject` and a
+    parallel sequence of :class:`~snputils.ancestry.genobj.local.LocalAncestryObject` instances
+    (one LAI object per array). Genotypes are harmonized to a shared reference allele across
+    arrays where possible; pairwise distances between arrays use overlapping SNPs and linear
+    calibration so embeddings are comparable. After :meth:`fit_transform`, ``array_labels_`` holds
+    the array index for each row of ``X_new_``.
+
+    If ``snpobj``, ``laiobj``, ``labels_file``, and ``ancestry`` are all provided at construction
+    time, :meth:`fit_transform` runs immediately.
     """
     def __init__(
             self, 
@@ -52,55 +57,49 @@ class maasMDS:
         ):
         """
         Args:
-            snpobj (SNPObject, optional): 
-                A SNPObject instance.
-            laiobj (LAIObject, optional): 
-                A LAIObject instance.
-            labels_file (str, optional): 
-                Path to the labels file in .tsv format. The first column, `indID`, contains the individual identifiers, and the second 
-                column, `label`, specifies the groups for all individuals. If `is_weighted=True`, a `weight` column with individual 
-                weights is required. Optionally, `combination` and `combination_weight` columns can specify sets of individuals to be 
-                combined into groups, with respective weights.
-            ancestry (int or str, optional): 
-                Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`. The ancestry input can be:
-                - An integer (e.g., 0, 1, 2).
-                - A string representation of an integer (e.g., '0', '1').
-                - A string matching one of the ancestry map values (e.g., 'Africa').
-            is_masked (bool, default=True): 
-                If `True`, applies ancestry-specific masking to the genotype matrix, retaining only genotype data 
-                corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
-            average_strands (bool, default=False): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-            force_nan_incomplete_strands (bool): 
-                If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
-                Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
-            is_weighted (bool, default=False): 
-                True if weights are provided in the labels file, or False otherwise.
-            groups_to_remove (dict of int to list of str, optional):
-                Dictionary specifying groups to exclude from analysis. Keys are 1-based array numbers,
-                and values are lists of labels to remove from each array.
-                Example: `{1: ['group1', 'group2'], 2: [], 3: ['group3']}`.
-            min_percent_snps (float, default=4.0): 
-                Minimum percentage of SNPs to be known in an individual for an individual to be included in the analysis. 
-                All individuals with fewer percent of unmasked SNPs than this threshold will be excluded.
-            group_snp_frequencies_only (bool, default=True):
-                If True, maasMDS is performed exclusively on group-level SNP frequencies, ignoring individual-level data. This applies when `is_weighted` is 
-                set to True and a `combination` column is provided in the `labels_file`,  meaning individuals are aggregated into groups based on their assigned 
-                labels. If False, maasMDS is performed on individual-level SNP data alone or on both individual-level and group-level SNP frequencies when 
-                `is_weighted` is True and a `combination` column is provided.
-            save_masks (bool, default=False): 
-                True if the masked matrices are to be saved in a `.npz` file, or False otherwise.
-            load_masks (bool, default=False): 
-                True if the masked matrices are to be loaded from a pre-existing `.npz` file specified by `masks_file`, or False otherwise.
-            masks_file (str or pathlib.Path, default='masks.npz'): 
-                Path to the `.npz` file used for saving/loading masked matrices.
-            distance_type (str, default='AP'): 
-                Distance metric to use. Options to choose from are: 'Manhattan', 'RMS' (Root Mean Square), 'AP' (Average Pairwise).
-                If `average_strands=True`, use 'distance_type=AP'.
-            n_components (int, default=2): 
-                The number of principal components.
-            rsid_or_chrompos (int, default=2): 
-                Format indicator for SNP IDs in the SNP data. Use 1 for `rsID` format or 2 for `chromosome_position`.
+            snpobj (SNPObject or sequence of SNPObject, optional):
+                One SNP object or a list/tuple of objects, one per genotyping array.
+            laiobj (LocalAncestryObject or sequence of LocalAncestryObject, optional):
+                Local ancestry object(s) parallel to ``snpobj`` when ``is_masked`` is True.
+            labels_file (str, optional):
+                Path to a TSV with at least columns ``indID`` and ``label``. If ``is_weighted`` is
+                True, a ``weight`` column is required. Optional ``combination`` and
+                ``combination_weight`` columns define merged groups.
+            ancestry (int or str, optional):
+                Target ancestry index or name. Indices start at ``0``. Accepts an ``int``, a
+                numeric string (e.g. ``\"0\"``), or a string equal to a value in the LAI ancestry map.
+            is_masked (bool, optional):
+                If True (default), keep only genotypes assigned to ``ancestry``; otherwise use the
+                full matrix.
+            average_strands (bool, optional):
+                If True, average the two haplotypes per individual.
+            force_nan_incomplete_strands (bool, optional):
+                If True, strand pairs with any missing value become NaN; if False, average while
+                ignoring NaNs (e.g. ``0`` with NaN yields ``0``).
+            is_weighted (bool, optional):
+                If True, read per-individual weights from the labels file.
+            groups_to_remove (optional):
+                Labels to drop before analysis: ``None``; a dict mapping **1-based** array index to
+                a list of labels; a single list of labels applied to every array; or a sequence of
+                length ``num_arrays`` with one list of labels per array.
+            min_percent_snps (float, optional):
+                Minimum fraction of non-missing SNPs per individual (default ``4`` means 4%).
+            group_snp_frequencies_only (bool, optional):
+                If True, use only group-level frequencies when combinations are defined; if False,
+                keep individual-level (and optionally group-level) inputs.
+            save_masks (bool, optional):
+                If True, write masks and sidecar arrays to ``masks_file``.
+            load_masks (bool, optional):
+                If True, read precomputed masks from ``masks_file`` instead of genotypes.
+            masks_file (str or pathlib.Path, optional):
+                Path for the compressed ``.npz`` mask archive.
+            distance_type (str, optional):
+                ``\"Manhattan\"``, ``\"RMS\"``, or ``\"AP\"`` (average pairwise). With
+                ``average_strands=True``, ``\"AP\"`` is appropriate.
+            n_components (int, optional):
+                Embedding dimension (default ``2``).
+            rsid_or_chrompos (int, optional):
+                ``1`` for rsID-style IDs, ``2`` for chromosome/position encoding (default ``2``).
         """
         self.__snpobj = snpobj
         self.__laiobj = laiobj
@@ -183,7 +182,7 @@ class maasMDS:
         Retrieve `laiobj`.
         
         Returns:
-            LocalAncestryObject: A LAIObject instance.
+            LocalAncestryObject or sequence thereof: Local ancestry object(s) for masking.
         """
         return self.__laiobj
 
@@ -541,10 +540,10 @@ class maasMDS:
         Retrieve `variants_id_`.
 
         Returns:
-            array of shape (n_snp,): 
-                An array containing unique identifiers (IDs) for each SNP,
-                potentially reduced if there are SNPs not present in the `laiobj`.
-                The format will depend on `rsid_or_chrompos`.
+            numpy.ndarray or list of numpy.ndarray:
+                Per-SN identifiers after LAI alignment. For a single array this is a 1-D array; for
+                multiple arrays, a list with one array of IDs per array (overlap sets can differ).
+                Interpretation follows ``rsid_or_chrompos``.
         """
         return self.__variants_id_
 
@@ -781,27 +780,28 @@ class maasMDS:
             average_strands: Optional[bool] = None
         ) -> np.ndarray:
         """
-        Fit the model to the SNP data stored in the provided `snpobj` and apply the dimensionality reduction on the same SNP data.
+        Estimate the MDS embedding and store it on the instance.
+
+        Omitted arguments fall back to attributes set on the object or in ``__init__``.
 
         Args:
-            snpobj (SNPObject, optional): 
-                A SNPObject instance.
-            laiobj (LAIObject, optional): 
-                A LAIObject instance.
-            labels_file (str, optional): 
-                Path to the labels file in .tsv format. The first column, `indID`, contains the individual identifiers, and the second 
-                column, `label`, specifies the groups for all individuals. If `is_weighted=True`, a `weight` column with individual 
-                weights is required. Optionally, `combination` and `combination_weight` columns can specify sets of individuals to be 
-                combined into groups, with respective weights.
-            ancestry (str, optional): 
-                Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
-            average_strands (bool, optional): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+            snpobj (SNPObject or sequence of SNPObject, optional):
+                Input genotype container(s).
+            laiobj (LocalAncestryObject or sequence of LocalAncestryObject, optional):
+                Matching LAI object(s) when masking is enabled.
+            labels_file (str, optional):
+                TSV path with ``indID`` / ``label`` (and optional weight / combination columns).
+            ancestry (int or str, optional):
+                Same conventions as in ``__init__``.
+            average_strands (bool, optional):
+                If omitted, uses ``self.average_strands``.
 
         Returns:
-            array of shape (n_samples, n_components): 
-                The transformed SNP data projected onto the `n_components` principal components, stored in `self.X_new_`.
+            numpy.ndarray:
+                Embedding of shape ``(n_rows, n_components)`` with ``n_rows`` equal to the number of
+                haplotypes (or samples if strands are averaged) after ``min_percent_snps`` filtering.
+                Also assigned to ``X_new_``; row-wise array indices are in ``array_labels_`` when
+                multiple arrays are combined.
         """
         if snpobj is None:
             snpobj = self.snpobj

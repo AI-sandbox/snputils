@@ -1,3 +1,9 @@
+"""PCA, MDS, and related dimensionality-reduction classes.
+
+Public names are re-exported here via lazy loading (:pep:`562`) so that
+``import snputils.processing`` remains lightweight.
+"""
+
 from importlib import import_module
 from typing import TYPE_CHECKING
 

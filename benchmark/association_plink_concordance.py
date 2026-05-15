@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,17 @@ DEFAULT_SEED = 20260512
 DEFAULT_PHE_ID = "TRAIT"
 DEFAULT_ANCESTRY_MAP = {"0": "AFR", "1": "EUR", "2": "NAT"}
 DEFAULT_N_REPS = 5
+
+
+TIMING_N_METHOD_SLOTS = 2
+TIMING_GROUP_PITCH = 0.44
+TIMING_BAR_WIDTH = min(0.26, TIMING_GROUP_PITCH * 0.92)
+TIMING_TITLE_FONTSIZE = 13
+TIMING_YLABEL_FONTSIZE = 15
+TIMING_XTICK_LABEL_FONTSIZE = 12
+TIMING_YTICK_LABEL_FONTSIZE = 11
+TIMING_BAR_LABEL_FONTSIZE = 11
+CONCORDANCE_PANEL_TITLE_FONTSIZE = 18
 
 
 def result_paths(work_dir: Path) -> dict[str, Path]:
@@ -564,7 +576,7 @@ def draw_neglog10_p_panel(ax, merged: pd.DataFrame, *, title: str, color: str) -
     y = merged["neglog10_p_snputils"].to_numpy(dtype=float)
     finite = np.isfinite(x) & np.isfinite(y)
     if not finite.any():
-        ax.set_title(title)
+        ax.set_title(title, fontsize=CONCORDANCE_PANEL_TITLE_FONTSIZE)
         ax.text(0.5, 0.5, r"No finite paired $-\log_{10}(P)$", transform=ax.transAxes, ha="center", va="center")
         return
 
@@ -586,7 +598,7 @@ def draw_neglog10_p_panel(ax, merged: pd.DataFrame, *, title: str, color: str) -
     ax.set_ylim(lo - pad, hi + pad)
     ax.set_xlabel("PLINK $-\\log_{10}(P)$")
     ax.set_ylabel("snputils $-\\log_{10}(P)$")
-    ax.set_title(title)
+    ax.set_title(title, fontsize=CONCORDANCE_PANEL_TITLE_FONTSIZE)
 
     diff = y[finite] - x[finite]
     if finite.sum() > 1 and np.std(x[finite]) > 0 and np.std(y[finite]) > 0:
@@ -618,46 +630,58 @@ def _draw_timing_bar_panel(ax, timing_df: pd.DataFrame, analysis: str, title: st
     mean_col = "seconds_mean" if "seconds_mean" in subset.columns else "seconds"
     std_col = "seconds_std" if "seconds_std" in subset.columns else None
 
-    order = ("snputils", "plink")
-    labels = ("snputils", "MSP→PGEN→PLINK")
+    order = ["snputils", "plink"]
+    labels = ["snputils", "MSP→PGEN→PLINK"]
     times = [float(subset.loc[m, mean_col]) if m in subset.index else float("nan") for m in order]
-    errs = (
+    errs_raw = (
         [float(subset.loc[m, std_col]) if m in subset.index else float("nan") for m in order]
         if std_col is not None
-        else None
+        else [float("nan"), float("nan")]
     )
+    errs = errs_raw if std_col is not None and any(math.isfinite(e) for e in errs_raw) else None
 
-    colors = ("#0072B2", "#CC79A7")
+    colors = ["#0072B2", "#CC79A7"]
+    group_pitch = TIMING_GROUP_PITCH
+    bar_width = TIMING_BAR_WIDTH
+    x_centers = np.arange(TIMING_N_METHOD_SLOTS, dtype=float) * group_pitch
+
     bars = ax.bar(
-        labels,
+        x_centers,
         times,
+        width=bar_width,
         color=colors,
         edgecolor="white",
         linewidth=0.6,
         yerr=errs,
-        capsize=5,
+        capsize=3,
         error_kw={"linewidth": 1.4, "ecolor": "0.25", "capthick": 1.4},
     )
-    ax.set_ylabel("Wall-clock time (s)")
-    ax.set_title(title)
+    ax.set_xticks(x_centers)
+    ax.set_xticklabels(labels)
+    ax.tick_params(axis="x", labelsize=TIMING_XTICK_LABEL_FONTSIZE)
+    ax.tick_params(axis="y", labelsize=TIMING_YTICK_LABEL_FONTSIZE)
+    edge_pad = max(0.08, bar_width * 0.35)
+    ax.set_xlim(x_centers[0] - bar_width / 2 - edge_pad, x_centers[-1] + bar_width / 2 + edge_pad)
+    ax.set_ylabel("Wall-clock time (s)", fontsize=TIMING_YLABEL_FONTSIZE)
+    ax.set_title(title, fontsize=TIMING_TITLE_FONTSIZE)
     ax.grid(axis="y", color="0.9", linewidth=0.6)
     finite_times = [t for t in times if np.isfinite(t)]
     ymax = max(finite_times) if finite_times else 1.0
-    # Extra headroom so error-bar caps don't clip at the top of the axes.
-    err_max = max((e for e in (errs or []) if np.isfinite(e)), default=0.0)
+    err_max = max((e for e in (errs or []) if math.isfinite(e)), default=0.0)
     ax.set_ylim(0, (ymax + err_max) * 1.18 if ymax > 0 else 1.0)
-    for bar, sec, err in zip(bars, times, errs if errs else [None] * len(times)):
+    err_list = errs if errs else [None] * len(times)
+    for bar, sec, err in zip(bars, times, err_list):
         if np.isfinite(sec):
             label = f"{sec:.2f}s"
-            if err is not None and np.isfinite(err):
+            if err is not None and math.isfinite(err):
                 label += f"±{err:.2f}s"
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + (err if err is not None and np.isfinite(err) else 0.0),
+                bar.get_height() + (err if err is not None and math.isfinite(err) else 0.0),
                 label,
                 ha="center",
                 va="bottom",
-                fontsize=10,
+                fontsize=TIMING_BAR_LABEL_FONTSIZE,
             )
 
 
@@ -698,7 +722,7 @@ def save_association_plink_pdfs(
         pdf.savefig(fig_admix, bbox_inches="tight")
         plt.close(fig_admix)
 
-        fig_admix_t, ax_admix_t = plt.subplots(figsize=(4.2, 3.5), constrained_layout=True)
+        fig_admix_t, ax_admix_t = plt.subplots(figsize=(4.25, 3.6), constrained_layout=True)
         _draw_timing_bar_panel(
             ax_admix_t,
             timing_df,

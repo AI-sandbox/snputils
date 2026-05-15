@@ -219,10 +219,10 @@ def _fit_linear_batch_with_covariates(
         return beta_out, se_out, t_out, p_out, errcode_out
 
     dosage_f64 = dosage_batch.astype(np.float64, copy=False)
-    proj = dosage_f64 @ q
-    d_resid = dosage_f64 - proj @ q.T
-
-    sxx = np.sum(d_resid * d_resid, axis=1)
+    projected = dosage_f64 @ q
+    dosage_sq_sum = np.sum(dosage_f64 * dosage_f64, axis=1)
+    sxx = dosage_sq_sum - np.sum(projected * projected, axis=1)
+    sxx = np.maximum(sxx, 0.0)
     no_var = sxx <= 0.0
     errcode_out[no_var] = "NO_VARIATION"
 
@@ -231,9 +231,9 @@ def _fit_linear_batch_with_covariates(
     if fit_idx.size == 0:
         return beta_out, se_out, t_out, p_out, errcode_out
 
-    d_fit = d_resid[fit_idx]
     sxx_fit = sxx[fit_idx]
-    sxy_fit = d_fit @ y_resid
+    sxy = dosage_f64 @ y_resid
+    sxy_fit = sxy[fit_idx]
     beta_fit = sxy_fit / sxx_fit
 
     yss = float(np.sum(y_resid * y_resid))

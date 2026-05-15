@@ -8,6 +8,7 @@ from scipy import stats
 from scipy.optimize import minimize
 from scipy.special import expit
 
+from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read.__test__.fixtures import (
     make_synthetic_dataset,
     make_synthetic_dataset_with_covariates,
@@ -258,7 +259,7 @@ def test_internal_matches_reference_logistic_across_scales(
 
     internal = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_dir,
         phe_id="toy",
         batch_size=64,
@@ -298,7 +299,7 @@ def test_internal_streaming_memory_matches_default(tmp_path: Path):
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_default,
         phe_id="toy",
         batch_size=64,
@@ -307,7 +308,7 @@ def test_internal_streaming_memory_matches_default(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_stream,
         phe_id="toy",
         batch_size=7,
@@ -342,6 +343,70 @@ def test_internal_streaming_memory_matches_default(tmp_path: Path):
     )
 
 
+def test_lai_object_input_matches_msp_input(tmp_path: Path):
+    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
+        n_samples=80, n_windows=40, seed=404
+    )
+    haplotypes = [f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)]
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai,
+        samples=list(sample_ids),
+        ancestry_map={str(key): value for key, value in ancestry_map.items()},
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+
+    phe_path = tmp_path / "toy.phe"
+    msp_path = tmp_path / "toy.msp"
+    out_msp = tmp_path / "out_msp"
+    out_lai = tmp_path / "out_lai"
+    _write_phe(phe_path, sample_ids, y)
+    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+
+    msp_results = run_admixture_mapping(
+        phe_path=phe_path,
+        lai_source=msp_path,
+        results_path=out_msp,
+        phe_id="toy",
+        batch_size=17,
+        keep_hla=True,
+    )
+    lai_results = run_admixture_mapping(
+        phe_path=phe_path,
+        lai_source=laiobj,
+        results_path=out_lai,
+        phe_id="toy",
+        batch_size=17,
+        keep_hla=True,
+    )
+
+    pd.testing.assert_frame_equal(msp_results, lai_results)
+
+
+def test_deprecated_msp_path_keyword_is_supported(tmp_path: Path):
+    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
+        n_samples=32, n_windows=12, seed=405
+    )
+    phe_path = tmp_path / "toy.phe"
+    msp_path = tmp_path / "toy.msp"
+    out_dir = tmp_path / "out"
+    _write_phe(phe_path, sample_ids, y)
+    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+
+    with pytest.warns(DeprecationWarning, match="msp_path"):
+        results = run_admixture_mapping(
+            phe_path=phe_path,
+            msp_path=msp_path,
+            results_path=out_dir,
+            phe_id="toy",
+            batch_size=8,
+            keep_hla=True,
+        )
+
+    assert not results.empty
+
+
 def test_internal_total_memory_cap_enforced(tmp_path: Path):
     sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
         n_samples=32, n_windows=16, seed=777
@@ -355,7 +420,7 @@ def test_internal_total_memory_cap_enforced(tmp_path: Path):
     with pytest.raises(MemoryError):
         run_admixture_mapping(
             phe_path=phe_path,
-            msp_path=msp_path,
+            lai_source=msp_path,
             results_path=out_dir,
             phe_id="toy",
             batch_size=8,
@@ -467,7 +532,7 @@ def test_quantitative_internal_matches_reference_ols_across_scales(
 
     internal = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_dir,
         phe_id="toy",
         batch_size=64,
@@ -507,7 +572,7 @@ def test_quantitative_streaming_memory_matches_default(tmp_path: Path):
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_default,
         phe_id="toy",
         batch_size=64,
@@ -516,7 +581,7 @@ def test_quantitative_streaming_memory_matches_default(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=out_stream,
         phe_id="toy",
         batch_size=7,
@@ -584,7 +649,7 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_adjusted",
         phe_id="toy",
         batch_size=64,
@@ -596,7 +661,7 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
     ).copy()
     unadjusted = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_unadjusted",
         phe_id="toy",
         batch_size=64,
@@ -683,7 +748,7 @@ def test_logistic_covariates_match_reference_and_differ_from_unadjusted(tmp_path
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_adjusted",
         phe_id="toy",
         batch_size=64,
@@ -694,7 +759,7 @@ def test_logistic_covariates_match_reference_and_differ_from_unadjusted(tmp_path
     ).copy()
     unadjusted = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_unadjusted",
         phe_id="toy",
         batch_size=64,
@@ -781,7 +846,7 @@ def test_logistic_covariate_streaming_consistency(tmp_path: Path):
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_default",
         phe_id="toy",
         batch_size=64,
@@ -791,7 +856,7 @@ def test_logistic_covariate_streaming_consistency(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_stream",
         phe_id="toy",
         batch_size=7,
@@ -832,7 +897,7 @@ def test_ci_columns_logistic_and_quantitative(tmp_path: Path):
 
     logistic = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_bin",
         phe_id="toy",
         batch_size=64,
@@ -881,7 +946,7 @@ def test_ci_columns_logistic_and_quantitative(tmp_path: Path):
 
     linear = run_admixture_mapping(
         phe_path=phe_q_path,
-        msp_path=msp_q_path,
+        lai_source=msp_q_path,
         results_path=tmp_path / "out_quant",
         phe_id="toy",
         batch_size=64,
@@ -916,7 +981,7 @@ def test_adjustment_columns_match_reference(tmp_path: Path):
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out",
         phe_id="toy",
         batch_size=64,
@@ -991,7 +1056,7 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
 
     filtered = run_admixture_mapping(
         phe_path=phe_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_filtered",
         phe_id="toy",
         batch_size=64,
@@ -1012,7 +1077,7 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
 
     reference = run_admixture_mapping(
         phe_path=phe_pref_path,
-        msp_path=msp_path,
+        lai_source=msp_path,
         results_path=tmp_path / "out_reference",
         phe_id="toy",
         batch_size=64,

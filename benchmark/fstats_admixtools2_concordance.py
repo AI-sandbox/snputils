@@ -89,6 +89,7 @@ DEFAULT_F4_RATIO_MIN_ABS_DEN_Z = 3.0
 DEFAULT_F4_RATIO_EST_MIN = 0.0
 DEFAULT_F4_RATIO_EST_MAX = 1.0
 DEFAULT_F4_RATIO_ALPHA_BINS = 20
+DEFAULT_N_REPS = 5
 
 CONCORDANCE_POP_KEYS: dict[str, tuple[str, ...]] = {
     "f2": ("pop1", "pop2"),
@@ -98,6 +99,13 @@ CONCORDANCE_POP_KEYS: dict[str, tuple[str, ...]] = {
     "f4_ratio": ("pop1", "pop2", "pop3", "pop4", "pop5"),
     "fst": ("pop1", "pop2"),
 }
+
+TIMING_BAR_COLORS = {"snputils": "#0072B2", "admixtools2": "#CC79A7"}
+
+# Shared concordance-grid axis titles (larger than default rcParams; timing panel uses rc except ylabel).
+GRID_CONCORDANCE_SUP_LABEL_FONTSIZE = 18
+TIMING_YLABEL_FONTSIZE = 15
+TIMING_XTICK_LABEL_FONTSIZE = 12
 
 
 def evenly_spaced_subset(df: pd.DataFrame, max_rows: int | None) -> pd.DataFrame:
@@ -582,8 +590,6 @@ def draw_concordance_panel(ax, merged: pd.DataFrame, stat: str) -> None:
     ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="black", linewidth=0.9)
     ax.set_xlim(lo - pad, hi + pad)
     ax.set_ylim(lo - pad, hi + pad)
-    ax.set_xlabel("ADMIXTOOLS2 estimate")
-    ax.set_ylabel("snputils estimate")
     ax.set_title(title)
     if finite.sum() > 1 and np.std(x[finite]) > 0 and np.std(y[finite]) > 0:
         r = float(np.corrcoef(x[finite], y[finite])[0, 1])
@@ -603,7 +609,72 @@ def draw_concordance_panel(ax, merged: pd.DataFrame, stat: str) -> None:
     ax.grid(color="0.9", linewidth=0.6)
 
 
-TIMING_BAR_COLORS = {"snputils": "#0072B2", "admixtools2": "#CC79A7"}
+def normalize_fstats_timing_csv(timing_df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure seconds_mean / seconds_std exist (legacy CSVs used ``seconds`` only)."""
+    out = timing_df.copy()
+    if "seconds_mean" not in out.columns and "seconds" in out.columns:
+        out["seconds_mean"] = out["seconds"]
+    if "seconds_mean" not in out.columns:
+        raise ValueError("timing CSV must contain seconds_mean or legacy seconds column.")
+    if "seconds_std" not in out.columns:
+        out["seconds_std"] = np.nan
+    return out
+
+
+def _draw_fstats_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
+    """Overall wall-clock bar chart; bar layout matches ``pca_eigenstrat_concordance`` timing panel."""
+    timing_df = normalize_fstats_timing_csv(timing_df)
+    overall = timing_df.loc[timing_df["component"] == "overall"].drop_duplicates("method").set_index("method")
+    mean_col = "seconds_mean"
+    std_col = "seconds_std"
+    order = ["snputils", "admixtools2"]
+    labels = ["snputils", "ADMIXTOOLS2"]
+    times = [float(overall.loc[m, mean_col]) if m in overall.index else float("nan") for m in order]
+    errs_raw = [float(overall.loc[m, std_col]) if m in overall.index else float("nan") for m in order]
+    errs = errs_raw if any(math.isfinite(e) for e in errs_raw) else None
+    colors = [TIMING_BAR_COLORS[k] for k in order]
+    n_bars = len(labels)
+    group_pitch = 0.44
+    bar_width = min(0.26, group_pitch * 0.92)
+    x_centers = np.arange(n_bars, dtype=float) * group_pitch
+
+    bars = ax.bar(
+        x_centers,
+        times,
+        width=bar_width,
+        color=colors,
+        edgecolor="white",
+        linewidth=0.6,
+        yerr=errs,
+        capsize=3,
+        error_kw={"linewidth": 1.4, "ecolor": "0.25", "capthick": 1.4},
+    )
+    ax.set_xticks(x_centers)
+    ax.set_xticklabels(labels)
+    ax.tick_params(axis="x", labelsize=TIMING_XTICK_LABEL_FONTSIZE)
+    edge_pad = max(0.08, bar_width * 0.35)
+    ax.set_xlim(x_centers[0] - bar_width / 2 - edge_pad, x_centers[-1] + bar_width / 2 + edge_pad)
+    ax.set_ylabel("Wall-clock time (s)", fontsize=TIMING_YLABEL_FONTSIZE)
+    ax.set_title("Overall computation (same PLINK subset)")
+    ax.grid(axis="y", color="0.9", linewidth=0.6)
+    finite_times = [t for t in times if np.isfinite(t)]
+    ymax = max(finite_times) if finite_times else 1.0
+    err_max = max((e for e in (errs or []) if math.isfinite(e)), default=0.0)
+    ax.set_ylim(0, (ymax + err_max) * 1.18 if ymax > 0 else 1.0)
+    err_list = errs if errs else [None] * len(times)
+    for bar, sec, err in zip(bars, times, err_list):
+        if np.isfinite(sec):
+            label = f"{sec:.2f}s"
+            if err is not None and math.isfinite(err):
+                label += f"±{err:.2f}s"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + (err if err is not None and math.isfinite(err) else 0.0),
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=11,
+            )
 
 
 def save_concordance_and_timing_pdfs(
@@ -621,41 +692,24 @@ def save_concordance_and_timing_pdfs(
 
     with PdfPages(pdf_path) as pdf:
         stats = [stat for stat in STAT_ORDER if stat in merged_by_stat]
-        fig, axes = plt.subplots(2, 3, figsize=(10.5, 7.0), constrained_layout=True)
-        for ax, stat in zip(axes.flat, stats):
+        nrows, ncols = 2, 3
+        fig, axes = plt.subplots(nrows, ncols, figsize=(10.5, 7.0), constrained_layout=True)
+        axes_arr = np.asarray(axes).reshape(-1)
+        for ax, stat in zip(axes_arr, stats):
             draw_concordance_panel(ax, merged_by_stat[stat], stat)
-        for ax in axes.flat[len(stats) :]:
+        for ax in axes_arr[len(stats) :]:
             ax.axis("off")
+        for idx, ax in enumerate(axes_arr[: len(stats)]):
+            row, col = divmod(idx, ncols)
+            ax.tick_params(labelbottom=(row == nrows - 1), labelleft=(col == 0))
+        fig.supxlabel("ADMIXTOOLS2 estimate", fontsize=GRID_CONCORDANCE_SUP_LABEL_FONTSIZE)
+        fig.supylabel("snputils estimate", fontsize=GRID_CONCORDANCE_SUP_LABEL_FONTSIZE)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
-        overall = timing_df[timing_df["component"] == "overall"].copy()
-        order = ["snputils", "admixtools2"]
-        labels = ["snputils", "ADMIXTOOLS2"]
-        times = [
-            float(overall.loc[overall["method"] == method, "seconds"].iloc[0])
-            if method in set(overall["method"])
-            else float("nan")
-            for method in order
-        ]
-        colors = [TIMING_BAR_COLORS[k] for k in order]
-        fig_t, ax_t = plt.subplots(figsize=(4.2, 3.5), constrained_layout=True)
-        bars = ax_t.bar(labels, times, color=colors, edgecolor="white", linewidth=0.6)
-        ax_t.set_ylabel("Wall-clock time (s)")
-        ax_t.set_title("Overall computation (same PLINK subset)")
-        ax_t.grid(axis="y", color="0.9", linewidth=0.6)
-        finite_times = [t for t in times if np.isfinite(t)]
-        ymax = max(finite_times) if finite_times else 1.0
-        ax_t.set_ylim(0, ymax * 1.12 if ymax > 0 else 1.0)
-        for bar, sec in zip(bars, times):
-            ax_t.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height(),
-                f"{sec:.2f}s",
-                ha="center",
-                va="bottom",
-                fontsize=11,
-            )
+        timing_df = normalize_fstats_timing_csv(timing_df)
+        fig_t, ax_t = plt.subplots(figsize=(4.25, 3.6), constrained_layout=True)
+        _draw_fstats_timing_bar_panel(ax_t, timing_df)
         pdf.savefig(fig_t, bbox_inches="tight")
         plt.close(fig_t)
 
@@ -682,7 +736,7 @@ def concordance_summary_table(
 def load_cached_results(paths: dict[str, Path], pdf_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     merged_by_stat = {stat: pd.read_csv(paths[f"concordance_{stat}"]) for stat in STAT_ORDER}
     summary = pd.read_csv(paths["summary"])
-    timing = pd.read_csv(paths["timing"])
+    timing = normalize_fstats_timing_csv(pd.read_csv(paths["timing"]))
     save_concordance_and_timing_pdfs(merged_by_stat, pdf_path, timing_df=timing)
     return summary, timing
 
@@ -779,6 +833,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--n-reps",
+        type=int,
+        default=DEFAULT_N_REPS,
+        help=(
+            "Number of independent timing repetitions per method. Rep 1 verifies concordance and writes outputs; "
+            "later reps are timing-only. Mean ± std are saved and shown on the timing plot. Default: %(default)s."
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Recompute raw concordance and timing results even if cached result files already exist.",
@@ -792,15 +855,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = result_paths(args.work_dir)
     pdf_path = args.output_pdf if args.output_pdf is not None else args.work_dir / "concordance_grid.pdf"
 
+    if args.n_reps < 1:
+        raise ValueError("--n-reps must be at least 1.")
+
     if cached_results_exist(paths) and not args.force:
         summary, timing = load_cached_results(paths, pdf_path)
         print(f"Using cached raw concordance and timing results under {paths['result_dir']} (use --force to recompute).")
         print(summary.to_string(index=False))
-        overall = timing[timing["component"] == "overall"].set_index("method")["seconds"]
-        if {"snputils", "admixtools2"}.issubset(overall.index) and float(overall["snputils"]) > 0:
+        overall = normalize_fstats_timing_csv(timing)
+        overall = overall.loc[overall["component"] == "overall"].drop_duplicates("method").set_index("method")
+        mean_col = "seconds_mean"
+        std_col = "seconds_std"
+
+        def _fmt_wall(method: str) -> str:
+            if method not in overall.index:
+                return "n/a"
+            m = float(overall.loc[method, mean_col])
+            if std_col in overall.columns and math.isfinite(float(overall.loc[method, std_col])):
+                sd = float(overall.loc[method, std_col])
+                return f"{m:.3f}s ±{sd:.3f}s"
+            return f"{m:.3f}s"
+
+        if "snputils" in overall.index and "admixtools2" in overall.index:
+            snp_m = float(overall.loc["snputils", mean_col])
+            adm_m = float(overall.loc["admixtools2", mean_col])
+            ratio_txt = (
+                f" (ratio admix/snputils {adm_m / snp_m:.3f}x)"
+                if snp_m > 0 and math.isfinite(snp_m) and math.isfinite(adm_m)
+                else ""
+            )
             print(
-                f"Wall time: snputils {float(overall['snputils']):.3f}s, ADMIXTOOLS2 {float(overall['admixtools2']):.3f}s "
-                f"(ratio admix/snputils {float(overall['admixtools2']) / float(overall['snputils']):.3f}x)"
+                f"Wall time: snputils {_fmt_wall('snputils')}, ADMIXTOOLS2 {_fmt_wall('admixtools2')}{ratio_txt}"
             )
         print(f"Wrote {pdf_path} from cached results")
         return 0
@@ -883,6 +968,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths["result_dir"].mkdir(parents=True, exist_ok=True)
     paths["combo_dir"].mkdir(parents=True, exist_ok=True)
 
+    snputils_times: list[float] = []
+    admix_times: list[float] = []
+
     t0_snputils = time.perf_counter()
     snputils_dfs = run_snputils(
         prefix,
@@ -892,18 +980,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_d_stat_combinations=args.max_d_stat_combinations,
         max_f4_ratio_combinations=args.max_f4_ratio_combinations,
     )
-    wall_snputils = time.perf_counter() - t0_snputils
+    snputils_times.append(time.perf_counter() - t0_snputils)
     for stat, df in snputils_dfs.items():
         df.to_csv(paths[f"snputils_{stat}"], index=False)
 
     t0_admix = time.perf_counter()
     run_admixtools2(prefix, populations, args.block_size_bp, paths["combo_dir"], paths["result_dir"])
-    wall_admixtools2 = time.perf_counter() - t0_admix
+    admix_times.append(time.perf_counter() - t0_admix)
 
+    for rep in range(1, args.n_reps):
+        print(f"  timing rep {rep + 1}/{args.n_reps} ...", flush=True)
+        t0_s = time.perf_counter()
+        _ = run_snputils(
+            prefix,
+            subset,
+            args.block_size_bp,
+            paths["combo_dir"],
+            max_d_stat_combinations=args.max_d_stat_combinations,
+            max_f4_ratio_combinations=args.max_f4_ratio_combinations,
+        )
+        snputils_times.append(time.perf_counter() - t0_s)
+        t0_a = time.perf_counter()
+        run_admixtools2(prefix, populations, args.block_size_bp, paths["combo_dir"], paths["result_dir"])
+        admix_times.append(time.perf_counter() - t0_a)
+
+    ddof = 1 if len(snputils_times) > 1 else 0
     timing_df = pd.DataFrame(
         [
-            {"method": "snputils", "component": "overall", "seconds": wall_snputils},
-            {"method": "admixtools2", "component": "overall", "seconds": wall_admixtools2},
+            {
+                "method": "snputils",
+                "component": "overall",
+                "seconds_mean": float(np.mean(snputils_times)),
+                "seconds_std": float(np.std(snputils_times, ddof=ddof)),
+                "n_reps": len(snputils_times),
+            },
+            {
+                "method": "admixtools2",
+                "component": "overall",
+                "seconds_mean": float(np.mean(admix_times)),
+                "seconds_std": float(np.std(admix_times, ddof=ddof)),
+                "n_reps": len(admix_times),
+            },
         ]
     )
     timing_df.to_csv(paths["timing"], index=False)
@@ -919,11 +1036,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         merged.to_csv(paths[f"concordance_{stat}"], index=False)
 
     print(summary.to_string(index=False))
+    snp_m = float(np.mean(snputils_times))
+    adm_m = float(np.mean(admix_times))
+    ratio_txt = f" (ratio admix/snputils {adm_m / snp_m:.3f}x)" if snp_m > 0 else ""
+    ddof_pr = 1 if len(snputils_times) > 1 else 0
+    snp_sd = float(np.std(snputils_times, ddof=ddof_pr))
+    adm_sd = float(np.std(admix_times, ddof=ddof_pr))
     print(
-        f"Wall time: snputils {wall_snputils:.3f}s, ADMIXTOOLS2 {wall_admixtools2:.3f}s "
-        f"(ratio admix/snputils {wall_admixtools2 / wall_snputils:.3f}x)"
-        if wall_snputils > 0
-        else f"Wall time: snputils {wall_snputils:.3f}s, ADMIXTOOLS2 {wall_admixtools2:.3f}s"
+        f"Wall time: snputils {snp_m:.3f}s ±{snp_sd:.3f}s, ADMIXTOOLS2 {adm_m:.3f}s ±{adm_sd:.3f}s{ratio_txt}"
     )
     print(f"Wrote raw results under {paths['result_dir']}")
     print(f"Wrote {pdf_path} (concordance + timing)")

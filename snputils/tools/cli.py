@@ -52,6 +52,13 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to save the PCA scatter plot image.",
     )
     parser.add_argument(
+        "--embedding-tsv-path",
+        dest="embedding_tsv_path",
+        default=None,
+        type=str,
+        help="Optional path to write PC coordinates as TSV/CSV (see snputils.processing.dimred_tabular).",
+    )
+    parser.add_argument(
         "--npy-path",
         dest="npy_path",
         required=True,

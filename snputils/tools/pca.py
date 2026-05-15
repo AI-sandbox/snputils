@@ -33,11 +33,12 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path used to save PCA plot.",
     )
     parser.add_argument(
-        "--npy-path",
-        dest="npy_path",
-        required=True,
+        "--embedding-tsv-path",
+        dest="embedding_tsv_path",
+        required=False,
+        default=None,
         type=str,
-        help="Path used to save principal components in .npy format.",
+        help="Optional path for a TSV/CSV of sample IDs and PC coordinates (see dimred_tabular).",
     )
     parser.add_argument(
         "--backend",
@@ -112,6 +113,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
             backend=args.backend,
             n_components=args.n_components,
             fitting=args.fitting,
+            embedding_table_path=args.embedding_tsv_path,
         )
         components = pca.fit_transform(snpobj)
         components = components.cpu().numpy()
@@ -122,6 +124,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
             backend="sklearn",
             n_components=args.n_components,
             fitting=args.fitting,
+            embedding_table_path=args.embedding_tsv_path,
         )
         components = np.asarray(pca.fit_transform(snpobj), dtype=float)
     else:

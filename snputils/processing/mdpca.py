@@ -4,6 +4,7 @@ import time
 import gc
 import logging
 import logging.config
+import warnings
 import numpy as np
 import copy
 from typing import Optional, Dict, List, Union
@@ -44,7 +45,8 @@ class mdPCA:
         save_masks: bool = False,
         load_masks: bool = False,
         masks_file: Union[str, pathlib.Path] = 'masks.npz',
-        output_file: Union[str, pathlib.Path] = 'output.tsv',
+        embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
+        output_file: Optional[Union[str, pathlib.Path]] = None,
         covariance_matrix_file: Optional[str] = None,
         n_components: int = 2,
         rsid_or_chrompos: int = 2,
@@ -118,8 +120,13 @@ class mdPCA:
                 True if the masked matrices are to be loaded from a pre-existing `.npz` file specified by `masks_file`, or False otherwise.
             masks_file (str or pathlib.Path, default='masks.npz'): 
                 Path to the `.npz` file used for saving/loading masked matrices.
-            output_file (str or pathlib.Path, default='output.tsv'): 
-                Path to the output `.tsv` file where mdPCA results are saved.
+            embedding_table_path (str or pathlib.Path, optional): 
+                If set, :meth:`fit_transform` writes the projection (``X_new_``) to this path as
+                TSV/CSV with per-row IDs; see :mod:`snputils.processing.dimred_tabular`. Default
+                is ``None`` (no table written).
+            output_file (str or pathlib.Path, optional): 
+                Deprecated synonym for ``embedding_table_path``. If both are given, a ``ValueError``
+                is raised.
             covariance_matrix_file (str, optional): 
                 Path to save the covariance matrix file in `.npy` format. If None, the covariance matrix is not saved. Default is None.
             n_components (int, default=2): 
@@ -130,6 +137,16 @@ class mdPCA:
                 Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
                 `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
         """
+        if (embedding_table_path is not None) and (output_file is not None):
+            raise ValueError("Pass only one of embedding_table_path and output_file.")
+        if output_file is not None:
+            warnings.warn(
+                "mdPCA(..., output_file=...) is deprecated; use embedding_table_path instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        _embed_path = embedding_table_path if output_file is None else output_file
+
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
@@ -145,7 +162,9 @@ class mdPCA:
         self.__save_masks = save_masks
         self.__load_masks = load_masks
         self.__masks_file = masks_file
-        self.__output_file = output_file
+        self.__embedding_table_path = (
+            pathlib.Path(_embed_path) if _embed_path is not None else None
+        )
         self.__covariance_matrix_file = covariance_matrix_file
         self.__n_components = n_components
         self.__rsid_or_chrompos = rsid_or_chrompos
@@ -445,21 +464,27 @@ class mdPCA:
         self.__masks_file = x
 
     @property
-    def output_file(self) -> Union[str, pathlib.Path]:
+    def embedding_table_path(self) -> Optional[pathlib.Path]:
         """
-        Retrieve `output_file`.
-        
-        Returns:
-            str or pathlib.Path: Path to the output `.tsv` file where mdPCA results are saved.
+        If set, :meth:`fit_transform` writes a TSV/CSV embedding table to this path
+        (see :mod:`snputils.processing.dimred_tabular`).
         """
-        return self.__output_file
+        return self.__embedding_table_path
+
+    @embedding_table_path.setter
+    def embedding_table_path(self, x: Optional[Union[str, pathlib.Path]]) -> None:
+        self.__embedding_table_path = pathlib.Path(x) if x is not None else None
+
+    @property
+    def output_file(self) -> Optional[pathlib.Path]:
+        """
+        Deprecated alias for :attr:`embedding_table_path` (no warning on access).
+        """
+        return self.__embedding_table_path
 
     @output_file.setter
-    def output_file(self, x: Union[str, pathlib.Path]) -> None:
-        """
-        Update `output_file`.
-        """
-        self.__output_file = x
+    def output_file(self, x: Optional[Union[str, pathlib.Path]]) -> None:
+        self.__embedding_table_path = pathlib.Path(x) if x is not None else None
 
     @property
     def covariance_matrix_file(self) -> Optional[str]:
@@ -1092,5 +1117,9 @@ class mdPCA:
 
         self.haplotypes_ = haplotypes
         self.variants_id_ = variants_id
+
+        from .dimred_tabular import try_save_embedding_table
+
+        try_save_embedding_table(self, self.__embedding_table_path)
 
         return self.X_new_

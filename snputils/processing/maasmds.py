@@ -53,7 +53,8 @@ class maasMDS:
             masks_file: Union[str, pathlib.Path] = 'masks.npz',
             distance_type: str = 'AP',
             n_components: int = 2,
-            rsid_or_chrompos: int = 2
+            rsid_or_chrompos: int = 2,
+            embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
         ):
         """
         Args:
@@ -100,6 +101,9 @@ class maasMDS:
                 Embedding dimension (default ``2``).
             rsid_or_chrompos (int, optional):
                 ``1`` for rsID-style IDs, ``2`` for chromosome/position encoding (default ``2``).
+            embedding_table_path (path, optional):
+                If set, :meth:`fit_transform` writes ``X_new_`` with row metadata to this TSV/CSV path
+                (see :mod:`snputils.processing.dimred_tabular`).
         """
         self.__snpobj = snpobj
         self.__laiobj = laiobj
@@ -119,6 +123,9 @@ class maasMDS:
         self.__distance_type = distance_type
         self.__n_components = n_components
         self.__rsid_or_chrompos = rsid_or_chrompos
+        self.__embedding_table_path = (
+            pathlib.Path(embedding_table_path) if embedding_table_path is not None else None
+        )
         self.__X_new_ = None  # Store transformed SNP data
         self.__haplotypes_ = None  # Store haplotypes after filtering if min_percent_snps > 0
         self.__samples_ = None  # Store samples after filtering if min_percent_snps > 0
@@ -460,6 +467,15 @@ class maasMDS:
         Update `rsid_or_chrompos`.
         """
         self.__rsid_or_chrompos = x
+
+    @property
+    def embedding_table_path(self) -> Optional[pathlib.Path]:
+        """Optional path for the tabular embedding written by :meth:`fit_transform`."""
+        return self.__embedding_table_path
+
+    @embedding_table_path.setter
+    def embedding_table_path(self, x: Optional[Union[str, pathlib.Path]]) -> None:
+        self.__embedding_table_path = pathlib.Path(x) if x is not None else None
 
     @property
     def X_new_(self) -> Optional[np.ndarray]:
@@ -908,5 +924,9 @@ class maasMDS:
         self.haplotypes_ = haplotypes
         self.variants_id_ = variants_id_list[0] if num_arrays == 1 else [np.asarray(x) for x in variants_id_list]
         self.array_labels_ = np.asarray(array_labels)
+
+        from .dimred_tabular import try_save_embedding_table
+
+        try_save_embedding_table(self, self.__embedding_table_path)
 
         return self.X_new_

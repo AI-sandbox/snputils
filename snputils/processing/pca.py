@@ -3,7 +3,8 @@ from __future__ import annotations
 import warnings
 import numpy as np
 import copy
-from typing import TYPE_CHECKING, Tuple, Optional, Union, List
+import pathlib
+from typing import TYPE_CHECKING, Tuple, Optional, Union, List, Sequence
 from sklearn.decomposition import PCA as skPCA 
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -360,7 +361,8 @@ class PCA:
         device: str = 'cpu',
         average_strands: bool = True, 
         samples_subset: Optional[Union[int, List]] = None, 
-        snps_subset: Optional[Union[int, List]] = None
+        snps_subset: Optional[Union[int, List]] = None,
+        embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
     ):
         """
         Args:
@@ -384,6 +386,9 @@ class PCA:
                 Subset of samples to include, as an integer for the first samples or a list of sample indices.
             snps_subset (int or list of int, optional): 
                 Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
+            embedding_table_path (path, optional):
+                If set, :meth:`fit_transform` writes the projection to this file as TSV/CSV
+                (see :mod:`snputils.processing.dimred_tabular`).
         """
         self.__snpobj = snpobj
         self.__backend = backend.lower()
@@ -398,6 +403,10 @@ class PCA:
         self.__n_components_ = None
         self.__components_ = None
         self.__mean_ = None
+        self.__embedding_table_path = (
+            pathlib.Path(embedding_table_path) if embedding_table_path is not None else None
+        )
+        self.__haplotype_row_ids: Optional[List[str]] = None
 
         # Initialize PCA backend
         if self.backend == "pytorch":
@@ -648,6 +657,56 @@ class PCA:
         """
         self.__X_new_ = x
 
+    @property
+    def embedding_table_path(self) -> Optional[pathlib.Path]:
+        """Optional path written by :meth:`fit_transform` with the embedding table (TSV/CSV)."""
+        return self.__embedding_table_path
+
+    @embedding_table_path.setter
+    def embedding_table_path(self, x: Optional[Union[str, pathlib.Path]]) -> None:
+        self.__embedding_table_path = pathlib.Path(x) if x is not None else None
+
+    @property
+    def haplotypes_(self) -> Optional[List[str]]:
+        """
+        Per-row identifiers aligned with ``X_new_`` after :meth:`fit_transform`.
+
+        When ``average_strands`` is False and genotypes are diploid/two-strand 3D, values look like
+        ``indID|0`` and ``indID|1`` for the two expanded rows per sample.
+        """
+        return self.__haplotype_row_ids
+
+    @haplotypes_.setter
+    def haplotypes_(self, x: Optional[Union[List[str], np.ndarray]]) -> None:
+        if x is None:
+            self.__haplotype_row_ids = None
+            return
+        if isinstance(x, np.ndarray):
+            self.__haplotype_row_ids = [str(v) for v in x.ravel().tolist()]
+        else:
+            self.__haplotype_row_ids = [str(v) for v in x]
+
+    @property
+    def samples_(self) -> Optional[List[str]]:
+        """
+        Sample identifiers per projection row (same length as ``X_new_`` when set).
+
+        With expanded strands, entries repeat per sample (derived from :attr:`haplotypes_`).
+        """
+        if self.__haplotype_row_ids is None:
+            return None
+        return self._haplotype_rows_to_individual_ids(self.__haplotype_row_ids)
+
+    @staticmethod
+    def _haplotype_rows_to_individual_ids(haplotypes: Sequence[str]) -> List[str]:
+        out: List[str] = []
+        for h in haplotypes:
+            if "|" in h:
+                out.append(h.split("|", 1)[0])
+            else:
+                out.append(str(h))
+        return out
+
     def copy(self) -> 'PCA':
         """
         Create and return a copy of `self`.
@@ -867,5 +926,36 @@ class PCA:
         self.n_components_ = self.pca.n_components_
         self.components_ = self.pca.components_
         self.mean_ = self.pca.mean_
+
+        sobj = snpobj if snpobj is not None else self.snpobj
+        if sobj is not None:
+            from .dimred_tabular import pca_row_haplotype_ids, try_save_embedding_table
+
+            try:
+                hid = pca_row_haplotype_ids(
+                    sobj,
+                    average_strands if average_strands is not None else self.average_strands,
+                    samples_subset if samples_subset is not None else self.samples_subset,
+                )
+                x_rows = int(self.X_new_.shape[0])
+                if len(hid) != x_rows:
+                    warnings.warn(
+                        f"PCA row ID count ({len(hid)}) does not match projection rows ({x_rows}); "
+                        "clearing haplotypes_ for tabular export.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    self.haplotypes_ = None
+                else:
+                    self.haplotypes_ = hid
+            except ValueError as exc:
+                warnings.warn(
+                    f"Could not derive per-row sample IDs for PCA export: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.haplotypes_ = None
+
+            try_save_embedding_table(self, self.__embedding_table_path)
 
         return self.X_new_

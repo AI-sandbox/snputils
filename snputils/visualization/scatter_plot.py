@@ -10,6 +10,8 @@ from typing import Callable, Mapping, Optional, Union
 
 from adjustText import adjust_text
 
+from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
+
 PUBLICATION_RC = {
     "font.family": "sans-serif",
     "font.sans-serif": ["DejaVu Sans", "Helvetica", "Arial", "Liberation Sans"],
@@ -119,7 +121,10 @@ def scatter(
         show (bool, optional):
             If True, call ``plt.show()``; otherwise close the figure after saving. Default True.
         save_path (str, optional):
-            If set, save the figure to this path.
+            If set, save the figure to this path (``plt.savefig``). Prefer ``.pdf`` or ``.svg`` for
+            publication: dense scatter is rasterized at ``dpi`` (default 300) while axes and text stay
+            vector. Bitmap formats (``.png``, ...) also default to that ``dpi``. Override via
+            ``savefig_kwargs``.
         label_mode (str, optional):
             Overrides ``abbreviation_inside_dots``, ``arrows_for_titles``, and ``legend``.
             ``"legend"`` — legend plus abbreviations inside centroids.
@@ -197,6 +202,9 @@ def scatter(
         savefig_kwargs["bbox_inches"] = "tight"
     if pub and save_path and "pad_inches" not in savefig_kwargs:
         savefig_kwargs["pad_inches"] = 0.08
+    if save_path:
+        for k, v in default_savefig_kwargs(str(save_path)).items():
+            savefig_kwargs.setdefault(k, v)
 
     # Load labels from TSV
     labels_df = pd.read_csv(labels_file, sep="\t")
@@ -252,7 +260,7 @@ def scatter(
                     label=label,
                     edgecolors=ec if ec and lw else "none",
                     linewidths=lw if lw else 0,
-                    rasterized=bool(save_path and str(save_path).lower().endswith((".png", ".pdf"))),
+                    rasterized=scatter_rasterized_for_path(save_path),
                 )
             else:
                 for point in points:
@@ -323,15 +331,11 @@ def scatter(
                     force_pull=(0.005, 0.01),
                     force_explode=(0.2, 0.8),
                     expand=(1.2, 1.4),
-                    expand_points=(3.0, 3.0),
-                    expand_text=(1.2, 2.0),
-                    expand_objects=(3.0, 3.0),
                     max_move=(80, 80),
                     explode_radius="auto",
                     ensure_inside_axes=False,
                     prevent_crossings=True,
                     min_arrow_len=1,
-                    time_lim=5,
                     iter_lim=3000,
                     target_x=target_x,
                     target_y=target_y,

@@ -4,6 +4,8 @@ import pandas as pd
 from typing import Optional, Tuple, Dict
 import matplotlib.pyplot as plt
 
+from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
+
 def manhattan_plot(
     input_file: str, 
     colors: list,
@@ -26,7 +28,7 @@ def manhattan_plot(
         title: Plot title. If None, no title is shown.
         fontsize: Dictionary with font sizes for title, labels, and legend.
         save: If True, saves the plot to a file. If None, the plot is not saved.
-        output_filename: Filename for saving the plot (PNG).
+        output_filename: Filename for saving the plot (``.pdf``, ``.svg``, ``.png``, ...).
     """
     # Read the input file
     df = pd.read_csv(input_file, sep='\t')
@@ -48,11 +50,17 @@ def manhattan_plot(
     plt.figure(figsize=figsize)
     chrom_offsets = {chrom: max_distance * (chrom - 1) for chrom in range(1, 23)}
 
+    _rz = scatter_rasterized_for_path(output_filename) if output_filename else False
+
     # Display Manhattan plot points for each chromosome
     for i, (chrom, chrom_data) in enumerate(df.groupby('#CHROM')):
         chrom_data['ABS_POS'] = chrom_data['POS'] + chrom_offsets[chrom]
-        plt.scatter(chrom_data['ABS_POS'], -np.log10(chrom_data['P']), 
-                    color=colors[int(chrom+1) % len(colors)])
+        plt.scatter(
+            chrom_data['ABS_POS'],
+            -np.log10(chrom_data['P']),
+            color=colors[int(chrom+1) % len(colors)],
+            rasterized=_rz,
+        )
 
     # X-axis settings
     plt.xlim(0, 22 * max_distance)
@@ -73,5 +81,6 @@ def manhattan_plot(
     # Save the plot
     plt.tight_layout()
     if save:
-        plt.savefig(output_filename)
+        skw = default_savefig_kwargs(output_filename)
+        plt.savefig(output_filename, **skw)
     plt.show()

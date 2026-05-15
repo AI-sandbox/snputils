@@ -119,7 +119,7 @@ def build_embedding_dataframe(
             when it would duplicate ``ind_ids`` on every row.
         array_index: Optional per-row genotyping array index (multi-array ``maasMDS``).
         method: Short name stored in ``method`` column (e.g. ``\"pca\"``, ``\"mdpca\"``, ``\"maasmds\"``).
-        component_style: ``\"PC\"`` (``PC1``, …) or ``\"MDS\"`` (``MDS1``, …).
+        component_style: ``\"PC\"`` (``PC1``, ...) or ``\"MDS\"`` (``MDS1``, ...).
         component_names: If set, column names for coordinates; length must match ``n_components``.
     """
     x = _to_numpy2d(X_new)
@@ -264,7 +264,7 @@ def save_embedding_table_from_model(
         n = int(_to_numpy2d(x).shape[0])
         ind_ids = [f"row{i}" for i in range(n)]
         warnings.warn(
-            "No sample/haplotype IDs on the model; using placeholder indID row0, row1, …",
+            "No sample/haplotype IDs on the model; using placeholder indID row0, row1, ...",
             UserWarning,
             stacklevel=2,
         )

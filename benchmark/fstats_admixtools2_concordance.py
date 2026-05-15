@@ -81,9 +81,6 @@ DEFAULT_MAX_F4_RATIO_COMBINATIONS = 1_000
 
 F4_RATIO_KEY_COLS = ["pop1", "pop2", "pop3", "pop4", "pop5"]
 
-# Benchmark guardrails for qpf4ratio-like alpha estimates.
-# These keep only ratios with a non-tiny, well-supported denominator and
-# an alpha in the usual admixture-proportion range.
 DEFAULT_F4_RATIO_MIN_ABS_DEN = 1e-4
 DEFAULT_F4_RATIO_MIN_ABS_DEN_Z = 3.0
 DEFAULT_F4_RATIO_EST_MIN = 0.0
@@ -102,10 +99,16 @@ CONCORDANCE_POP_KEYS: dict[str, tuple[str, ...]] = {
 
 TIMING_BAR_COLORS = {"snputils": "#0072B2", "admixtools2": "#CC79A7"}
 
-# Shared concordance-grid axis titles (larger than default rcParams; timing panel uses rc except ylabel).
+TIMING_N_METHOD_SLOTS = 2
+TIMING_GROUP_PITCH = 0.44
+TIMING_BAR_WIDTH = min(0.26, TIMING_GROUP_PITCH * 0.92)
+
 GRID_CONCORDANCE_SUP_LABEL_FONTSIZE = 18
+TIMING_TITLE_FONTSIZE = 13
 TIMING_YLABEL_FONTSIZE = 15
 TIMING_XTICK_LABEL_FONTSIZE = 12
+TIMING_YTICK_LABEL_FONTSIZE = 11
+TIMING_BAR_LABEL_FONTSIZE = 11
 
 
 def evenly_spaced_subset(df: pd.DataFrame, max_rows: int | None) -> pd.DataFrame:
@@ -622,7 +625,6 @@ def normalize_fstats_timing_csv(timing_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _draw_fstats_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
-    """Overall wall-clock bar chart; bar layout matches ``pca_eigenstrat_concordance`` timing panel."""
     timing_df = normalize_fstats_timing_csv(timing_df)
     overall = timing_df.loc[timing_df["component"] == "overall"].drop_duplicates("method").set_index("method")
     mean_col = "seconds_mean"
@@ -633,10 +635,9 @@ def _draw_fstats_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
     errs_raw = [float(overall.loc[m, std_col]) if m in overall.index else float("nan") for m in order]
     errs = errs_raw if any(math.isfinite(e) for e in errs_raw) else None
     colors = [TIMING_BAR_COLORS[k] for k in order]
-    n_bars = len(labels)
-    group_pitch = 0.44
-    bar_width = min(0.26, group_pitch * 0.92)
-    x_centers = np.arange(n_bars, dtype=float) * group_pitch
+    group_pitch = TIMING_GROUP_PITCH
+    bar_width = TIMING_BAR_WIDTH
+    x_centers = np.arange(TIMING_N_METHOD_SLOTS, dtype=float) * group_pitch
 
     bars = ax.bar(
         x_centers,
@@ -652,10 +653,11 @@ def _draw_fstats_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
     ax.set_xticks(x_centers)
     ax.set_xticklabels(labels)
     ax.tick_params(axis="x", labelsize=TIMING_XTICK_LABEL_FONTSIZE)
+    ax.tick_params(axis="y", labelsize=TIMING_YTICK_LABEL_FONTSIZE)
     edge_pad = max(0.08, bar_width * 0.35)
     ax.set_xlim(x_centers[0] - bar_width / 2 - edge_pad, x_centers[-1] + bar_width / 2 + edge_pad)
     ax.set_ylabel("Wall-clock time (s)", fontsize=TIMING_YLABEL_FONTSIZE)
-    ax.set_title("Overall computation (same PLINK subset)")
+    ax.set_title("Overall computation (same PLINK subset)", fontsize=TIMING_TITLE_FONTSIZE)
     ax.grid(axis="y", color="0.9", linewidth=0.6)
     finite_times = [t for t in times if np.isfinite(t)]
     ymax = max(finite_times) if finite_times else 1.0
@@ -673,7 +675,7 @@ def _draw_fstats_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
                 label,
                 ha="center",
                 va="bottom",
-                fontsize=11,
+                fontsize=TIMING_BAR_LABEL_FONTSIZE,
             )
 
 

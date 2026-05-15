@@ -494,7 +494,7 @@ def _draw_pca_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
     ax.tick_params(axis="x", labelsize=11)
     edge_pad = max(0.08, bar_width * 0.35)
     ax.set_xlim(x_centers[0] - bar_width / 2 - edge_pad, x_centers[-1] + bar_width / 2 + edge_pad)
-    ax.set_ylabel("Wall-clock time (s)")
+    ax.set_ylabel("Wall-clock time (s)", fontsize=15)
     ax.set_title("PCA computation")
     ax.grid(axis="y", color="0.9", linewidth=0.6)
     finite_times = [t for t in times if np.isfinite(t)]

@@ -560,11 +560,12 @@ class maasMDS:
         Retrieve `n_haplotypes`.
 
         Returns:
-            int:
+            int or None:
                 The total number of haplotypes, potentially reduced if filtering is applied 
-                (`min_percent_snps > 0`).
+                (`min_percent_snps > 0`). ``None`` before :meth:`fit_transform` has been called.
         """
-        return len(self.haplotypes_)
+        haplotypes = self.haplotypes_
+        return None if haplotypes is None else len(haplotypes)
 
     @property
     def n_samples(self) -> Optional[int]:
@@ -572,11 +573,12 @@ class maasMDS:
         Retrieve `n_samples`.
 
         Returns:
-            int:
+            int or None:
                 The total number of samples, potentially reduced if filtering is applied 
-                (`min_percent_snps > 0`).
+                (`min_percent_snps > 0`). ``None`` before :meth:`fit_transform` has been called.
         """
-        return len(np.unique(self.samples_))
+        samples = self.samples_
+        return None if samples is None else len(np.unique(samples))
 
     @staticmethod
     def _define_ancestry(ancestry, ancestry_map):

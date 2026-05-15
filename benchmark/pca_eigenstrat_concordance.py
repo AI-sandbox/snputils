@@ -12,7 +12,7 @@ import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -34,6 +34,15 @@ from snputils.processing import PCA
 from snputils.snp.genobj import SNPObject
 from snputils.snp.io.read.auto import SNPReader
 from snputils.snp.io.write._plink import coerce_sex_codes
+
+DEFAULT_N_REPS = 5
+
+BENCHMARK_TORCH_DEVICE = "cuda:0"
+TIMING_METHOD_TORCH = "snputils_torch_cuda0_exact"
+TIMING_METHOD_SKLEARN = "snputils_sklearn_cpu_lowrank"
+TIMING_METHOD_SMARTPCA = "smartpca"
+VARIANT_TORCH = "torch_cuda0_exact"
+VARIANT_SKLEARN = "sklearn_cpu_lowrank"
 
 
 @dataclass(frozen=True)
@@ -182,6 +191,49 @@ def run_smartpca(
     return outputs, float(wall_smartpca_s)
 
 
+def benchmark_smartpca_wall_seconds(
+    plink_prefix: Path,
+    subset: SNPObject,
+    work_dir: Path,
+    *,
+    n_components: int,
+    maxpops: int,
+    numthreads: int | None,
+) -> float:
+    """convertf + smartpca with the same scope as the canonical benchmark; returns smartpca subprocess seconds only."""
+    with tempfile.TemporaryDirectory(prefix="pca_eigenstrat_timing_", dir=str(work_dir)) as rundir_raw:
+        rundir = Path(rundir_raw)
+        eigen_prefix = rundir / "kg_subset_eigenstrat"
+        run_convertf(plink_prefix, eigen_prefix, rundir)
+        normalize_eigenstrat_indiv(subset, eigen_prefix)
+        _, wall_smartpca = run_smartpca(
+            eigen_prefix,
+            rundir,
+            n_components=n_components,
+            maxpops=maxpops,
+            numthreads=numthreads,
+        )
+        return wall_smartpca
+
+
+def _assert_torchpca_on_cuda0(pca: PCA) -> None:
+    """Fail unless TorchPCA is using CUDA GPU index 0 (physical cuda:0)."""
+    import torch
+
+    dev = pca.device
+    if not isinstance(dev, torch.device):
+        raise AssertionError(f"Expected torch.device on TorchPCA, got {type(dev).__name__}: {dev!r}")
+    if dev.type != "cuda":
+        raise AssertionError(
+            "Benchmark requires snputils TorchPCA on cuda:0; "
+            f"actual device is {dev!r}. If CUDA is unavailable, snputils falls back to CPU — "
+            "run this benchmark on a CUDA-visible machine."
+        )
+    idx = 0 if dev.index is None else int(dev.index)
+    if idx != 0:
+        raise AssertionError(f"Benchmark requires cuda:0 (GPU index 0); got cuda:{idx} ({dev!r}).")
+
+
 def run_snputils_pca(
     plink_prefix: Path,
     n_components: int,
@@ -189,6 +241,7 @@ def run_snputils_pca(
     *,
     fitting: str = "exact",
     torch_device: str = "cpu",
+    assert_torch_on_cuda0: bool = False,
 ) -> tuple[pd.DataFrame, float]:
     """
     Load PLINK BED and run PCA. Returns coords and wall seconds for ``fit_transform`` only
@@ -211,6 +264,8 @@ def run_snputils_pca(
     coords = pca.fit_transform(snpobj)
     wall_fit_s = time.perf_counter() - t0
     if backend == "pytorch":
+        if assert_torch_on_cuda0:
+            _assert_torchpca_on_cuda0(pca)
         dev = pca.device
         using_gpu = getattr(dev, "type", str(dev)) == "cuda"
         print(
@@ -309,12 +364,12 @@ def configure_matplotlib() -> None:
         {
             "figure.dpi": 160,
             "savefig.dpi": 300,
-            "font.size": 12,
-            "axes.labelsize": 12,
-            "axes.titlesize": 13,
-            "xtick.labelsize": 11,
-            "ytick.labelsize": 11,
-            "legend.fontsize": 11,
+            "font.size": 18,
+            "axes.labelsize": 18,
+            "axes.titlesize": 18,
+            "xtick.labelsize": 18,
+            "ytick.labelsize": 18,
+            "legend.fontsize": 13,
             "axes.spines.top": False,
             "axes.spines.right": False,
             "pdf.fonttype": 42,
@@ -323,13 +378,18 @@ def configure_matplotlib() -> None:
     )
 
 
-PCA_TIMING_COLORS = {"snputils_pca_fit": "#0072B2", "smartpca": "#CC79A7"}
+PCA_TIMING_COLORS = {
+    TIMING_METHOD_TORCH: "#0072B2",
+    TIMING_METHOD_SKLEARN: "#56B4E9",
+    TIMING_METHOD_SMARTPCA: "#CC79A7",
+}
 
 
 def pca_benchmark_result_paths(work_dir: Path) -> dict[str, Path]:
     """CSV outputs that together suffice to regenerate the benchmark PDF."""
     return {
-        "concordance_by_sample": work_dir / "pca_concordance_by_sample.csv",
+        "concordance_by_sample_torch": work_dir / "pca_concordance_by_sample_torch_cuda0_exact.csv",
+        "concordance_by_sample_sklearn": work_dir / "pca_concordance_by_sample_sklearn_cpu_lowrank.csv",
         "concordance_summary": work_dir / "pca_concordance_summary.csv",
         "computation_timing": work_dir / "pca_computation_timing.csv",
     }
@@ -339,38 +399,199 @@ def cached_pca_benchmark_ready(paths: dict[str, Path]) -> bool:
     return all(path.is_file() and path.stat().st_size > 0 for path in paths.values())
 
 
-def load_cached_pca_benchmark_tables(paths: dict[str, Path]) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
-    merged = pd.read_csv(paths["concordance_by_sample"])
+def normalize_pca_timing_csv(timing_df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure seconds_mean / seconds_std columns exist (backward compat with legacy ``seconds`` column)."""
+    out = timing_df.copy()
+    if "seconds_mean" not in out.columns and "seconds" in out.columns:
+        out["seconds_mean"] = out["seconds"]
+    if "seconds_mean" not in out.columns:
+        raise ValueError("PCA timing CSV must contain seconds_mean or legacy seconds column.")
+    if "seconds_std" not in out.columns:
+        out["seconds_std"] = np.nan
+    return out
+
+
+def load_cached_pca_benchmark_tables(
+    paths: dict[str, Path],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    merged_torch = pd.read_csv(paths["concordance_by_sample_torch"])
+    merged_sklearn = pd.read_csv(paths["concordance_by_sample_sklearn"])
     summary = pd.read_csv(paths["concordance_summary"])
-    timing_df = pd.read_csv(paths["computation_timing"])
-    timing: dict[str, float] = {
-        str(m): float(s) for m, s in zip(timing_df["method"].tolist(), timing_df["seconds"].tolist())
-    }
-    return merged, summary, timing
+    timing_df = normalize_pca_timing_csv(pd.read_csv(paths["computation_timing"]))
+    return merged_torch, merged_sklearn, summary, timing_df
 
 
-def print_pca_stdout_summary(summary: pd.DataFrame, timing: Mapping[str, float]) -> None:
-    print(summary.to_string(index=False))
-    wall_snputils_fit = float(timing.get("snputils_pca_fit", float("nan")))
-    wall_smartpca = float(timing.get("smartpca", float("nan")))
-    ratio = ""
-    if wall_snputils_fit > 0 and math.isfinite(wall_snputils_fit) and math.isfinite(wall_smartpca):
-        ratio = f" (ratio smartpca/snputils {wall_smartpca / wall_snputils_fit:.3f}x)"
+def print_pca_stdout_summary(summary: pd.DataFrame, timing_df: pd.DataFrame) -> None:
+    if "snputils_variant" in summary.columns:
+        for variant in summary["snputils_variant"].unique():
+            sub = summary.loc[summary["snputils_variant"] == variant].drop(columns=["snputils_variant"])
+            print(f"Concordance vs EIGENSTRAT ({variant}):")
+            print(sub.to_string(index=False))
+            print()
+    else:
+        print(summary.to_string(index=False))
+    timing_df = normalize_pca_timing_csv(timing_df)
+    rows = timing_df.set_index("method")
+    mean_col = "seconds_mean"
+    std_col = "seconds_std"
+
+    def _fmt(method: str) -> str:
+        if method not in rows.index:
+            return "n/a"
+        m = float(rows.loc[method, mean_col])
+        if std_col in rows.columns and math.isfinite(float(rows.loc[method, std_col])):
+            sd = float(rows.loc[method, std_col])
+            return f"{m:.3f}s ±{sd:.3f}s"
+        return f"{m:.3f}s"
+
     print(
-        f"PCA wall time (computation only): snputils fit_transform {wall_snputils_fit:.3f}s, "
-        f"smartpca {wall_smartpca:.3f}s{ratio}"
+        "PCA wall time (fit_transform for snputils arms; smartpca subprocess only for EIGENSTRAT):\n"
+        f"  Torch cuda:0 exact: {_fmt(TIMING_METHOD_TORCH)}\n"
+        f"  sklearn CPU lowrank: {_fmt(TIMING_METHOD_SKLEARN)}\n"
+        f"  smartpca: {_fmt(TIMING_METHOD_SMARTPCA)}"
     )
 
 
-def save_concordance_pdf(
+def _draw_pca_timing_bar_panel(ax, timing_df: pd.DataFrame) -> None:
+    timing_df = normalize_pca_timing_csv(timing_df).drop_duplicates("method").set_index("method")
+    mean_col = "seconds_mean"
+    std_col = "seconds_std"
+    order = (TIMING_METHOD_TORCH, TIMING_METHOD_SKLEARN, TIMING_METHOD_SMARTPCA)
+    labels_map = {
+        TIMING_METHOD_TORCH: "snputils PCA\n(GPU, exact)",
+        TIMING_METHOD_SKLEARN: "snputils PCA\n(CPU, lowrank)",
+        TIMING_METHOD_SMARTPCA: "EIGENSOFT\nsmartpca",
+    }
+    labels = [labels_map[k] for k in order]
+    times = [float(timing_df.loc[m, mean_col]) if m in timing_df.index else float("nan") for m in order]
+    errs = (
+        [float(timing_df.loc[m, std_col]) if m in timing_df.index else float("nan") for m in order]
+        if std_col in timing_df.columns
+        else None
+    )
+    if errs is not None and all(not math.isfinite(e) for e in errs):
+        errs = None
+    colors = [PCA_TIMING_COLORS[k] for k in order]
+    n_bars = len(labels)
+    # Compress horizontal spacing (default categorical spacing is 1.0 between bar centers).
+    group_pitch = 0.44
+    bar_width = min(0.26, group_pitch * 0.92)
+    x_centers = np.arange(n_bars, dtype=float) * group_pitch
+
+    bars = ax.bar(
+        x_centers,
+        times,
+        width=bar_width,
+        color=colors,
+        edgecolor="white",
+        linewidth=0.6,
+        yerr=errs,
+        capsize=3,
+        error_kw={"linewidth": 1.4, "ecolor": "0.25", "capthick": 1.4},
+    )
+    ax.set_xticks(x_centers)
+    ax.set_xticklabels(labels)
+    ax.tick_params(axis="x", labelsize=11)
+    edge_pad = max(0.08, bar_width * 0.35)
+    ax.set_xlim(x_centers[0] - bar_width / 2 - edge_pad, x_centers[-1] + bar_width / 2 + edge_pad)
+    ax.set_ylabel("Wall-clock time (s)")
+    ax.set_title("PCA computation")
+    ax.grid(axis="y", color="0.9", linewidth=0.6)
+    finite_times = [t for t in times if np.isfinite(t)]
+    ymax = max(finite_times) if finite_times else 1.0
+    err_max = max((e for e in (errs or []) if math.isfinite(e)), default=0.0)
+    ax.set_ylim(0, (ymax + err_max) * 1.18 if ymax > 0 else 1.0)
+    err_list = errs if errs else [None] * len(times)
+    for bar, sec, err in zip(bars, times, err_list):
+        if np.isfinite(sec):
+            label = f"{sec:.2f}s"
+            if err is not None and math.isfinite(err):
+                label += f"±{err:.2f}s"
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + (err if err is not None and math.isfinite(err) else 0.0),
+                label,
+                ha="center",
+                va="bottom",
+                fontsize=12,
+            )
+
+
+def _draw_snputils_vs_eigenstrat_page(
     merged: pd.DataFrame,
     summary: pd.DataFrame,
+    *,
+    n_components: int,
+    scatter_color: str,
+    y_axis_label: str,
+    figure_title: str,
+) -> object:
+    import matplotlib.pyplot as plt
+
+    ncols = min(3, n_components)
+    nrows = math.ceil(n_components / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.5 * ncols, 3.35 * nrows),
+        constrained_layout=True,
+        sharex=False,
+        sharey=False,
+    )
+    axes_arr = np.asarray(axes).reshape(-1)
+
+    for i in range(1, n_components + 1):
+        ax = axes_arr[i - 1]
+        pc = f"PC{i}"
+        x = merged[f"{pc}_eigenstrat_z_aligned"].to_numpy(dtype=float)
+        y = merged[f"{pc}_snputils_z"].to_numpy(dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        ax.scatter(x[finite], y[finite], s=18, alpha=0.7, color=scatter_color, edgecolor="white", linewidth=0.25)
+        lo = float(min(x[finite].min(), y[finite].min()))
+        hi = float(max(x[finite].max(), y[finite].max()))
+        pad = (hi - lo) * 0.05 if hi > lo else 1e-6
+        ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="black", linewidth=0.9)
+        ax.set_xlim(lo - pad, hi + pad)
+        ax.set_ylim(lo - pad, hi + pad)
+        idx = i - 1
+        row = idx // ncols
+        col = idx % ncols
+        is_bottom_row = row == nrows - 1
+        is_left_col = col == 0
+        ax.tick_params(labelbottom=is_bottom_row, labelleft=is_left_col)
+        ax.set_title(pc)
+        row = summary.loc[summary["component"] == pc].iloc[0]
+        ax.text(
+            0.04,
+            0.96,
+            f"n = {int(row['n'])}\n|r| = {row['pearson_r_abs']:.6g}\nRMSE z = {row['rmse_z']:.2e}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=13,
+            bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "0.85", "alpha": 0.92},
+        )
+        ax.grid(color="0.9", linewidth=0.6)
+
+    for ax in axes_arr[n_components:]:
+        ax.axis("off")
+
+    fig.supxlabel("EIGENSTRAT z-score", fontsize=18)
+    fig.supylabel(y_axis_label, fontsize=18)
+    if figure_title is not None:
+        fig.suptitle(figure_title, fontsize=18, y=1.02)
+    return fig
+
+
+def save_concordance_pdf(
+    merged_torch: pd.DataFrame,
+    summary_torch: pd.DataFrame,
+    merged_sklearn: pd.DataFrame,
+    summary_sklearn: pd.DataFrame,
     pdf_path: Path,
     n_components: int,
     *,
-    pca_wall_seconds: dict[str, float] | None = None,
-    device: str | None = None,
-    fitting: str | None = None,
+    timing_df: pd.DataFrame | None = None,
 ) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
@@ -380,80 +601,31 @@ def save_concordance_pdf(
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
     with PdfPages(pdf_path) as pdf:
-        ncols = min(3, n_components)
-        nrows = math.ceil(n_components / ncols)
-        fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3.35 * nrows), constrained_layout=True)
-        axes_arr = np.asarray(axes).reshape(-1)
+        fig_torch = _draw_snputils_vs_eigenstrat_page(
+            merged_torch,
+            summary_torch,
+            n_components=n_components,
+            scatter_color=PCA_TIMING_COLORS[TIMING_METHOD_TORCH],
+            y_axis_label="snputils z-score (GPU, exact)",
+            figure_title=None,
+        )       
+        pdf.savefig(fig_torch, bbox_inches="tight")
+        plt.close(fig_torch)
 
-        for i in range(1, n_components + 1):
-            ax = axes_arr[i - 1]
-            pc = f"PC{i}"
-            x = merged[f"{pc}_eigenstrat_z_aligned"].to_numpy(dtype=float)
-            y = merged[f"{pc}_snputils_z"].to_numpy(dtype=float)
-            finite = np.isfinite(x) & np.isfinite(y)
-            ax.scatter(x[finite], y[finite], s=18, alpha=0.7, color="#0072B2", edgecolor="white", linewidth=0.25)
-            lo = float(min(x[finite].min(), y[finite].min()))
-            hi = float(max(x[finite].max(), y[finite].max()))
-            pad = (hi - lo) * 0.05 if hi > lo else 1e-6
-            ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="black", linewidth=0.9)
-            ax.set_xlim(lo - pad, hi + pad)
-            ax.set_ylim(lo - pad, hi + pad)
-            ax.set_xlabel("EIGENSTRAT z-score")
-            ylabel = "snputils z-score"
-            if device == "cuda" or device == "gpu" or device == "cuda:0":
-                mode = " (GPU"
-            else:
-                mode = " (CPU"
-            if fitting == "lowrank":
-                mode += ", lowrank)"
-            else:
-                mode += ", exact)"
-            ax.set_ylabel(ylabel + mode)
-            ax.set_title(pc)
-            row = summary.loc[summary["component"] == pc].iloc[0]
-            ax.text(
-                0.04,
-                0.96,
-                f"n = {int(row['n'])}\n|r| = {row['pearson_r_abs']:.6g}\nRMSE z = {row['rmse_z']:.2e}",
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=11,
-                bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "0.85", "alpha": 0.92},
-            )
-            ax.grid(color="0.9", linewidth=0.6)
+        fig_sk = _draw_snputils_vs_eigenstrat_page(
+            merged_sklearn,
+            summary_sklearn,
+            n_components=n_components,
+            scatter_color=PCA_TIMING_COLORS[TIMING_METHOD_SKLEARN],
+            y_axis_label="snputils z-score (CPU, lowrank)",
+            figure_title=None,
+        )
+        pdf.savefig(fig_sk, bbox_inches="tight")
+        plt.close(fig_sk)
 
-        for ax in axes_arr[n_components:]:
-            ax.axis("off")
-
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
-
-        if pca_wall_seconds:
-            labels_map = {f"snputils_pca_fit": f"snputils PCA\n{mode}", "smartpca": "EIGENSOFT\nsmartpca"}
-            order = ("snputils_pca_fit", "smartpca")
-            labels = [labels_map[k] for k in order]
-            times = [float(pca_wall_seconds.get(k, float("nan"))) for k in order]
-            colors = [PCA_TIMING_COLORS[k] for k in order]
-
-            fig_t, ax_t = plt.subplots(figsize=(4.2, 3.5), constrained_layout=True)
-            bars = ax_t.bar(labels, times, color=colors, edgecolor="white", linewidth=0.6)
-            ax_t.set_ylabel("Wall-clock time (s)")
-            ax_t.set_title("PCA computation")
-            ax_t.grid(axis="y", color="0.9", linewidth=0.6)
-            finite_times = [t for t in times if np.isfinite(t)]
-            ymax = max(finite_times) if finite_times else 1.0
-            ax_t.set_ylim(0, ymax * 1.12 if ymax > 0 else 1.0)
-            for bar, sec in zip(bars, times):
-                if np.isfinite(sec):
-                    ax_t.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        bar.get_height(),
-                        f"{sec:.2f}s",
-                        ha="center",
-                        va="bottom",
-                        fontsize=11,
-                    )
+        if timing_df is not None and not timing_df.empty:
+            fig_t, ax_t = plt.subplots(figsize=(4.25, 3.6), constrained_layout=True)
+            _draw_pca_timing_bar_panel(ax_t, timing_df)
             pdf.savefig(fig_t, bbox_inches="tight")
             plt.close(fig_t)
 
@@ -461,9 +633,10 @@ def save_concordance_pdf(
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare snputils PCA with EIGENSOFT smartpca on a 1000 Genomes subset. "
-            "The script writes a PLINK .bed/.bim/.fam subset via snputils, converts it to EIGENSTRAT with convertf, "
-            "runs smartpca, and reports sign-invariant per-component concordance."
+            "Benchmark PCA on a 1000 Genomes subset — "
+            "snputils pytorch (cuda:0, exact), snputils sklearn (CPU, lowrank), and EIGENSOFT smartpca. "
+            "Writes PLINK bed/bim/fam, converts to EIGENSTRAT with convertf, runs smartpca, "
+            "and reports concordance vs both snputils arms plus timing with repetitions."
         )
     )
     parser.add_argument("--work-dir", type=Path, default=Path(".cache/pca_eigenstrat_concordance"))
@@ -511,39 +684,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-variants", type=int, default=100_000)
     parser.add_argument("--n-components", type=int, default=10)
     parser.add_argument(
-        "--snputils-backend",
-        choices=("sklearn", "pytorch"),
-        default="sklearn",
-        help="PCA implementation: sklearn or pytorch (snputils TorchPCA). Default sklearn.",
-    )
-    parser.add_argument(
-        "--snputils-torch-pca",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Force snputils TorchPCA (``--snputils-torch-pca``) or sklearn PCA (``--no-snputils-torch-pca``). "
-            "When omitted, ``--snputils-backend`` decides (pytorch = TorchPCA)."
-        ),
-    )
-    parser.add_argument(
-        "--snputils-torch-device",
-        default="cpu",
-        help=(
-            "PyTorch device for TorchPCA (cpu, cuda, gpu, cuda:0, ...). Ignored when not using TorchPCA. "
-            "If CUDA is unavailable, snputils falls back to CPU."
-        ),
-    )
-    parser.add_argument(
-        "--snputils-pca-fitting",
-        dest="snputils_pca_fitting",
-        choices=("exact", "lowrank"),
-        default="exact",
-        help=(
-            "snputils PCA SVD mode: exact (default; sklearn svd_solver=full, torch economy SVD) or "
-            "lowrank (approximate; sklearn randomized, torch.svd_lowrank)."
-        ),
-    )
-    parser.add_argument(
         "--include-monomorphic",
         action="store_true",
         help="Keep sites that are monomorphic in the selected samples.",
@@ -565,28 +705,29 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Path for the benchmark PDF: page 1 concordance grids, page 2 PCA-only wall times "
-            "(snputils fit_transform vs smartpca). Default: WORK_DIR/concordance_grid.pdf"
+            "Path for the benchmark PDF: concordance grids (Torch cuda:0 exact vs eigenstrat; sklearn vs eigenstrat), "
+            "then a timing bar chart. Default: WORK_DIR/concordance_grid.pdf"
+        ),
+    )
+    parser.add_argument(
+        "--n-reps",
+        type=int,
+        default=DEFAULT_N_REPS,
+        help=(
+            "Number of independent timing repetitions per method. Rep 1 is the canonical run "
+            "(concordance verified); later reps are timing-only. Mean ± std appear in the timing CSV and PDF. "
+            "Default: %(default)s."
         ),
     )
     parser.add_argument(
         "--force",
         action="store_true",
         help=(
-            "Re-run load_dataset, snputils PCA, convertf/smartpca, and concordance even when "
+            "Re-run load_dataset, both snputils PCA arms, convertf/smartpca, and concordance even when "
             "cached CSV results already exist under --work-dir."
         ),
     )
     return parser.parse_args(argv)
-
-
-def resolve_snputils_pca_backend(args: argparse.Namespace) -> str:
-    """``--snputils-torch-pca`` / ``--no-snputils-torch-pca`` override ``--snputils-backend`` when set."""
-    if args.snputils_torch_pca is True:
-        return "pytorch"
-    if args.snputils_torch_pca is False:
-        return "sklearn"
-    return args.snputils_backend
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -603,10 +744,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"--n-components must be less than the selected sample count ({n_samples}).")
     if args.genotype_dir is not None and args.vcf is not None:
         raise ValueError("Use either --vcf or --genotype-dir, not both.")
-    if args.snputils_torch_pca is False and args.snputils_backend == "pytorch":
-        raise ValueError("Conflicting options: --no-snputils-torch-pca with --snputils-backend pytorch.")
     if args.smartpca_numthreads is not None and args.smartpca_numthreads < 1:
         raise ValueError("--smartpca-numthreads must be a positive integer when set.")
+    if args.n_reps < 1:
+        raise ValueError("--n-reps must be at least 1.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -622,26 +763,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         and cached_pca_benchmark_ready(bench_paths)
         and not args.force
     ):
-        merged, summary, timing_for_pdf = load_cached_pca_benchmark_tables(bench_paths)
-        n_components = len(summary)
+        merged_torch, merged_sklearn, summary, timing_df = load_cached_pca_benchmark_tables(bench_paths)
+        if "snputils_variant" not in summary.columns:
+            raise RuntimeError(
+                "Cached PCA benchmark outputs use an older layout. Remove the work directory or pass "
+                "--force to regenerate (Torch cuda:0 exact + sklearn CPU lowrank + EIGENSTRAT)."
+            )
+        summary_torch = summary.loc[summary["snputils_variant"] == VARIANT_TORCH].drop(columns=["snputils_variant"])
+        summary_sklearn = summary.loc[summary["snputils_variant"] == VARIANT_SKLEARN].drop(columns=["snputils_variant"])
+        if summary_torch.empty or summary_sklearn.empty:
+            raise RuntimeError("Cached summary is incomplete for both snputils arms; use --force to recompute.")
+        n_components = len(summary_torch)
         save_concordance_pdf(
-            merged,
-            summary,
+            merged_torch,
+            summary_torch,
+            merged_sklearn,
+            summary_sklearn,
             pdf_path,
             n_components,
-            pca_wall_seconds=timing_for_pdf,
-            device=args.snputils_torch_device,
-            fitting=args.snputils_pca_fitting,
+            timing_df=timing_df,
         )
         print(
             f"PCA benchmark CSVs already exist under {args.work_dir}; regenerated PDF only. "
             "Use --force to recompute genotype load, PCA, and concordance tables."
         )
-        print_pca_stdout_summary(summary, timing_for_pdf)
+        print_pca_stdout_summary(summary, timing_df)
         print(f"Wrote {pdf_path} (concordance + PCA timing)")
         return 0
-
-    snputils_pca_backend = resolve_snputils_pca_backend(args)
 
     if not args.skip_eigenstrat:
         require_executable("convertf")
@@ -701,13 +849,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "sample_populations": subset_sample_pops,
         "n_variants": int(subset.n_snps),
         "n_components": int(args.n_components),
-        "snputils_pca_backend": snputils_pca_backend,
-        "snputils_backend": snputils_pca_backend,
-        "snputils_backend_cli": args.snputils_backend,
-        "snputils_torch_pca_explicit": args.snputils_torch_pca,
-        "snputils_torch_device": args.snputils_torch_device if snputils_pca_backend == "pytorch" else None,
-        "snputils_pca_fitting": args.snputils_pca_fitting,
+        "benchmark_design": {
+            "arms": [
+                {"name": VARIANT_SKLEARN, "backend": "sklearn", "device": "cpu", "fitting": "lowrank"},
+                {"name": VARIANT_TORCH, "backend": "pytorch", "device": BENCHMARK_TORCH_DEVICE, "fitting": "exact"},
+                {"name": "eigenstrat_smartpca", "tool": "EIGENSOFT_smartpca"},
+            ],
+            "torch_cuda0_assertion": "TorchPCA device must be CUDA index 0 after fit_transform.",
+        },
         "smartpca_numthreads": args.smartpca_numthreads,
+        "timing_repetitions": int(args.n_reps),
     }
     with (args.work_dir / "subset_metadata.json").open("w") as handle:
         json.dump(metadata, handle, indent=2)
@@ -716,14 +867,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Wrote PLINK .bed/.bim/.fam and subset metadata under {args.work_dir}")
         return 0
 
-    snputils_df, wall_snputils_fit = run_snputils_pca(
+    torch_fit_times: list[float] = []
+    sklearn_fit_times: list[float] = []
+    smartpca_times: list[float] = []
+    maxpops_smartpca = max(100, len(set(subset_sample_pops)) + 10)
+
+    snputils_sklearn_df, wall_sklearn = run_snputils_pca(
         plink_prefix,
         args.n_components,
-        snputils_pca_backend,
-        fitting=args.snputils_pca_fitting,
-        torch_device=args.snputils_torch_device,
+        "sklearn",
+        fitting="lowrank",
     )
-    snputils_df.to_csv(args.work_dir / "snputils_pca.csv", index=False)
+    sklearn_fit_times.append(wall_sklearn)
+
+    snputils_torch_df, wall_torch = run_snputils_pca(
+        plink_prefix,
+        args.n_components,
+        "pytorch",
+        fitting="exact",
+        torch_device=BENCHMARK_TORCH_DEVICE,
+        assert_torch_on_cuda0=True,
+    )
+    torch_fit_times.append(wall_torch)
+
+    snputils_torch_df.to_csv(args.work_dir / "snputils_pca_torch_cuda0_exact.csv", index=False)
+    snputils_sklearn_df.to_csv(args.work_dir / "snputils_pca_sklearn_cpu_lowrank.csv", index=False)
 
     with tempfile.TemporaryDirectory(prefix="pca_eigenstrat_", dir=str(args.work_dir)) as rundir_raw:
         rundir = Path(rundir_raw)
@@ -735,9 +903,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             eigen_prefix,
             rundir,
             n_components=args.n_components,
-            maxpops=max(100, len(set(subset_sample_pops)) + 10),
+            maxpops=maxpops_smartpca,
             numthreads=args.smartpca_numthreads,
         )
+        smartpca_times.append(wall_smartpca)
         eigen_df = parse_smartpca_evec(smartpca_outputs.evec, args.n_components)
         eigen_df.to_csv(args.work_dir / "eigenstrat_pca.csv", index=False)
         shutil.copy2(smartpca_outputs.evec, args.work_dir / smartpca_outputs.evec.name)
@@ -745,30 +914,84 @@ def main(argv: Sequence[str] | None = None) -> int:
         shutil.copy2(smartpca_outputs.log, args.work_dir / smartpca_outputs.log.name)
         shutil.copy2(smartpca_outputs.par, args.work_dir / smartpca_outputs.par.name)
 
-    merged, summary = summarize_concordance(snputils_df, eigen_df, args.n_components)
-    merged.to_csv(bench_paths["concordance_by_sample"], index=False)
-    summary.to_csv(bench_paths["concordance_summary"], index=False)
+    for rep in range(1, args.n_reps):
+        print(f"  timing rep {rep + 1}/{args.n_reps} ...", flush=True)
+        _, w_sk = run_snputils_pca(
+            plink_prefix,
+            args.n_components,
+            "sklearn",
+            fitting="lowrank",
+        )
+        sklearn_fit_times.append(w_sk)
+        _, w_torch = run_snputils_pca(
+            plink_prefix,
+            args.n_components,
+            "pytorch",
+            fitting="exact",
+            torch_device=BENCHMARK_TORCH_DEVICE,
+            assert_torch_on_cuda0=True,
+        )
+        torch_fit_times.append(w_torch)
+        w_smart = benchmark_smartpca_wall_seconds(
+            plink_prefix,
+            subset,
+            args.work_dir,
+            n_components=args.n_components,
+            maxpops=maxpops_smartpca,
+            numthreads=args.smartpca_numthreads,
+        )
+        smartpca_times.append(w_smart)
 
+    merged_torch, summary_torch = summarize_concordance(snputils_torch_df, eigen_df, args.n_components)
+    merged_sklearn, summary_sklearn = summarize_concordance(snputils_sklearn_df, eigen_df, args.n_components)
+    merged_torch.to_csv(bench_paths["concordance_by_sample_torch"], index=False)
+    merged_sklearn.to_csv(bench_paths["concordance_by_sample_sklearn"], index=False)
+
+    summary_out = pd.concat(
+        [
+            summary_torch.assign(snputils_variant=VARIANT_TORCH),
+            summary_sklearn.assign(snputils_variant=VARIANT_SKLEARN),
+        ],
+        ignore_index=True,
+    )
+    summary_out.to_csv(bench_paths["concordance_summary"], index=False)
+
+    ddof = 1 if len(torch_fit_times) > 1 else 0
     pca_timing = pd.DataFrame(
         [
-            {"method": "snputils_pca_fit", "seconds": wall_snputils_fit},
-            {"method": "smartpca", "seconds": wall_smartpca},
+            {
+                "method": TIMING_METHOD_TORCH,
+                "seconds_mean": float(np.mean(torch_fit_times)),
+                "seconds_std": float(np.std(torch_fit_times, ddof=ddof)),
+                "n_reps": len(torch_fit_times),
+            },
+            {
+                "method": TIMING_METHOD_SKLEARN,
+                "seconds_mean": float(np.mean(sklearn_fit_times)),
+                "seconds_std": float(np.std(sklearn_fit_times, ddof=ddof)),
+                "n_reps": len(sklearn_fit_times),
+            },
+            {
+                "method": TIMING_METHOD_SMARTPCA,
+                "seconds_mean": float(np.mean(smartpca_times)),
+                "seconds_std": float(np.std(smartpca_times, ddof=ddof)),
+                "n_reps": len(smartpca_times),
+            },
         ]
     )
     pca_timing.to_csv(bench_paths["computation_timing"], index=False)
 
-    timing_for_pdf = dict(zip(pca_timing["method"], pca_timing["seconds"]))
     save_concordance_pdf(
-        merged,
-        summary,
+        merged_torch,
+        summary_torch,
+        merged_sklearn,
+        summary_sklearn,
         pdf_path,
         args.n_components,
-        pca_wall_seconds=timing_for_pdf,
-        device=args.snputils_torch_device if snputils_pca_backend == "pytorch" else None,
-        fitting=args.snputils_pca_fitting,
+        timing_df=pca_timing,
     )
 
-    print_pca_stdout_summary(summary, timing_for_pdf)
+    print_pca_stdout_summary(summary_out, pca_timing)
     print(f"Wrote {pdf_path} (concordance + PCA timing)")
     print(f"Wrote {bench_paths['computation_timing']}")
     return 0

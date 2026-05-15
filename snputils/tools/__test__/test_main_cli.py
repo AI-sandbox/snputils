@@ -22,12 +22,42 @@ def _write_tiny_vcf(path: Path) -> None:
     )
 
 
+def _write_gwas_vcf(path: Path, sample_ids) -> None:
+    dosage_rows = [
+        [0, 1, 2, 0, 1, 2, 1, 0],
+        [0, 0, 1, 1, 2, 2, 1, 0],
+        [2, 1, 1, 0, 0, 1, 2, 2],
+        [0, 1, 0, 1, 0, 1, 2, 2],
+    ]
+    gt_map = {0: "0|0", 1: "0|1", 2: "1|1"}
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("##fileformat=VCFv4.2\n")
+        handle.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
+        handle.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t")
+        handle.write("\t".join(sample_ids))
+        handle.write("\n")
+        for idx, dosage in enumerate(dosage_rows, start=1):
+            genotypes = [gt_map[int(g)] for g in dosage]
+            handle.write(
+                f"1\t{1000 * idx}\trs{idx}\tA\tG\t.\tPASS\t.\tGT\t" + "\t".join(genotypes) + "\n"
+            )
+
+
 def _write_binary_phe(path: Path, sample_ids, y_binary: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("#FID IID PHENO\n")
         for sid, yi in zip(sample_ids, y_binary):
             status = 2 if int(yi) == 1 else 1
             handle.write(f"{sid} {sid} {status}\n")
+
+
+def _write_multi_phe(path: Path, sample_ids, names, columns) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("#FID IID " + " ".join(names) + "\n")
+        for row_idx, sid in enumerate(sample_ids):
+            values = [str(int(column[row_idx])) for column in columns]
+            handle.write(f"{sid} {sid} {' '.join(values)}\n")
 
 
 def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,6 +217,80 @@ def test_main_admixture_map_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert output_file.stat().st_size > 0
 
 
+def test_main_gwas_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sample_ids = [f"s{i}" for i in range(8)]
+    y_binary = np.array([0, 0, 1, 0, 1, 1, 0, 1], dtype=np.int8)
+    vcf_path = tmp_path / "toy_gwas.vcf"
+    phe_path = tmp_path / "toy_gwas.phe"
+    out_dir = tmp_path / "out_gwas"
+
+    _write_gwas_vcf(vcf_path, sample_ids)
+    _write_binary_phe(phe_path, sample_ids, y_binary)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "gwas",
+            "--phe-id",
+            "toy",
+            "--phe-path",
+            str(phe_path),
+            "--snp-path",
+            str(vcf_path),
+            "--results-path",
+            str(out_dir),
+            "--batch-size",
+            "2",
+        ],
+    )
+
+    assert main() == 0
+    output_file = out_dir / "toy_gwas.tsv.gz"
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0
+
+
+def test_main_gwas_multi_phenotype_and_variant_exclude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sample_ids = [f"s{i}" for i in range(8)]
+    y_binary = np.array([0, 0, 1, 0, 1, 1, 0, 1], dtype=np.int8)
+    y_other = np.array([1, 1, 0, 1, 0, 0, 1, 0], dtype=np.int8)
+    vcf_path = tmp_path / "toy_gwas.vcf"
+    phe_path = tmp_path / "toy_gwas_multi.phe"
+    exclude_path = tmp_path / "exclude.txt"
+    out_path = tmp_path / "toy_selected.tsv.gz"
+
+    _write_gwas_vcf(vcf_path, sample_ids)
+    _write_multi_phe(phe_path, sample_ids, ["Y1", "Y2"], [y_binary, y_other])
+    exclude_path.write_text("rs2\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "gwas",
+            "--phe-id",
+            "Y2",
+            "--phe-path",
+            str(phe_path),
+            "--snp-path",
+            str(vcf_path),
+            "--results-path",
+            str(out_path),
+            "--batch-size",
+            "2",
+            "--variant-exclude",
+            str(exclude_path),
+        ],
+    )
+
+    assert main() == 0
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
+
+
 def test_main_without_command_prints_help_and_exits_1(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -197,6 +301,7 @@ def test_main_without_command_prints_help_and_exits_1(
     assert "usage:" in captured.err
     assert "pca" in captured.err
     assert "admixture-map" in captured.err
+    assert "gwas" in captured.err
 
 
 def test_main_help_flag_prints_help_and_exits_0(
@@ -211,3 +316,4 @@ def test_main_help_flag_prints_help_and_exits_0(
     captured = capsys.readouterr()
     assert "usage:" in captured.out
     assert "admixture-map" in captured.out
+    assert "gwas" in captured.out

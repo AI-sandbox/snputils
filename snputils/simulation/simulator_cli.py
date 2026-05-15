@@ -90,11 +90,11 @@ def main():
     log.info("Output directory: %s", out_dir.resolve())
 
     # 2) Read inputs
-    log.info("Reading VCF …")
+    log.info("Reading VCF...")
     vcf_reader = VCFReaderPolars(args.vcf)
     vcf_data   = vcf_reader.read()
 
-    log.info("Reading metadata table …")
+    log.info("Reading metadata table...")
     meta = pd.read_csv(args.metadata, sep=None, engine="python")
     # Subset to single-ancestry samples if that column exists
     if "Single_Ancestry" in meta.columns:
@@ -111,7 +111,7 @@ def main():
     # Genetic map (optional)
     genetic_map = None
     if args.genetic_map:
-        log.info("Reading genetic map …")
+        log.info("Reading genetic map...")
         gm = pd.read_csv(args.genetic_map, sep=None, engine="python",
                          names=["chm", "pos", "cM"])
         if args.chromosome is not None:
@@ -119,7 +119,7 @@ def main():
         genetic_map = gm
 
     # 3) Instantiate simulator
-    log.info("Initialising OnlineSimulator …")
+    log.info("Initialising OnlineSimulator...")
     simulator = OnlineSimulator(
         vcf_data           = vcf_data,
         meta               = meta,
@@ -130,7 +130,7 @@ def main():
     )
 
     # 4) Run batches
-    log.info("Generating %d batch(es)…", args.n_batches)
+    log.info("Generating %d batch(es)...", args.n_batches)
     for b in range(1, args.n_batches + 1):
         snps, labels_d, labels_c, cp = simulator.simulate(
             batch_size        = args.batch_size,

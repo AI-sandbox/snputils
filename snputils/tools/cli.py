@@ -49,7 +49,14 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         dest="fig_path",
         required=True,
         type=str,
-        help="Path to save the PCA scatter plot image.",
+        help="Path to save the PCA scatter plot (.pdf / .svg / .png, ...; vector formats use rasterized points at 300 dpi by default).",
+    )
+    parser.add_argument(
+        "--embedding-tsv-path",
+        dest="embedding_tsv_path",
+        default=None,
+        type=str,
+        help="Optional path to write PC coordinates as TSV/CSV (see snputils.processing.dimred_tabular).",
     )
     parser.add_argument(
         "--npy-path",

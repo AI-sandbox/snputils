@@ -6,6 +6,10 @@ from typing import List
 import numpy as np
 
 from snputils.snp.io.read import SNPReader
+from snputils.visualization._figure_export import (
+    default_savefig_kwargs,
+    scatter_rasterized_for_path,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,14 +34,15 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         dest="fig_path",
         required=True,
         type=str,
-        help="Path used to save PCA plot.",
+        help="Path for the PCA scatter plot (.pdf / .svg for vector output, .png, ...; see visualization._figure_export).",
     )
     parser.add_argument(
-        "--npy-path",
-        dest="npy_path",
-        required=True,
+        "--embedding-tsv-path",
+        dest="embedding_tsv_path",
+        required=False,
+        default=None,
         type=str,
-        help="Path used to save principal components in .npy format.",
+        help="Optional path for a TSV/CSV of sample IDs and PC coordinates (see dimred_tabular).",
     )
     parser.add_argument(
         "--backend",
@@ -112,6 +117,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
             backend=args.backend,
             n_components=args.n_components,
             fitting=args.fitting,
+            embedding_table_path=args.embedding_tsv_path,
         )
         components = pca.fit_transform(snpobj)
         components = components.cpu().numpy()
@@ -122,6 +128,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
             backend="sklearn",
             n_components=args.n_components,
             fitting=args.fitting,
+            embedding_table_path=args.embedding_tsv_path,
         )
         components = np.asarray(pca.fit_transform(snpobj), dtype=float)
     else:
@@ -141,12 +148,16 @@ def run_pca_command(args: argparse.Namespace) -> int:
         y_label = "Constant (0)"
 
     plt.figure(figsize=(10, 8))
-    plt.scatter(x, y, linewidth=0, alpha=0.5)
+    _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5}
+    if scatter_rasterized_for_path(str(args.fig_path)):
+        _scatter_kw["rasterized"] = True
+    plt.scatter(x, y, **_scatter_kw)
     plt.xlabel("Principal Component 1", fontsize=20)
     plt.ylabel(y_label, fontsize=20)
     plt.tight_layout()
 
-    plt.savefig(args.fig_path)
+    _save_kw = default_savefig_kwargs(str(args.fig_path))
+    plt.savefig(args.fig_path, **_save_kw)
     np.save(args.npy_path, components)
     return 0
 

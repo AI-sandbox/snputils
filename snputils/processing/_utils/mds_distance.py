@@ -1,9 +1,6 @@
 # Library Importation
-import matplotlib.pylab as plt
+import inspect
 import numpy as np
-import pandas as pd
-import plotly
-import plotly_express as px 
 from sklearn.linear_model import LinearRegression
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import manhattan_distances
@@ -14,7 +11,6 @@ from sklearn.metrics.pairwise import is_scalar_nan
 import time
 import warnings
 import logging
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
 warnings.simplefilter("ignore", category=RuntimeWarning)
 from sklearn.impute import SimpleImputer
 
@@ -40,11 +36,19 @@ def weighted_cmdscale(D, weights, num_dims):
     dist_transformed = np.matmul(svd.components_, np.linalg.inv(np.sqrt(W))).T
     return dist_transformed
 
+
+def _check_pairwise_arrays_allow_nan(X, Y, missing_values=np.nan):
+    finite_arg = 'allow-nan' if is_scalar_nan(missing_values) else True
+    kwargs = {"accept_sparse": False}
+    if "ensure_all_finite" in inspect.signature(check_pairwise_arrays).parameters:
+        kwargs["ensure_all_finite"] = finite_arg
+    else:
+        kwargs["force_all_finite"] = finite_arg
+    return check_pairwise_arrays(X, Y, **kwargs)
+
 def nan_manhattan_distances(X, Y=None):    
     missing_values=np.nan
-    force_all_finite = 'allow-nan' if is_scalar_nan(missing_values) else True
-    X, Y = check_pairwise_arrays(X, Y, accept_sparse=False,
-                                 force_all_finite=force_all_finite)
+    X, Y = _check_pairwise_arrays_allow_nan(X, Y, missing_values=missing_values)
     missing_X = _get_mask(X, missing_values)
     missing_Y = missing_X if Y is X else _get_mask(Y, missing_values)
     
@@ -82,9 +86,7 @@ def nan_manhattan_distances(X, Y=None):
 
 def nan_rms_distances(X, Y=None):    
     missing_values=np.nan
-    force_all_finite = 'allow-nan' if is_scalar_nan(missing_values) else True
-    X, Y = check_pairwise_arrays(X, Y, accept_sparse=False,
-                                 force_all_finite=force_all_finite)
+    X, Y = _check_pairwise_arrays_allow_nan(X, Y, missing_values=missing_values)
     missing_X = _get_mask(X, missing_values)
     missing_Y = missing_X if Y is X else _get_mask(Y, missing_values)
 
@@ -124,9 +126,7 @@ def nan_rms_distances(X, Y=None):
 
 def nan_ap_distances(X, Y=None):
     missing_values=np.nan
-    force_all_finite = 'allow-nan' if is_scalar_nan(missing_values) else True
-    X, Y = check_pairwise_arrays(X, Y, accept_sparse=False,
-                                 force_all_finite=force_all_finite)
+    X, Y = _check_pairwise_arrays_allow_nan(X, Y, missing_values=missing_values)
     missing_X = _get_mask(X, missing_values)
     missing_Y = missing_X if Y is X else _get_mask(Y, missing_values)
     
@@ -267,13 +267,21 @@ def build_overlap(overlap, array1_ID, array2_ID, array1, array2):
     overlap_mat   : array representing the combined genetic matrix of 
                     individuals in both arrays across their common snps.
     '''
-    index_1 = np.where(np.in1d(array1_ID, overlap))[0]
-    index_2 = np.where(np.in1d(array2_ID, overlap))[0]
+    index_1 = np.where(np.isin(array1_ID, overlap))[0]
+    index_2 = np.where(np.isin(array2_ID, overlap))[0]
 
     return [array1[index_1],array2[index_2]]
 
 
-def overlap_blocks(ancestry, ref_col, ref_row, num_arrays, rs_ID_list, binary, masks):
+def overlap_blocks(
+    ancestry,
+    ref_col,
+    ref_row,
+    num_arrays,
+    rs_ID_list,
+    binary,
+    masks,
+):
     """                                                                                       
     Binary Intersection Array Computation:
     
@@ -302,20 +310,28 @@ def overlap_blocks(ancestry, ref_col, ref_row, num_arrays, rs_ID_list, binary, m
     """    
     overlap = []
     for i in range(num_arrays):
-        overlap.append([1]*i)
+        overlap.append([1] * i)
         for j in range(i, num_arrays):
-            if (j == 0):
-                ind = np.where(np.in1d(rs_ID_list[j], np.array(binary[ref_row][ref_col])))[0]
+            if j == 0:
+                ind = np.where(np.isin(rs_ID_list[j], np.array(binary[ref_row][ref_col])))[0]
                 overlap[i].append(masks[j][ancestry][ind, :])
-            elif (j == i):
-                ind = np.where(np.in1d(rs_ID_list[j], binary[ref_row][j]))[0]
+            elif j == i:
+                ind = np.where(np.isin(rs_ID_list[j], binary[ref_row][j]))[0]
                 overlap[i].append(masks[j][ancestry][ind, :])
             else:
-                overlap[i].append(build_overlap(np.array(binary[i][j]), rs_ID_list[i], rs_ID_list[j], masks[i][ancestry], masks[j][ancestry]))
+                overlap[i].append(
+                    build_overlap(
+                        np.array(binary[i][j]),
+                        rs_ID_list[i],
+                        rs_ID_list[j],
+                        masks[i][ancestry],
+                        masks[j][ancestry],
+                    )
+                )
     return overlap
 
 
-def convert(overlap_1, overlap_2, array, rs_IDs, distance_type, plot_reg, index):
+def convert(overlap_1, overlap_2, array, rs_IDs, distance_type):
     '''
     Build Overlap Function.
     
@@ -333,10 +349,12 @@ def convert(overlap_1, overlap_2, array, rs_IDs, distance_type, plot_reg, index)
     [reg.coef_, reg.intercept_]   : conversion matrix for distance matrix.
     
     '''
-    ind1 = np.where(np.in1d(rs_IDs, overlap_1))[0]
-    ind2 = np.where(np.in1d(rs_IDs, overlap_2))[0]   
+    ind1 = np.where(np.isin(rs_IDs, overlap_1))[0]
+    ind2 = np.where(np.isin(rs_IDs, overlap_2))[0]   
     
     logging.info("--- Number of overlapping positions: --- %s", len(ind1))
+    logging.info("--- array shape: %s, array[ind1] shape: %s, array[ind2] shape: %s ---",
+                 array.shape, array[ind1].shape, array[ind2].shape)
     dist1 = distance_mat(first=array[ind1], dist_func=distance_type)
     dist2 = distance_mat(first=array[ind2], dist_func=distance_type)
 
@@ -355,15 +373,21 @@ def convert(overlap_1, overlap_2, array, rs_IDs, distance_type, plot_reg, index)
 
     reg = LinearRegression().fit(dist1, dist2)
     
-    if (plot_reg):
-        plt.scatter(dist1, dist2, marker='x')
-        plt.plot(dist1, dist1 * reg.coef_ + reg.intercept_)
-        plt.savefig('conv_plot_' + index + '.jpg')
-        plt.clf()
+    coef = float(np.asarray(reg.coef_).reshape(-1)[0])
+    intercept = float(np.asarray(reg.intercept_).reshape(-1)[0])
+    score = float(reg.score(dist1, dist2))
+    return [coef, intercept, score]
 
-    return [reg.coef_, reg.intercept_, reg.score(dist1,dist2)]
-
-def conversion_metrics(ancestry, ref_col, ref_row, num_arrays, rs_ID_list, binary, masks, distance_type, plot_reg=False):
+def conversion_metrics(
+    ancestry,
+    ref_col,
+    ref_row,
+    num_arrays,
+    rs_ID_list,
+    binary,
+    masks,
+    distance_type,
+):
     """                                                                                       
     Conversion Matrix Computation Function:
     
@@ -395,42 +419,50 @@ def conversion_metrics(ancestry, ref_col, ref_row, num_arrays, rs_ID_list, binar
     intercept   : (num_arrays, num_arrays) list
                   Conversion intercepts for each of the arrays in our dataset.
     """
-    conversion = np.ones((num_arrays,num_arrays))
-    intercept = np.zeros((num_arrays,num_arrays))
-    score = np.zeros((num_arrays,num_arrays))
-    for j in range(ref_col+1, num_arrays):
-        for i in range(j+1):
-            index = str(10*j+i)
-            if (i == ref_col):
-                conv_list = convert(binary[i][j], binary[ref_row][ref_col], masks[i][ancestry], rs_ID_list[i], distance_type, plot_reg, index)
+    conversion = np.ones((num_arrays, num_arrays))
+    intercept = np.zeros((num_arrays, num_arrays))
+
+    for j in range(ref_col + 1, num_arrays):
+        for i in range(j + 1):
+            if i == ref_col:
+                conv_list = convert(
+                    binary[i][j],
+                    binary[ref_row][ref_col],
+                    masks[i][ancestry],
+                    rs_ID_list[i],
+                    distance_type,
+                )
                 conversion[i][j] = conv_list[0]
                 intercept[i][j] = conv_list[1]
-                score[i][j] = conv_list[2]
-            elif (i == ref_row):
-                conv_list = convert(binary[i][j], binary[ref_row][ref_col], masks[i][ancestry], rs_ID_list[i], distance_type, plot_reg, index)
-                conversion[i][j] = conv_list[0]
-                intercept[i][j] = conv_list[1]                
-                score[i][j] = conv_list[2]
-            elif (i != j):
-                conv_list = convert(binary[i][j], binary[ref_row][j], masks[j][ancestry], rs_ID_list[j], distance_type, plot_reg, index)
+            elif i == ref_row:
+                conv_list = convert(
+                    binary[i][j],
+                    binary[ref_row][ref_col],
+                    masks[i][ancestry],
+                    rs_ID_list[i],
+                    distance_type,
+                )
                 conversion[i][j] = conv_list[0]
                 intercept[i][j] = conv_list[1]
-                score[i][j] = conv_list[2]
+            elif i != j:
+                conv_list = convert(
+                    binary[i][j],
+                    binary[ref_row][j],
+                    masks[j][ancestry],
+                    rs_ID_list[j],
+                    distance_type,
+                )
+                conversion[i][j] = conv_list[0]
+                intercept[i][j] = conv_list[1]
             else:
                 conversion[i][j] = conversion[ref_row][j]
                 intercept[i][j] = intercept[ref_row][j]
-                score[i][j] = conv_list[2]
 
     # Symmetric:
     for i in range(conversion.shape[0]):
         for j in range(conversion.shape[1]):
             conversion[j][i] = conversion[i][j]
             intercept[j][i] = intercept[i][j]
-            score[j][i] = score[i][j]
-    
-    np.savetxt('conversion.csv', conversion, delimiter=',')
-    np.savetxt('intercept.csv', intercept, delimiter=',')
-    np.savetxt('score.csv', score, delimiter=',')
 
     return conversion, intercept
 
@@ -569,14 +601,37 @@ def additive_impute(d):
     return d
 
 def remove_individuals(dist_mat, groups, weights, ind_IDs):
-    keep_inds = np.argwhere(np.isnan(dist_mat).sum(axis=0) != dist_mat.shape[0]).flatten()
+    n = dist_mat.shape[0]
+    if dist_mat.shape[1] != n:
+        raise ValueError(f"Distance matrix must be square, got shape {dist_mat.shape}")
+    if len(groups) != n or len(weights) != n or len(ind_IDs) != n:
+        raise ValueError(
+            f"Size mismatch: dist_mat.shape[0]={n}, but groups={len(groups)}, "
+            f"weights={len(weights)}, ind_IDs={len(ind_IDs)}"
+        )
+
+    keep_inds = np.argwhere(np.isnan(dist_mat).sum(axis=0) != n).flatten()
+    keep_inds = keep_inds[keep_inds < n]
+
+    if len(keep_inds) == 0:
+        raise ValueError("No valid individuals remaining after filtering (all have NaN distances)")
+
     dist_mat = dist_mat[keep_inds, :][:, keep_inds]
     groups = groups[keep_inds]
     weights = weights[keep_inds]
     ind_IDs = ind_IDs[keep_inds]
     return dist_mat, groups, weights, ind_IDs
 
-def mds_transform(distance_list, groups, weights, ind_ID_list, num_dims, num_arrays=1):
+def mds_transform(
+    distance_list,
+    groups,
+    weights,
+    ind_ID_list,
+    num_dims,
+    num_arrays=1,
+    imputation_method="mean",
+    return_metadata=False,
+):
     """                                                                                       
     Multi-Dimensional Scaling (MDS) Function:
     
@@ -601,25 +656,38 @@ def mds_transform(distance_list, groups, weights, ind_ID_list, num_dims, num_arr
     np.ndarray of shape (n, num_dims)
         The MDS embedding for the n individuals across the requested dimensions.
     """
-    ind_IDs = ind_ID_list
-    for i in range(1,num_arrays):
-        ind_IDs = np.hstack((ind_IDs, ind_ID_list[i]))
-    
+    if num_arrays == 1 and not isinstance(ind_ID_list, (list, tuple)):
+        ind_IDs = np.asarray(ind_ID_list)
+        ind_id_arrays = [ind_IDs]
+    else:
+        ind_id_arrays = [np.asarray(ids) for ids in ind_ID_list]
+        ind_IDs = ind_id_arrays[0]
+        for i in range(1, num_arrays):
+            ind_IDs = np.hstack((ind_IDs, ind_id_arrays[i]))
+
     dist_mat = combine_dist_mat(distance_list)
     dist_mat, groups, weights, ind_IDs = remove_individuals(dist_mat, groups, weights, ind_IDs)
-    np.savetxt('distance_unimputed.csv', dist_mat, delimiter=',')
-    
-    dist_mat = additive_impute(dist_mat)
-    np.savetxt('distance_imputed.csv', dist_mat, delimiter=',')
-    dist_transformed = weighted_cmdscale(dist_mat, weights, num_dims)
-    
-    categories = pd.factorize(pd.Series(groups))
-    
-    output_df = pd.DataFrame()
-    output_df['indID'] = ind_IDs
-    output_df['label'] = groups
-    for i in range(num_dims):
-        output_df['MDS' + str(i+1)] = dist_transformed[:,i]
-    output_df.to_csv('output.tsv', sep='\t', index=False)
 
+    if imputation_method == "mean":
+        dist_mat = mean_impute(dist_mat)
+    elif imputation_method == "additive":
+        dist_mat = additive_impute(dist_mat)
+    else:
+        raise ValueError(
+            f"Invalid imputation method: {imputation_method}. "
+            "Expected 'mean' or 'additive'."
+        )
+
+    dist_transformed = weighted_cmdscale(dist_mat, weights, num_dims)
+
+    if num_arrays == 1:
+        array_labels = np.ones(ind_IDs.shape[0], dtype=int)
+    else:
+        array_labels = np.zeros(ind_IDs.shape[0], dtype=int)
+        for i in range(num_arrays):
+            in_this_array = np.isin(ind_IDs, ind_id_arrays[i])
+            array_labels[in_this_array] = i + 1
+
+    if return_metadata:
+        return dist_transformed[:, :num_dims], ind_IDs, groups, array_labels
     return dist_transformed[:, :num_dims]

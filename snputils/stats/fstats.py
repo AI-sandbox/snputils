@@ -43,6 +43,39 @@ def genomic_block_labels(
     return np.asarray(labels, dtype=object)
 
 
+def genomic_block_labels(
+    chrom: Sequence[Any],
+    pos: Sequence[int],
+    block_size_bp: int,
+) -> np.ndarray:
+    """
+    Build genomic block labels from chromosome and base-pair position arrays.
+
+    A new block starts when the chromosome changes or when the current variant is at least
+    ``block_size_bp`` bases away from the start of the current block on that chromosome.
+    """
+    if block_size_bp <= 0:
+        raise ValueError("block_size_bp must be positive.")
+    chrom_arr = np.asarray(chrom)
+    pos_arr = np.asarray(pos)
+    if chrom_arr.shape[0] != pos_arr.shape[0]:
+        raise ValueError("'chrom' and 'pos' must have the same length.")
+
+    labels: List[str] = []
+    current_chrom: Optional[str] = None
+    block_start = -1
+    block_index = -1
+    for c, p in zip(chrom_arr, pos_arr):
+        c = str(c)
+        p = int(p)
+        if current_chrom != c or p - block_start >= block_size_bp:
+            current_chrom = c
+            block_start = p
+            block_index += 1
+        labels.append(f"{c}:{block_index}")
+    return np.asarray(labels, dtype=object)
+
+
 @dataclass
 class BlockJackknifeResult:
     est: float

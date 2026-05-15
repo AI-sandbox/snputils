@@ -17,8 +17,8 @@ from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.write import AdmixtureMappingPGENWriter, AdmixtureMappingVCFWriter
 from snputils.tools import run_admixture_mapping
 
-DEFAULT_N_SAMPLES = 128
-DEFAULT_ADMIX_WINDOWS = 2_048
+DEFAULT_N_SAMPLES = 10_000
+DEFAULT_ADMIX_WINDOWS = 100_000
 DEFAULT_N_COVARIATES = 3
 DEFAULT_BATCH_SIZE = 32_768
 DEFAULT_SEED = 20260512
@@ -397,7 +397,7 @@ def run_plink_admixture_mapping_from_lai(
     covar_names: Sequence[str],
     work_dir: Path,
     *,
-    admix_format: str = "vcf",
+    admix_format: str = "pgen",
 ) -> tuple[pd.DataFrame, float]:
     """Write LAI data to the chosen format and run PLINK admixture mapping.
 
@@ -405,8 +405,8 @@ def run_plink_admixture_mapping_from_lai(
     a symmetric starting point, because plink cannot read LAI data natively.
 
     Args:
-        admix_format: ``"vcf"`` (default) writes one VCF per ancestry and uses
-            ``--vcf``; ``"pgen"`` writes one PGEN fileset per ancestry and uses
+        admix_format: ``"vcf"`` writes one VCF per ancestry and uses ``--vcf``;
+            ``"pgen"`` (default) writes one PGEN fileset per ancestry and uses
             ``--pfile``.
     """
     if admix_format == "pgen":
@@ -758,20 +758,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--admix-format",
         choices=["vcf", "pgen"],
-        default="vcf",
+        default="pgen",
         help=(
             "File format used to pass LAI data to PLINK for admixture mapping. "
-            "'vcf' (default) writes one VCF per ancestry and uses --vcf; "
-            "'pgen' writes one PGEN fileset per ancestry and uses --pfile."
+            "'vcf' writes one VCF per ancestry and uses --vcf; "
+            "'pgen' (default) writes one PGEN fileset per ancestry and uses --pfile."
         ),
     )
     parser.add_argument(
         "--snputils-admix-input",
         choices=["msp", "laiobj"],
-        default="msp",
+        default="laiobj",
         help=(
             "Input source used for snputils admixture mapping. 'msp' reads the "
-            "written text MSP; 'laiobj' uses the in-memory LocalAncestryObject, "
+            "written text MSP; 'laiobj' (default) uses the in-memory LocalAncestryObject, "
             "matching the source used to write PLINK ancestry files."
         ),
     )

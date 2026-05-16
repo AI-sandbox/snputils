@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read import MSPReader
+from snputils.phenotype.genobj import PhenotypeObject
 from snputils.phenotype.io.read import PhenotypeReader
 
 from ._association import (
@@ -38,6 +39,36 @@ log = logging.getLogger(__name__)
 
 HLA_START = 25_477_797
 HLA_END = 36_448_354
+
+
+def _coerce_phenotype_source(
+    phe_source: Union[str, Path, PhenotypeObject],
+    *,
+    phe_id: Optional[str],
+    quantitative: Optional[bool],
+) -> Tuple[PhenotypeObject, str]:
+    if isinstance(phe_source, PhenotypeObject):
+        phenotype_obj = (
+            phe_source
+            if quantitative is None
+            else PhenotypeObject(
+                samples=phe_source.samples,
+                values=phe_source.values,
+                phenotype_name=phe_source.phenotype_name,
+                quantitative=quantitative,
+            )
+        )
+        return phenotype_obj, str(phe_id or phenotype_obj.phenotype_name)
+
+    if phe_id is None:
+        raise TypeError(
+            "run_admixture_mapping() missing required argument: 'phe_id' when phenotype input is a path."
+        )
+    phenotype_obj = PhenotypeReader(phe_source).read(
+        phenotype_col=phe_id,
+        quantitative=quantitative,
+    )
+    return phenotype_obj, str(phe_id)
 
 
 def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
@@ -441,7 +472,7 @@ def _compute_linear_stats_from_lai(
 
 
 def run_admixture_mapping(
-    phe_path: Union[str, Path],
+    phe_path: Union[str, Path, PhenotypeObject],
     lai_source: Optional[Union[str, Path, LocalAncestryObject]] = None,
     results_path: Optional[Union[str, Path]] = None,
     phe_id: Optional[str] = None,
@@ -464,14 +495,16 @@ def run_admixture_mapping(
 
     Args:
         phe_path:
-            Phenotype file path.
+            Phenotype file path or in-memory :class:`PhenotypeObject`.
         lai_source:
             Local ancestry source. Pass either an MSP file path or an in-memory
             :class:`LocalAncestryObject`.
         results_path:
             Output TSV path or directory.
         phe_id:
-            Phenotype column name to analyze.
+            Phenotype column name to analyze. Required when ``phe_path`` is a
+            file path; inferred from ``PhenotypeObject.phenotype_name`` for
+            in-memory phenotype input.
         msp_path:
             Deprecated alias for ``lai_source`` kept for compatibility with
             older callers.
@@ -489,16 +522,15 @@ def run_admixture_mapping(
         raise TypeError("Pass only one of `lai_source` or deprecated `msp_path`.")
     if results_path is None:
         raise TypeError("run_admixture_mapping() missing required argument: 'results_path'")
-    if phe_id is None:
-        raise TypeError("run_admixture_mapping() missing required argument: 'phe_id'")
 
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal admixture mapping.")
     if ci is not None and (ci <= 0.0 or ci >= 1.0):
         raise ValueError("--ci must be in the open interval (0, 1).")
 
-    phenotype_obj = PhenotypeReader(phe_path).read(
-        phenotype_col=phe_id,
+    phenotype_obj, output_phe_id = _coerce_phenotype_source(
+        phe_path,
+        phe_id=phe_id,
         quantitative=quantitative,
     )
     phe_samples = phenotype_obj.samples
@@ -572,7 +604,7 @@ def run_admixture_mapping(
     obs_ct = int(y_aligned.size)
     rss_baseline_mb = _get_process_rss_mb() if memory is not None else None
 
-    output_file = _resolve_output_path(results_path, phe_id)
+    output_file = _resolve_output_path(results_path, output_phe_id)
 
     ci_cols: List[str] = []
     if ci is not None:

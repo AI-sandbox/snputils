@@ -1,11 +1,29 @@
 # Quickstart
 
-The top-level package exposes the most common readers and data containers.
+The top-level package exposes the most common readers, data containers, and analysis helpers.
 
 ```python
 import snputils as su
 
-snpobj = su.read_snp("your.vcf.gz")
+snp = su.read_snp("cohort.vcf.gz")          # VCF, BED, or PGEN
+snp = snp.filter_biallelic_variants()
+snp.save("cohort.pgen")                     # convert VCF -> PLINK2
+
+af = snp.allele_freq()                      # per-SNP allele frequencies
+pcs = su.PCA().fit_transform(snp)
+
+lai = su.read_msp("local_ancestry.msp")     # local ancestry
+adm = su.read_admixture("admixture")        # global ancestry
+labels = su.read_labels("labels.tsv")       # sample metadata
+afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai)
+
+mdpca = su.mdPCA(snpobj=snp, laiobj=lai, labels_file=labels, ancestry="AFR")
+su.viz.scatter(mdpca, labels, save_path="mdpca.pdf", show=False)
+
+phen = su.PhenotypeReader("phenotypes.tsv").read(phenotype_col="trait")
+ibd = su.read_ibd("hap.ibd")
+gwas = su.run_gwas(phen, snp, "gwas.tsv.gz")
+admix = su.run_admixture_mapping(phen, lai, "admixmap.tsv.gz")
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.
@@ -37,15 +55,11 @@ Phenotype data are represented by {class}`snputils.PhenotypeObject` or {class}`s
 ## Analysis and Visualization
 
 ```python
-from snputils.processing import PCA
-from snputils.stats import allele_freq_stream
-from snputils.visualization import scatter
+pca = su.PCA(n_components=2)
+coords = pca.fit_transform(snp)
 
-pca = PCA(n_components=2)
-coords = pca.fit_transform(snpobj)
-
-freq = allele_freq_stream("cohort.pgen", chunk_size=50_000)
-fig = scatter(coords[:, 0], coords[:, 1])
+freq = snp.allele_freq()
+su.viz.scatter(pca, "labels.tsv", save_path="pca.png", show=False)
 ```
 
 For complete workflows, see the tutorials.

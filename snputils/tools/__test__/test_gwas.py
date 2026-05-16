@@ -8,6 +8,7 @@ from scipy import stats
 from scipy.optimize import minimize
 from scipy.special import expit
 
+from snputils.phenotype.genobj import PhenotypeObject
 from snputils.snp.genobj import SNPObject
 from snputils.tools.gwas import run_gwas
 
@@ -474,6 +475,62 @@ def test_gwas_bed_and_pgen_match_vcf_results(tmp_path: Path, ext: str):
     np.testing.assert_allclose(
         baseline[num_cols].to_numpy(),
         alt_input[num_cols].to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+def test_gwas_accepts_in_memory_phenotype_and_snp_objects(tmp_path: Path):
+    sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(
+        n_samples=96,
+        n_variants=28,
+        seed=551,
+    )
+    rng = np.random.default_rng(552)
+    linpred = -0.2 + 0.6 * dosage[4].astype(np.float64) - 0.45 * dosage[16].astype(np.float64)
+    y_binary = rng.binomial(1, expit(linpred)).astype(np.int8)
+    assert 0 < int(np.sum(y_binary)) < y_binary.size
+
+    vcf_path = tmp_path / "toy.vcf"
+    phe_path = tmp_path / "toy.phe"
+    _write_vcf(vcf_path, sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    _write_binary_phe(phe_path, sample_ids, y_binary)
+
+    baseline = run_gwas(
+        phe_path=phe_path,
+        snp_path=vcf_path,
+        results_path=tmp_path / "out_path",
+        phe_id="toy",
+        batch_size=6,
+        memory=2048,
+    ).copy()
+
+    phen = PhenotypeObject(sample_ids, y_binary, phenotype_name="toy")
+    snpobj = _make_snpobj_from_dosage(sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    in_memory = run_gwas(
+        phe_path=phen,
+        snp_path=snpobj,
+        results_path=tmp_path / "out_memory",
+        batch_size=6,
+        memory=2048,
+    ).copy()
+
+    key_cols = ["#CHROM", "POS", "END", "ID", "TEST", "ERRCODE"]
+    num_cols = ["BETA", "OR", "LOG(OR)_SE", "Z_STAT", "P"]
+    for frame in (baseline, in_memory):
+        for col in ("POS", "END"):
+            frame[col] = pd.to_numeric(frame[col], errors="coerce").astype(int)
+        frame["#CHROM"] = frame["#CHROM"].astype(str)
+        for col in num_cols:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+    baseline = baseline.sort_values(key_cols).reset_index(drop=True)
+    in_memory = in_memory.sort_values(key_cols).reset_index(drop=True)
+    assert len(baseline) == len(in_memory)
+    np.testing.assert_allclose(
+        baseline[num_cols].to_numpy(),
+        in_memory[num_cols].to_numpy(),
         rtol=1e-10,
         atol=1e-12,
         equal_nan=True,

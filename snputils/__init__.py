@@ -42,6 +42,10 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "HapIBDReader": (".ibd", "HapIBDReader"),
     "AncIBDReader": (".ibd", "AncIBDReader"),
     "IBDReader": (".ibd", "IBDReader"),
+    "PCA": (".processing", "PCA"),
+    "mdPCA": (".processing", "mdPCA"),
+    "maasMDS": (".processing", "maasMDS"),
+    "allele_freq_stream": (".stats", "allele_freq_stream"),
     "MultiPhenotypeObject": (".phenotype", "MultiPhenotypeObject"),
     "PhenotypeObject": (".phenotype", "PhenotypeObject"),
     "MultiPhenReader": (".phenotype", "MultiPhenReader"),
@@ -50,6 +54,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "load_dataset": (".datasets", "load_dataset"),
     "run_admixture_mapping": (".tools", "run_admixture_mapping"),
     "run_gwas": (".tools", "run_gwas"),
+    "read_labels": ("._utils.labels", "read_labels"),
     "viz": (".visualization", ""),
 }
 

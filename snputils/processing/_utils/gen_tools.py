@@ -731,8 +731,8 @@ def process_labels_weights(
                 If `is_weighted=True`, weights are assigned based on the input file; otherwise, all weights default to 1.  
                 Individuals with zero weight are excluded from the final output.
     """
-    # Load the labels file
-    labels_df = pd.read_csv(labels_file, sep='\t')
+    # Load labels from either a path or an in-memory DataFrame.
+    labels_df = labels_file.copy() if isinstance(labels_file, pd.DataFrame) else pd.read_csv(labels_file, sep='\t')
     labels_df['indID'] = labels_df['indID'].astype(str)
     
     if average_strands:

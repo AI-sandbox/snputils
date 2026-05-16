@@ -19,7 +19,7 @@ Plotting utilities exposed by the visualization package.
 ```
 
 ```{eval-rst}
-.. autofunction:: snputils.visualization.admixture_manhattan_plot.manhattan_plot
+.. autofunction:: snputils.visualization.manhattan_plot.manhattan_plot
 ```
 
 ```{eval-rst}

@@ -19,12 +19,14 @@ afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
 su.viz.chromosome_painting(lai, "chr_paintings/") # chromosome paintings
 
 mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")
-su.viz.scatter(mdpca, labels, save_path="mdPCA.pdf")
+su.viz.scatter(mdpca, labels)
 
 phen = su.PhenotypeReader("phenotypes.tsv").read(phenotype_col="trait")
 ibd = su.read_ibd("hap.ibd")
 gwas = su.run_gwas(phen, snp)
 admix = su.run_admixture_mapping(phen, lai)
+su.viz.manhattan_plot(gwas)
+su.viz.manhattan_plot(admix)
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.

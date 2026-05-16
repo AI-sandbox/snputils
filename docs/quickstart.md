@@ -26,7 +26,9 @@ ibd = su.read_ibd("hap.ibd")
 gwas = su.run_gwas(phen, snp)
 admix = su.run_admixture_mapping(phen, lai)
 su.viz.manhattan_plot(gwas)
+su.viz.qq_plot(gwas)
 su.viz.manhattan_plot(admix)
+su.viz.qq_plot(admix)
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.

@@ -23,6 +23,10 @@ Plotting utilities exposed by the visualization package.
 ```
 
 ```{eval-rst}
+.. autofunction:: snputils.visualization.qq_plot.qq_plot
+```
+
+```{eval-rst}
 .. autofunction:: snputils.visualization.admixture_viz.pong_viz
 ```
 

@@ -164,6 +164,14 @@ def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to remove file (FID IID or IID per line) for sample exclusion.",
     )
+    parser.add_argument(
+        "--results-path",
+        dest="results_path",
+        required=False,
+        type=str,
+        default="admixmap.tsv.gz",
+        help="Path used to save resulting data in compressed .tsv file (default: admixmap.tsv.gz).",
+    )
     required_argv = parser.add_argument_group("required arguments")
     required_argv.add_argument(
         "--phe-id",
@@ -181,13 +189,6 @@ def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
     )
     required_argv.add_argument(
         "--msp-path", dest="msp_path", required=True, type=str, help="Path of the .msp file (include file)."
-    )
-    required_argv.add_argument(
-        "--results-path",
-        dest="results_path",
-        required=True,
-        type=str,
-        help="Path used to save resulting data in compressed .tsv file.",
     )
 
 
@@ -474,7 +475,7 @@ def _compute_linear_stats_from_lai(
 def run_admixture_mapping(
     phe_path: Union[str, Path, PhenotypeObject],
     lai_source: Optional[Union[str, Path, LocalAncestryObject]] = None,
-    results_path: Optional[Union[str, Path]] = None,
+    results_path: Union[str, Path] = "admixmap.tsv.gz",
     phe_id: Optional[str] = None,
     batch_size: int = 256,
     keep_hla: bool = False,
@@ -500,7 +501,7 @@ def run_admixture_mapping(
             Local ancestry source. Pass either an MSP file path or an in-memory
             :class:`LocalAncestryObject`.
         results_path:
-            Output TSV path or directory.
+            Output TSV path or directory (default: admixmap.tsv.gz).
         phe_id:
             Phenotype column name to analyze. Required when ``phe_path`` is a
             file path; inferred from ``PhenotypeObject.phenotype_name`` for
@@ -520,8 +521,6 @@ def run_admixture_mapping(
         lai_source = msp_path
     elif msp_path is not None:
         raise TypeError("Pass only one of `lai_source` or deprecated `msp_path`.")
-    if results_path is None:
-        raise TypeError("run_admixture_mapping() missing required argument: 'results_path'")
 
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal admixture mapping.")

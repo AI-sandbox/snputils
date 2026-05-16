@@ -141,6 +141,14 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         default="polars",
         help="VCF reader backend (used only when --snp-path is VCF).",
     )
+    parser.add_argument(
+        "--results-path",
+        dest="results_path",
+        required=False,
+        type=str,
+        default="gwas.tsv.gz",
+        help="Path used to save resulting data in compressed .tsv file (default: gwas.tsv.gz).",
+    )
     required_argv = parser.add_argument_group("required arguments")
     required_argv.add_argument(
         "--phe-id",
@@ -162,13 +170,6 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         type=str,
         help="Path to genotype input (VCF/BED/PGEN).",
-    )
-    required_argv.add_argument(
-        "--results-path",
-        dest="results_path",
-        required=True,
-        type=str,
-        help="Path used to save resulting data in compressed .tsv file.",
     )
 
 
@@ -622,7 +623,7 @@ def _compute_linear_stats_from_dosage_batch(
 def run_gwas(
     phe_path: Union[str, Path, PhenotypeObject],
     snp_path: Union[str, Path, SNPObject, SNPReader, BEDReader, PGENReader, VCFReader, VCFReaderPolars],
-    results_path: Union[str, Path],
+    results_path: Union[str, Path] = "gwas.tsv.gz",
     phe_id: Optional[str] = None,
     batch_size: int = 256,
     memory: Optional[int] = None,
@@ -644,7 +645,8 @@ def run_gwas(
     ``phe_path`` may be a phenotype file path or an in-memory
     :class:`PhenotypeObject`. ``snp_path`` may be a genotype file path, reader,
     or in-memory :class:`SNPObject`. ``phe_id`` is required only when the
-    phenotype input is a file path.
+    phenotype input is a file path. Results are written to ``results_path``
+    (default: gwas.tsv.gz).
     """
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal GWAS processing.")

@@ -9,22 +9,22 @@ snp = su.read_snp("cohort.vcf.gz")          # VCF, BED, or PGEN
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                     # convert VCF -> PLINK2
 
-af = snp.allele_freq()                      # per-SNP allele frequencies
+af = snp.allele_freq()                      # per-SNP allele frequencies (AF)
 pcs = su.PCA().fit_transform(snp)
 
-lai = su.read_msp("local_ancestry.msp")     # local ancestry
-adm = su.read_admixture("admixture")        # global ancestry
+lai = su.read_msp("local_ancestry.msp")     # local ancestry  (LAI)
+adm = su.read_admixture("admixture")        # global ancestry (ADMIXTURE)
 labels = su.read_labels("labels.tsv")       # sample metadata
-afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai)
-su.viz.chromosome_painting(lai, "paintings/")               # one PNG per sample
+afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
+su.viz.chromosome_painting(lai, "chr_paintings/") # chromosome paintings
 
-mdpca = su.mdPCA(snpobj=snp, laiobj=lai, labels_file=labels, ancestry="AFR")
-su.viz.scatter(mdpca, labels, save_path="mdpca.pdf", show=False)
+mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")
+su.viz.scatter(mdpca, labels, save_path="mdPCA.pdf")
 
 phen = su.PhenotypeReader("phenotypes.tsv").read(phenotype_col="trait")
 ibd = su.read_ibd("hap.ibd")
-gwas = su.run_gwas(phen, snp, "gwas.tsv.gz")
-admix = su.run_admixture_mapping(phen, lai, "admixmap.tsv.gz")
+gwas = su.run_gwas(phen, snp)
+admix = su.run_admixture_mapping(phen, lai)
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.

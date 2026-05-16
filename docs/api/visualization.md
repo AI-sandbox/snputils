@@ -29,3 +29,7 @@ Plotting utilities exposed by the visualization package.
 ```{eval-rst}
 .. autofunction:: snputils.visualization.admixture_viz.create_filemap
 ```
+
+```{eval-rst}
+.. autofunction:: snputils.visualization.chromosome_painting
+```

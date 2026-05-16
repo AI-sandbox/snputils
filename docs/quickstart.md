@@ -16,6 +16,7 @@ lai = su.read_msp("local_ancestry.msp")     # local ancestry
 adm = su.read_admixture("admixture")        # global ancestry
 labels = su.read_labels("labels.tsv")       # sample metadata
 afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai)
+su.viz.chromosome_painting(lai, "paintings/")               # one PNG per sample
 
 mdpca = su.mdPCA(snpobj=snp, laiobj=lai, labels_file=labels, ancestry="AFR")
 su.viz.scatter(mdpca, labels, save_path="mdpca.pdf", show=False)

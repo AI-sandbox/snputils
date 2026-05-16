@@ -3,13 +3,23 @@ import pandas as pd
 from typing import Dict, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 
-from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
+from ._figure_export import (
+    default_savefig_kwargs,
+    scatter_rasterized_for_path,
+    style_association_axes,
+)
+
+_LOG10_P_LABEL = r"$-\log_{10}(p)$"
 
 
 def qq_plot(
     data: Union[str, pd.DataFrame],
-    color: str = "steelblue",
+    color: str = "black",
     significance_threshold: float = 0.05,
+    point_size: float = 7.0,
+    line_width: float = 1.0,
+    expected_line_color: str = "red",
+    threshold_line_color: str = "orange",
     figsize: Optional[Tuple[float, float]] = None,
     title: Optional[str] = None,
     fontsize: Optional[Dict[str, float]] = None,
@@ -31,18 +41,26 @@ def qq_plot(
             :class:`~pandas.DataFrame` with a column ``P``.
             PLINK2-style output files are supported directly.
         color:
-            Color for the scatter points.  Defaults to ``"steelblue"``.
+            Color for the scatter points.  Defaults to ``"black"``.
         significance_threshold:
             Nominal significance threshold used to derive the Bonferroni-corrected
             threshold (``significance_threshold / n_variants``).  Default is 0.05.
+        point_size:
+            Marker area for scatter points (matplotlib ``s``).  Default is 7.0.
+        line_width:
+            Width of the expected-null and Bonferroni reference lines.  Default is 1.0.
+        expected_line_color:
+            Color of the identity (expected under null) reference line.  Default is ``"red"``.
+        threshold_line_color:
+            Color of the Bonferroni threshold line.  Default is ``"orange"``.
         figsize:
             Optional ``(width, height)`` tuple passed to :func:`matplotlib.pyplot.figure`.
         title:
-            Plot title.  If ``None`` no title is shown.
+            Plot title.  Default is ``None`` (no title).
         fontsize:
-            Mapping with optional keys ``'title'``, ``'xlabel'``, ``'ylabel'``, and
-            ``'legend'`` controlling per-element font sizes.  Missing keys fall back to
-            sensible defaults (20 for title, 15 for everything else).
+            Mapping with optional keys ``'title'``, ``'xlabel'``, and ``'ylabel'``
+            controlling font sizes.  Missing keys fall back to sensible defaults
+            (20 for title, 15 for axis labels).
         save:
             If ``True``, saves the figure to ``output_filename``.
         output_filename:
@@ -66,20 +84,31 @@ def qq_plot(
     _rz = scatter_rasterized_for_path(output_filename) if output_filename else False
 
     plt.figure(figsize=figsize)
-    plt.scatter(expected, observed, color=color, s=8, rasterized=_rz, label='p-values')
+    plt.scatter(expected, observed, color=color, s=point_size, rasterized=_rz)
 
     # Identity reference line (expected under null)
     max_val = max(expected.max(), observed.max())
-    plt.plot([0, max_val], [0, max_val], color='red', linestyle='--', linewidth=1, label='Expected')
+    plt.plot(
+        [0, max_val],
+        [0, max_val],
+        color=expected_line_color,
+        linestyle='--',
+        linewidth=line_width,
+    )
 
     # Bonferroni threshold
-    plt.axhline(y=bonferroni_threshold, color='orange', linestyle=':', linewidth=1, label='Bonferroni')
+    plt.axhline(
+        y=bonferroni_threshold,
+        color=threshold_line_color,
+        linestyle=':',
+        linewidth=line_width,
+    )
 
     if title:
         plt.title(title, fontsize=_fs.get('title', 20))
-    plt.xlabel('Expected -log\u2081\u2080(p)', fontsize=_fs.get('xlabel', 15))
-    plt.ylabel('Observed -log\u2081\u2080(p)', fontsize=_fs.get('ylabel', 15))
-    plt.legend(fontsize=_fs.get('legend', 15))
+    plt.xlabel(f'Expected {_LOG10_P_LABEL}', fontsize=_fs.get('xlabel', 15))
+    plt.ylabel(f'Observed {_LOG10_P_LABEL}', fontsize=_fs.get('ylabel', 15))
+    style_association_axes(y_floor=0, x_floor=0)
 
     plt.tight_layout()
     if save:

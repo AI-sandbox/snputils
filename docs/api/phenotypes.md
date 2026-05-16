@@ -17,6 +17,10 @@ Phenotype data containers and readers.
 ## Readers
 
 ```{eval-rst}
+.. autofunction:: snputils.read_pheno
+```
+
+```{eval-rst}
 .. autoclass:: snputils.PhenotypeReader
    :members:
 ```

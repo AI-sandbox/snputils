@@ -50,6 +50,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "PhenotypeObject": (".phenotype", "PhenotypeObject"),
     "MultiPhenReader": (".phenotype", "MultiPhenReader"),
     "PhenotypeReader": (".phenotype", "PhenotypeReader"),
+    "read_pheno": (".phenotype", "read_pheno"),
     "available_datasets_list": (".datasets", "available_datasets_list"),
     "load_dataset": (".datasets", "load_dataset"),
     "run_admixture_mapping": (".tools", "run_admixture_mapping"),

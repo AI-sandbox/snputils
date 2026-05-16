@@ -5,30 +5,30 @@ The top-level package exposes the most common readers, data containers, and anal
 ```python
 import snputils as su
 
-snp = su.read_snp("cohort.vcf.gz")          # VCF, BED, or PGEN
-snp = snp.filter_biallelic_variants()
-snp.save("cohort.pgen")                     # convert VCF -> PLINK2
+snp = su.read_snp("cohort.vcf.gz")                   # Read VCF, BED, PGEN,...
+snp = snp.filter_biallelic_variants()                # filter to biallelic
+snp.save("cohort.pgen")                              # convert VCF -> PLINK2
 
-af = snp.allele_freq()                      # per-SNP allele frequencies (AF)
-pcs = su.PCA().fit_transform(snp)
+af = snp.allele_freq()                               # per-SNP allele frequencies (AF)
+pcs = su.PCA().fit_transform(snp)                    # PCA and project data
 
-lai = su.read_msp("local_ancestry.msp")     # local ancestry  (LAI)
-adm = su.read_admixture("admixture")        # global ancestry (ADMIXTURE)
-labels = su.read_labels("labels.tsv")       # sample metadata
+lai = su.read_msp("local_ancestry.msp")              # local ancestry  (LAI)
+adm = su.read_admixture("admixture")                 # global ancestry (ADMIXTURE)
+labels = su.read_labels("labels.tsv")                # sample metadata
 afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
-su.viz.chromosome_painting(lai, "chr_paintings/") # chromosome paintings
+su.viz.chromosome_painting(lai, "chr_paintings/")    # chromosome paintings
 
-mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")
-su.viz.scatter(mdpca, labels)
+mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")   # mdPCA (AFR-specific)
+su.viz.scatter(mdpca, labels)                        # plot mdPCA
 
-phen = su.PhenotypeReader("phenotypes.tsv").read(phenotype_col="trait")
-ibd = su.read_ibd("hap.ibd")
-gwas = su.run_gwas(phen, snp)
-admix = su.run_admixture_mapping(phen, lai)
-su.viz.manhattan_plot(gwas)
-su.viz.qq_plot(gwas)
-su.viz.manhattan_plot(admix)
-su.viz.qq_plot(admix)
+pheno = su.read_pheno("phenotypes.tsv", col="trait") # read phenotype data
+ibd = su.read_ibd("hap.ibd")                         # read IBD data
+gwas = su.run_gwas(pheno, snp)                       # GWAS
+admix = su.run_admixture_mapping(pheno, lai)         # admixture mapping
+su.viz.qq_plot(gwas)                                 # GWAS Q–Q plot
+su.viz.qq_plot(admix)                                # admixture mapping Q–Q plot
+su.viz.manhattan_plot(gwas)                          # GWAS manhattan plot
+su.viz.manhattan_plot(admix)                         # admixture mapping manhattan plot
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.
@@ -51,7 +51,7 @@ Local ancestry files are represented as {class}`snputils.LocalAncestryObject`; g
 ## Phenotypes and IBD
 
 ```python
-phen = su.PhenotypeReader("phenotypes.tsv").read()
+pheno = su.read_pheno("phenotypes.tsv")
 ibd = su.read_ibd("hap.ibd")
 ```
 

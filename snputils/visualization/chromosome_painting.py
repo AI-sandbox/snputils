@@ -19,6 +19,7 @@ import pathlib
 import pickle
 import re
 import tempfile
+import warnings
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 from snputils.ancestry.io.local.write.msp_to_bed import (
@@ -169,6 +170,34 @@ def _draw_svg(
         raise
 
 
+def _print_painting_progress(index: int, total: int, label: str = "") -> None:
+    """Print progress when painting more than one sample."""
+    if total <= 1:
+        return
+    detail = f" ({label})" if label else ""
+    print(f"Chromosome painting {index}/{total}{detail}")
+
+
+def _warn_painting_all_samples(n_samples: int) -> None:
+    """Warn when ``sample_id`` was omitted and every sample will be painted."""
+    if n_samples <= 1:
+        return
+    warnings.warn(
+        f"No sample_id specified: generating chromosome paintings for all {n_samples} "
+        "samples. Pass sample_id or sample_id=[...] to paint specific sample(s) only.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _msp_diploid_sample_count(msp_files: List[str]) -> int:
+    """Return the number of diploid samples in an MSP file header."""
+    with open(msp_files[0], encoding="utf-8") as handle:
+        _ = handle.readline()
+        header = handle.readline().split("\t")
+    return len(header[6:]) // 2
+
+
 # ---------------------------------------------------------------------------
 # Internal per-file painting
 # ---------------------------------------------------------------------------
@@ -249,7 +278,9 @@ def _paint_from_laiobj(
     show: bool,
 ) -> List[str]:
     output_files: List[str] = []
-    for sid in sample_ids:
+    total = len(sample_ids)
+    for idx, sid in enumerate(sample_ids, start=1):
+        _print_painting_progress(idx, total, sid)
         if verbose:
             log.info(f"Generating chromosome painting for sample '{sid}'")
         bed_df = laiobj_sample_to_bed_df(
@@ -313,8 +344,10 @@ def _paint_from_msp(
     )
 
     output_files: List[str] = []
-    for bed_file in bed_files:
+    total = len(bed_files)
+    for idx, bed_file in enumerate(bed_files, start=1):
         sample_name = pathlib.Path(bed_file).stem
+        _print_painting_progress(idx, total, sample_name)
         output_file = _paint_bed_file(
             bed_file=bed_file,
             output_prefix=painting_dir / sample_name,
@@ -449,6 +482,7 @@ def chromosome_painting(
         raise ValueError("output_format must be 'png' or 'pdf'")
 
     # Normalize sample_id to Optional[List[str]]
+    paint_all_samples = sample_id is None
     sample_ids: Optional[List[str]]
     if sample_id is None:
         sample_ids = None
@@ -465,6 +499,8 @@ def chromosome_painting(
                     "laiobj.samples is None; populate it or pass an explicit sample_id."
                 )
             sample_ids = list(source.samples)
+        if paint_all_samples:
+            _warn_painting_all_samples(len(sample_ids))
         return _paint_from_laiobj(
             laiobj=source,
             sample_ids=sample_ids,
@@ -499,6 +535,12 @@ def chromosome_painting(
     kind = _ext(paths[0])
 
     if kind == "msp":
+        if paint_all_samples:
+            _warn_painting_all_samples(
+                len(sample_ids) if sample_ids is not None else _msp_diploid_sample_count(
+                    [str(p) for p in paths]
+                )
+            )
         return _paint_from_msp(
             msp_files=[str(p) for p in paths],
             sample_ids=sample_ids,
@@ -521,7 +563,9 @@ def chromosome_painting(
             "Each BED file is painted as-is."
         )
     output_files: List[str] = []
-    for bed_path in paths:
+    total = len(paths)
+    for idx, bed_path in enumerate(paths, start=1):
+        _print_painting_progress(idx, total, bed_path.stem)
         output_file = _paint_bed_file(
             bed_file=str(bed_path),
             output_prefix=painting_dir / bed_path.stem,

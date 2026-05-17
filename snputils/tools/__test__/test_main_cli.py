@@ -315,7 +315,10 @@ def test_main_help_flag_prints_help_and_exits_0(
     assert "admixture-map" in captured.out
     assert "gwas" in captured.out
     assert "simulate" in captured.out
-    assert "https://docs.snputils.org" in captured.out
+    assert any(
+        word == "https://docs.snputils.org"
+        for word in captured.out.split()
+    )
 
 
 def test_main_version_flag_prints_version(

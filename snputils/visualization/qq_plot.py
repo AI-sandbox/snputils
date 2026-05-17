@@ -114,4 +114,5 @@ def qq_plot(
     if save:
         skw = default_savefig_kwargs(output_filename)
         plt.savefig(output_filename, **skw)
-    plt.show()
+    if output_filename is None:
+        plt.show()

@@ -149,6 +149,22 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         default="gwas.tsv.gz",
         help="Path used to save resulting data in compressed .tsv file (default: gwas.tsv.gz).",
     )
+    parser.add_argument(
+        "--manhattan-plot",
+        dest="manhattan_plot",
+        required=False,
+        default=None,
+        type=str,
+        help="Optional path to save a Manhattan plot after GWAS completes (.pdf / .svg / .png, ...).",
+    )
+    parser.add_argument(
+        "--qq-plot",
+        dest="qq_plot",
+        required=False,
+        default=None,
+        type=str,
+        help="Optional path to save a Q-Q plot after GWAS completes (.pdf / .svg / .png, ...).",
+    )
     required_argv = parser.add_argument_group("required arguments")
     required_argv.add_argument(
         "--phe-id",
@@ -954,4 +970,21 @@ def run_gwas_command(args: argparse.Namespace) -> int:
         exclude_path=args.exclude_path,
         vcf_backend=args.vcf_backend,
     )
+
+    manhattan_plot_path = getattr(args, "manhattan_plot", None)
+    qq_plot_path = getattr(args, "qq_plot", None)
+    if manhattan_plot_path is not None or qq_plot_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        actual_results = _resolve_output_path(args.results_path, args.phe_id, default_suffix="_gwas.tsv.gz")
+        if manhattan_plot_path is not None:
+            from snputils.visualization.manhattan_plot import manhattan_plot
+
+            manhattan_plot(str(actual_results), save=True, output_filename=manhattan_plot_path)
+        if qq_plot_path is not None:
+            from snputils.visualization.qq_plot import qq_plot
+
+            qq_plot(str(actual_results), save=True, output_filename=qq_plot_path)
+
     return 0

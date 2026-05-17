@@ -85,6 +85,43 @@ def _run_mdpca(args: argparse.Namespace) -> int:
         rsid_or_chrompos=args.rsid_or_chrompos,
         percent_vals_masked=args.percent_vals_masked,
     )
+
+    if args.plot is not None:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+        import pandas as pd
+        import numpy as np
+
+        from snputils.visualization._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
+
+        df = pd.read_csv(args.coords, sep=None, engine="python")
+        coord_cols = [c for c in df.columns if c.startswith("PC") or c.startswith("MDS")]
+        if not coord_cols:
+            coord_cols = df.select_dtypes(include=[float, int]).columns.tolist()
+        if len(coord_cols) >= 2:
+            x = df[coord_cols[0]].to_numpy(dtype=float)
+            y = df[coord_cols[1]].to_numpy(dtype=float)
+            x_label, y_label = coord_cols[0], coord_cols[1]
+        elif len(coord_cols) == 1:
+            x = df[coord_cols[0]].to_numpy(dtype=float)
+            y = np.zeros_like(x)
+            x_label, y_label = coord_cols[0], "Constant (0)"
+        else:
+            raise ValueError("Could not find coordinate columns in the mdPCA output table for plotting.")
+
+        plt.figure(figsize=(10, 8))
+        _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5}
+        if scatter_rasterized_for_path(str(args.plot)):
+            _scatter_kw["rasterized"] = True
+        plt.scatter(x, y, **_scatter_kw)
+        plt.xlabel(x_label, fontsize=20)
+        plt.ylabel(y_label, fontsize=20)
+        plt.tight_layout()
+        _save_kw = default_savefig_kwargs(str(args.plot))
+        plt.savefig(args.plot, **_save_kw)
+
     return 0
 
 
@@ -350,6 +387,20 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         help="Path to remove file (FID IID or IID per line).",
     )
+    parser.add_argument(
+        "--manhattan-plot",
+        dest="manhattan_plot",
+        default=None,
+        type=str,
+        help="Optional path to save a Manhattan plot after admixture mapping completes (.pdf / .svg / .png, ...).",
+    )
+    parser.add_argument(
+        "--qq-plot",
+        dest="qq_plot",
+        default=None,
+        type=str,
+        help="Optional path to save a Q-Q plot after admixture mapping completes (.pdf / .svg / .png, ...).",
+    )
 
 
 def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
@@ -469,6 +520,20 @@ def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         default="polars",
         help="VCF reader backend (used only when input is VCF).",
     )
+    parser.add_argument(
+        "--manhattan-plot",
+        dest="manhattan_plot",
+        default=None,
+        type=str,
+        help="Optional path to save a Manhattan plot after GWAS completes (.pdf / .svg / .png, ...).",
+    )
+    parser.add_argument(
+        "--qq-plot",
+        dest="qq_plot",
+        default=None,
+        type=str,
+        help="Optional path to save a Q-Q plot after GWAS completes (.pdf / .svg / .png, ...).",
+    )
 
 
 def _add_dimred_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -507,6 +572,13 @@ def _add_mdpca_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--covariance-matrix-file", default=None, help="Optional .npy path for the covariance matrix.")
     parser.add_argument("--percent-vals-masked", type=float, default=0, help="Percent of covariance values to mask for imputation methods.")
+    parser.add_argument(
+        "--plot",
+        dest="plot",
+        default=None,
+        type=str,
+        help="Optional path to save a scatter plot of the first two mdPCA components (.pdf / .svg / .png, ...).",
+    )
 
 
 def _add_maasmds_arguments(parser: argparse.ArgumentParser) -> None:
@@ -520,7 +592,7 @@ def _add_maasmds_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--vcf", required=True, help="Path to the phased VCF/VCF-gz file.")
+    parser.add_argument("--snp", required=True, help="Path to SNP input (VCF, BED, or PGEN fileset).")
     parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")

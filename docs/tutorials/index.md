@@ -11,8 +11,8 @@ The tutorial notebooks live in `docs/tutorials/` and are committed with saved ce
 Read, inspect, filter, and manipulate SNP data.
 :::
 
-:::{grid-item-card} SNP PCA
-:link: snp-pca
+:::{grid-item-card} PCA
+:link: pca
 :link-type: doc
 Run PCA workflows on SNP data and inspect components.
 :::
@@ -60,7 +60,7 @@ Work with genotype representation graph data.
 :maxdepth: 1
 
 snp-object
-snp-pca
+pca
 snp-allele-frequency
 local-ancestry-visualization
 mdpca-maasmds

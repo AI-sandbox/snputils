@@ -5,8 +5,8 @@ import colorsys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from typing import Callable, Mapping, Optional, Union
+from matplotlib import colormaps
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 from adjustText import adjust_text
 
@@ -56,10 +56,10 @@ def _generate_distinct_colors(n: int) -> list:
     alternating saturation / value so neighbouring colours stay distinguishable.
     """
     if n <= 10:
-        base = cm.get_cmap("tab10", 10)
+        base = colormaps.get_cmap("tab10").resampled(10)
         return [base(i) for i in range(n)]
     if n <= 20:
-        base = cm.get_cmap("tab20", 20)
+        base = colormaps.get_cmap("tab20").resampled(20)
         return [base(i) for i in range(n)]
     colors: list = []
     for i in range(n):
@@ -69,6 +69,131 @@ def _generate_distinct_colors(n: int) -> list:
         r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
         colors.append((r, g, b, 1.0))
     return colors
+
+
+def plot_embedding(
+    embedding: pd.DataFrame,
+    *,
+    x: str = "PC1",
+    y: str = "PC2",
+    hue: Optional[str] = None,
+    title: Optional[str] = None,
+    ax: Optional[plt.Axes] = None,
+    figsize: tuple[float, float] = (9.0, 7.0),
+    point_size: float = 34.0,
+    point_alpha: float = 0.85,
+    label_colors: Optional[Mapping[str, str]] = None,
+    category_order: Optional[Sequence[str]] = None,
+    legend: bool = True,
+    legend_title: Optional[str] = None,
+    legend_outside: bool = True,
+    zero_lines: bool = True,
+    despine: bool = True,
+    save_path: Optional[str] = None,
+    show: bool = False,
+    savefig_kwargs: Optional[dict] = None,
+) -> plt.Axes:
+    """
+    Plot a two-dimensional embedding table, optionally colored by metadata.
+
+    Args:
+        embedding: DataFrame containing coordinate columns such as ``PC1`` and
+            ``PC2``. Tables produced by
+            :func:`snputils.processing.embedding_dataframe_from_model` work
+            directly.
+        x, y: Coordinate columns to plot.
+        hue: Optional metadata column used to color points.
+        title: Optional axes title.
+        ax: Existing matplotlib axes. If omitted, a new figure and axes are created.
+        figsize: Figure size used when ``ax`` is omitted.
+        point_size: Matplotlib marker area for points.
+        point_alpha: Point opacity.
+        label_colors: Optional mapping from hue values to matplotlib colors.
+        category_order: Optional order for hue categories. Missing categories are ignored.
+        legend: Whether to draw a legend when ``hue`` is set.
+        legend_title: Legend title. Defaults to ``hue``.
+        legend_outside: If True, place the legend outside the right side of the axes.
+        zero_lines: Draw horizontal and vertical lines at zero.
+        despine: Hide top and right axes spines.
+        save_path: Optional path for the figure.
+        show: If True, call ``plt.show()`` before returning.
+        savefig_kwargs: Extra keyword arguments for ``Figure.savefig``.
+
+    Returns:
+        The matplotlib axes containing the plot.
+    """
+    if x not in embedding.columns:
+        raise ValueError(f"embedding does not contain x column {x!r}")
+    if y not in embedding.columns:
+        raise ValueError(f"embedding does not contain y column {y!r}")
+    if hue is not None and hue not in embedding.columns:
+        raise ValueError(f"embedding does not contain hue column {hue!r}")
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+
+    if hue is None:
+        ax.scatter(
+            embedding[x],
+            embedding[y],
+            s=point_size,
+            alpha=point_alpha,
+            linewidths=0,
+            rasterized=scatter_rasterized_for_path(save_path),
+        )
+    else:
+        labels = embedding[hue].fillna("Unknown").astype(str)
+        if category_order is None:
+            categories = sorted(labels.unique())
+        else:
+            order = [str(c) for c in category_order]
+            categories = [c for c in order if c in set(labels)]
+            categories.extend(c for c in sorted(labels.unique()) if c not in set(categories))
+        colors = _generate_distinct_colors(len(categories))
+
+        for idx, category in enumerate(categories):
+            mask = labels == category
+            color = _resolve_label_color(
+                category,
+                idx,
+                label_colors,
+                lambda i: colors[int(i) % len(colors)],
+            )
+            ax.scatter(
+                embedding.loc[mask, x],
+                embedding.loc[mask, y],
+                label=category,
+                s=point_size,
+                alpha=point_alpha,
+                linewidths=0,
+                color=color,
+                rasterized=scatter_rasterized_for_path(save_path),
+            )
+
+    if zero_lines:
+        ax.axhline(0, color="0.85", linewidth=0.8, zorder=0)
+        ax.axvline(0, color="0.85", linewidth=0.8, zorder=0)
+    if title is not None:
+        ax.set_title(title)
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    if despine:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    if hue is not None and legend:
+        legend_kw = {"title": legend_title or hue, "frameon": True}
+        if legend_outside:
+            legend_kw.update({"bbox_to_anchor": (1.02, 1), "loc": "upper left", "borderaxespad": 0})
+        ax.legend(**legend_kw)
+    ax.figure.tight_layout()
+
+    if save_path is not None:
+        kw = dict(default_savefig_kwargs(str(save_path)))
+        kw.update(savefig_kwargs or {})
+        ax.figure.savefig(save_path, **kw)
+    if show:
+        plt.show()
+    return ax
 
 
 def scatter(

@@ -341,16 +341,25 @@ class TorchPCA:
 
 class PCA:
     """
-    Principal Component Analysis (PCA) for SNP data.
+    Principal Component Analysis (PCA) for SNP genotype matrices.
 
-    This class wraps either ``sklearn.decomposition.PCA`` or the custom
-    :class:`TorchPCA` backend.
+    ``PCA`` converts a :class:`~snputils.snp.genobj.snpobj.SNPObject` into a
+    sample-by-variant matrix, centers each variant, computes principal axes
+    (eigenvectors/loadings), and projects samples onto the requested principal
+    components.
 
-    The ``fitting`` parameter selects exact vs approximate SVD on both
-    backends (see ``__init__``).
+    Two computational backends are available:
 
-    The class supports separate or averaged strand processing. If ``snpobj`` is
-    provided at construction time, ``fit_transform`` is called automatically.
+    - ``backend="sklearn"`` uses :class:`sklearn.decomposition.PCA` on CPU.
+    - ``backend="pytorch"`` uses :class:`TorchPCA` and can run on CPU or CUDA.
+
+    The ``fitting`` parameter selects exact SVD (``"exact"``) or approximate
+    low-rank SVD (``"lowrank"``) for both backends. Diploid/two-strand genotype
+    arrays can be averaged into one row per sample or expanded into one row per
+    strand with ``average_strands``.
+
+    If ``snpobj`` is passed to the constructor, PCA is performed immediately by
+    calling :meth:`fit_transform`.
     """
     def __init__(
         self, 
@@ -367,11 +376,13 @@ class PCA:
         """
         Args:
             snpobj (SNPObject, optional): 
-                A SNPObject instance.
+                Genotype data used to perform PCA immediately. If supplied,
+                :meth:`fit_transform` is called during initialization.
             backend (str, default='sklearn'):
-                The backend to use (`'sklearn'` or `'pytorch'`). Default is 'sklearn'.
+                Computational backend: ``'sklearn'`` for scikit-learn on CPU or
+                ``'pytorch'`` for the PyTorch implementation.
             n_components (int, default=2): 
-                The number of principal components. Default is 2.
+                Number of principal components to compute and return.
             fitting (str, default='exact'): 
                 SVD mode for both backends. Use ``'exact'`` for standard
                 decomposition (PyTorch ``torch.linalg.svd`` or sklearn
@@ -379,16 +390,21 @@ class PCA:
                 decomposition (PyTorch ``torch.svd_lowrank`` or sklearn
                 ``svd_solver='randomized'``). Default is ``'exact'``.
             device (str, default='cpu'): 
-                Device to use (`'cpu'`, `'gpu'`, `'cuda'`, or `'cuda:<index>'`). Default is 'cpu'.
+                Device for the PyTorch backend. Accepted values are ``'cpu'``,
+                ``'gpu'``, ``'cuda'``, or ``'cuda:<index>'``. Ignored by the
+                scikit-learn backend.
             average_strands (bool, default=True): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+                If True, average the two genotype strands into one dosage row
+                per sample. If False, treat each strand as a separate row.
             samples_subset (int or list of int, optional): 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
+                Samples to include before PCA. An integer selects the first
+                ``n`` samples; a list selects explicit sample indices.
             snps_subset (int or list of int, optional): 
-                Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
+                Variants to include before PCA. An integer selects the first
+                ``n`` variants; a list selects explicit variant indices.
             embedding_table_path (path, optional):
-                If set, :meth:`fit_transform` writes the projection to this file as TSV/CSV
-                (see :mod:`snputils.processing.dimred_tabular`).
+                Optional TSV/CSV path written by :meth:`fit_transform` with row
+                identifiers and projected PC coordinates.
         """
         self.__snpobj = snpobj
         self.__backend = backend.lower()
@@ -752,6 +768,44 @@ class PCA:
                 return device
             raise TypeError(f"Device must be a string or torch.device, got {type(device)}.")
 
+    def _set_row_ids_from_snpobj(
+        self,
+        snpobj: Optional['SNPObject'],
+        average_strands: Optional[bool],
+        samples_subset: Optional[Union[int, List]],
+    ) -> None:
+        """Populate row identifiers aligned with ``X_new_`` when a SNPObject is available."""
+        sobj = snpobj if snpobj is not None else self.snpobj
+        if sobj is None or self.X_new_ is None:
+            return
+
+        from .dimred_tabular import pca_row_haplotype_ids
+
+        try:
+            hid = pca_row_haplotype_ids(
+                sobj,
+                average_strands if average_strands is not None else self.average_strands,
+                samples_subset if samples_subset is not None else self.samples_subset,
+            )
+            x_rows = int(self.X_new_.shape[0])
+            if len(hid) != x_rows:
+                warnings.warn(
+                    f"PCA row ID count ({len(hid)}) does not match projection rows ({x_rows}); "
+                    "clearing haplotypes_.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.haplotypes_ = None
+            else:
+                self.haplotypes_ = hid
+        except ValueError as exc:
+            warnings.warn(
+                f"Could not derive per-row sample IDs for PCA: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            self.haplotypes_ = None
+
     def _get_data_from_snpobj(
             self, 
             snpobj: Optional['SNPObject'] = None, 
@@ -760,29 +814,34 @@ class PCA:
             snps_subset: Optional[Union[int, List]] = None
         ) -> Union[np.ndarray, torch.Tensor]:
         """
-        Retrieve and prepare SNP data for PCA analysis, with options for selecting subsets and handling strands.
+        Build the sample-by-variant matrix used for PCA.
 
-        This method processes SNP data stored in an `SNPObject`, which may include averaging of paternal 
-        and maternal strands or selecting subsets of samples and SNPs. The prepared data is formatted 
-        for use in PCA, optionally converted to a PyTorch tensor if the backend is set to 'pytorch'.
+        ``SNPObject.genotypes`` is stored with variants first. This helper
+        transposes it into rows suitable for PCA. For 3D diploid arrays,
+        ``average_strands=True`` averages the two strands into one dosage row
+        per sample, while ``average_strands=False`` expands each strand into a
+        separate row.
 
         Args:
             snpobj (SNPObject, optional): 
-                A SNPObject object instance. If None, defaults to `self.snpobj`.
+                Genotype data to convert. If None, defaults to ``self.snpobj``.
             average_strands (bool, optional): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+                Whether to average two-strand genotypes into one dosage row per
+                sample. If None, defaults to ``self.average_strands``.
             samples_subset (int or list of int, optional): 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
-                If None, defaults to `self.samples_subset`.
+                Samples to include. An integer selects the first ``n`` rows; a
+                list selects explicit sample indices. If None, defaults to
+                ``self.samples_subset``.
             snps_subset (int or list of int, optional): 
-                Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
-                If None, defaults to `self.snps_subset`.
+                Variants to include. An integer selects the first ``n`` columns;
+                a list selects explicit variant indices. If None, defaults to
+                ``self.snps_subset``.
 
             Returns:
                 numpy.ndarray or torch.Tensor: 
-                    The processed SNP data. If `backend` is set to 'pytorch', the data is returned as a 
-                    PyTorch tensor on the specified `device`.
+                    A two-dimensional matrix with rows representing samples or
+                    strands and columns representing variants. For the PyTorch
+                    backend, the matrix is returned as a tensor on ``device``.
         """
         if snpobj is None:
             snpobj = self.snpobj
@@ -831,24 +890,35 @@ class PCA:
             snps_subset: Optional[Union[int, List]] = None
         ) -> 'PCA':
         """
-        Fit the model to the input SNP data stored in the provided `snpobj`.
+        Compute PCA eigenvectors from SNP genotype data.
+
+        This prepares a sample-by-variant matrix from ``snpobj``, centers each
+        variant, and computes the principal axes. After fitting, the learned
+        eigenvectors/loadings are available in ``components_`` and the per-
+        variant centering values are available in ``mean_``. No PC coordinates
+        are returned by this method; call :meth:`transform` to project data onto
+        the learned PCs, or :meth:`fit_transform` to do both steps at once.
 
         Args:
             snpobj (SNPObject, optional): 
-                A SNPObject instance. If None, defaults to `self.snpobj`.
+                Genotype data used to compute the PCA axes. If None, defaults
+                to ``self.snpobj``.
             average_strands (bool, optional): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+                Whether to average two-strand genotypes into one dosage row per
+                sample. If None, defaults to ``self.average_strands``.
             samples_subset (int or list of int, optional): 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
-                If None, defaults to `self.samples_subset`.
+                Samples to use when computing PCs. An integer selects the first
+                ``n`` samples; a list selects explicit sample indices. If None,
+                defaults to ``self.samples_subset``.
             snps_subset (int or list of int, optional): 
-                Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
-                If None, defaults to `self.snps_subset`.
+                Variants to use when computing PCs. An integer selects the first
+                ``n`` variants; a list selects explicit variant indices. If
+                None, defaults to ``self.snps_subset``.
 
         Returns:
             PCA: 
-                The fitted instance of `self`.
+                The same ``PCA`` instance, with ``n_components_``,
+                ``components_``, and ``mean_`` populated.
         """
         self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
         self.pca.fit(self.X_)
@@ -868,56 +938,76 @@ class PCA:
             snps_subset: Optional[Union[int, List]] = None
         ):
         """
-        Apply dimensionality reduction to the input SNP data stored in the provided `snpobj` using the fitted model.
+        Project SNP genotype data onto previously computed principal components.
+
+        Call :meth:`fit` before calling this method. The input data are prepared
+        with the same row/column conventions as in :meth:`fit`, centered using
+        the fitted ``mean_``, and multiplied by the fitted ``components_``. This
+        is useful when PCA axes are computed on one dataset and another dataset
+        needs to be projected into the same PC space.
 
         Args:
             snpobj (SNPObject, optional): 
-                A SNPObject instance. If None, defaults to `self.snpobj`.
+                Genotype data to project. If None and a prepared matrix is
+                already stored in ``X_``, that matrix is reused; otherwise
+                ``self.snpobj`` is used.
             average_strands (bool, optional): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+                Whether to average two-strand genotypes into one dosage row per
+                sample. If None, defaults to ``self.average_strands``.
             samples_subset (int or list of int, optional): 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
-                If None, defaults to `self.samples_subset`.
+                Samples to project. An integer selects the first ``n`` samples;
+                a list selects explicit sample indices. If None, defaults to
+                ``self.samples_subset``.
             snps_subset (int or list of int, optional): 
-                Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
-                If None, defaults to `self.snps_subset`.
+                Variants to use for projection. This must match the variant set
+                used during fitting. If None, defaults to ``self.snps_subset``.
 
         Returns:
             tensor or array:
-                The transformed SNP data projected onto the ``n_components_`` principal components,
-                stored in `self.X_new_`.
+                PC coordinates with one row per projected sample or strand and
+                one column per component. The coordinates are also stored in
+                ``X_new_``.
         """
         # Retrieve or update the data to transform
         if snpobj is not None or self.X_ is None:
             self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
         
         # Apply transformation using the fitted PCA model
-        return self.pca.transform(self.X_)
+        self.X_new_ = self.pca.transform(self.X_)
+        self._set_row_ids_from_snpobj(snpobj, average_strands, samples_subset)
+        return self.X_new_
 
     def fit_transform(self, snpobj: Optional['SNPObject'] = None, average_strands: Optional[bool] = None, 
                       samples_subset: Optional[Union[int, List]] = None, snps_subset: Optional[Union[int, List]] = None):
         """
-        Fit the model to the SNP data stored in the provided `snpobj` and apply the dimensionality reduction 
-        on the same SNP data.
+        Compute PCA eigenvectors and project the same data onto them.
+
+        This is the common one-step PCA workflow. It prepares the genotype
+        matrix, computes the principal axes, and returns the projected PC
+        coordinates for the same rows used to compute the axes. The fitted
+        eigenvectors/loadings are stored in ``components_`` and the projected
+        coordinates are stored in ``X_new_``.
 
         Args:
             snpobj (SNPObject, optional): 
-                A SNPObject instance. If None, defaults to `self.snpobj`.
+                Genotype data used to compute PCs and projected coordinates. If
+                None, defaults to ``self.snpobj``.
             average_strands (bool, optional): 
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+                Whether to average two-strand genotypes into one dosage row per
+                sample. If None, defaults to ``self.average_strands``.
             samples_subset (int or list of int, optional): 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
-                If None, defaults to `self.samples_subset`.
+                Samples to include. An integer selects the first ``n`` samples;
+                a list selects explicit sample indices. If None, defaults to
+                ``self.samples_subset``.
             snps_subset (int or list of int, optional): 
-                Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
-                If None, defaults to `self.snps_subset`.
+                Variants to include. An integer selects the first ``n`` variants;
+                a list selects explicit variant indices. If None, defaults to
+                ``self.snps_subset``.
 
         Returns:
             tensor or array: 
-                The transformed SNP data projected onto the ``n_components_`` principal components,
-                stored in `self.X_new_`.
+                PC coordinates with one row per sample or strand and one column
+                per component.
         """
         self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
         self.X_new_ = self.pca.fit_transform(self.X_)
@@ -927,35 +1017,11 @@ class PCA:
         self.components_ = self.pca.components_
         self.mean_ = self.pca.mean_
 
+        self._set_row_ids_from_snpobj(snpobj, average_strands, samples_subset)
+
         sobj = snpobj if snpobj is not None else self.snpobj
         if sobj is not None:
-            from .dimred_tabular import pca_row_haplotype_ids, try_save_embedding_table
-
-            try:
-                hid = pca_row_haplotype_ids(
-                    sobj,
-                    average_strands if average_strands is not None else self.average_strands,
-                    samples_subset if samples_subset is not None else self.samples_subset,
-                )
-                x_rows = int(self.X_new_.shape[0])
-                if len(hid) != x_rows:
-                    warnings.warn(
-                        f"PCA row ID count ({len(hid)}) does not match projection rows ({x_rows}); "
-                        "clearing haplotypes_ for tabular export.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    self.haplotypes_ = None
-                else:
-                    self.haplotypes_ = hid
-            except ValueError as exc:
-                warnings.warn(
-                    f"Could not derive per-row sample IDs for PCA export: {exc}",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                self.haplotypes_ = None
-
+            from .dimred_tabular import try_save_embedding_table
             try_save_embedding_table(self, self.__embedding_table_path)
 
         return self.X_new_

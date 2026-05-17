@@ -156,10 +156,15 @@ def load_dataset(
         populations: Optional population labels to select from dataset metadata.
         samples_per_population: Optional number of samples to take from each selected population.
         max_variants: Optional maximum number of variants to read by streaming source files directly.
-        require_biallelic: If streaming source files, keep only biallelic variants.
-        require_complete: If streaming source files, keep only variants with complete genotypes.
-        require_polymorphic: If streaming source files, keep only polymorphic variants.
-        snv_only: If streaming source files, keep only biallelic SNVs.
+        require_biallelic: When ``max_variants`` is set and source files are streamed, keep only variants with
+            exactly one REF allele and one ALT allele.
+        require_complete: When ``max_variants`` is set and source files are streamed, keep only variants with no
+            missing genotype calls across the selected samples.
+        require_polymorphic: When ``max_variants`` is set and source files are streamed, keep only variants that
+            are polymorphic among the selected samples after any sample filtering.
+        snv_only: When ``max_variants`` is set and source files are streamed, keep only biallelic single-nucleotide
+            variants. This implies the same biallelic filter as ``require_biallelic=True`` and additionally
+            removes multi-base substitutions, indels, and symbolic alleles.
         metadata_path: Optional local population metadata path.
         metadata_url: Optional population metadata URL.
         panel_path: Backward-compatible alias for metadata_path.

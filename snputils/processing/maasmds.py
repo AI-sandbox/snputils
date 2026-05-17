@@ -483,7 +483,7 @@ class maasMDS:
         Retrieve `X_new_`.
 
         Returns:
-            array of shape (n_haplotypes_, n_components): 
+            array: 
                 The transformed SNP data projected onto the `n_components` principal components.
                 ``n_haplotypes_`` is the number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`). For diploid individuals without filtering, the shape is 
@@ -586,7 +586,7 @@ class maasMDS:
     @property
     def n_samples(self) -> Optional[int]:
         """
-        Retrieve `n_samples`.
+        Retrieve ``n_samples``.
 
         Returns:
             int or None:

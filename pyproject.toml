@@ -37,7 +37,8 @@ dependencies = [
     "nbformat",
     "adjustText",
     "zstandard",
-    "pygrgl"
+    "pygrgl",
+    "cairosvg"
 ]
 
 [project.optional-dependencies]

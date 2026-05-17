@@ -1,11 +1,34 @@
 # Quickstart
 
-The top-level package exposes the most common readers and data containers.
+The top-level package exposes the most common readers, data containers, and analysis helpers.
 
 ```python
 import snputils as su
 
-snpobj = su.read_snp("your.vcf.gz")
+snp = su.read_snp("cohort.vcf.gz")                   # Read VCF, BED, PGEN,...
+snp = snp.filter_biallelic_variants()                # filter to biallelic
+snp.save("cohort.pgen")                              # convert VCF -> PLINK2
+
+af = snp.allele_freq()                               # per-SNP allele frequencies (AF)
+pcs = su.PCA().fit_transform(snp)                    # PCA and project data
+
+lai = su.read_msp("local_ancestry.msp")              # local ancestry  (LAI)
+adm = su.read_admixture("admixture")                 # global ancestry (ADMIXTURE)
+labels = su.read_labels("labels.tsv")                # sample metadata
+afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
+su.viz.chromosome_painting(lai, "chr_paintings/")    # chromosome paintings
+
+mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")   # mdPCA (AFR-specific)
+su.viz.scatter(mdpca, labels)                        # plot mdPCA
+
+pheno = su.read_pheno("phenotypes.tsv", col="trait") # read phenotype data
+ibd = su.read_ibd("hap.ibd")                         # read IBD data
+gwas = su.run_gwas(pheno, snp)                       # GWAS
+admix = su.run_admixture_mapping(pheno, lai)         # admixture mapping
+su.viz.qq_plot(gwas)                                 # GWAS Q–Q plot
+su.viz.qq_plot(admix)                                # admixture mapping Q–Q plot
+su.viz.manhattan_plot(gwas)                          # GWAS manhattan plot
+su.viz.manhattan_plot(admix)                         # admixture mapping manhattan plot
 ```
 
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.
@@ -28,7 +51,7 @@ Local ancestry files are represented as {class}`snputils.LocalAncestryObject`; g
 ## Phenotypes and IBD
 
 ```python
-phen = su.PhenotypeReader("phenotypes.tsv").read()
+pheno = su.read_pheno("phenotypes.tsv")
 ibd = su.read_ibd("hap.ibd")
 ```
 
@@ -37,15 +60,11 @@ Phenotype data are represented by {class}`snputils.PhenotypeObject` or {class}`s
 ## Analysis and Visualization
 
 ```python
-from snputils.processing import PCA
-from snputils.stats import allele_freq_stream
-from snputils.visualization import scatter
+pca = su.PCA(n_components=2)
+coords = pca.fit_transform(snp)
 
-pca = PCA(n_components=2)
-coords = pca.fit_transform(snpobj)
-
-freq = allele_freq_stream("cohort.pgen", chunk_size=50_000)
-fig = scatter(coords[:, 0], coords[:, 1])
+freq = snp.allele_freq()
+su.viz.scatter(pca, "labels.tsv", save_path="pca.png", show=False)
 ```
 
 For complete workflows, see the tutorials.

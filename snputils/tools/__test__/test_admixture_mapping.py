@@ -15,6 +15,7 @@ from snputils.ancestry.io.local.read.__test__.fixtures import (
     make_synthetic_quantitative_dataset,
     write_msp,
 )
+from snputils.phenotype.genobj import PhenotypeObject
 from snputils.tools.admixture_mapping import run_admixture_mapping
 
 
@@ -382,6 +383,43 @@ def test_lai_object_input_matches_msp_input(tmp_path: Path):
     )
 
     pd.testing.assert_frame_equal(msp_results, lai_results)
+
+
+def test_admixture_mapping_accepts_in_memory_phenotype_object(tmp_path: Path):
+    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
+        n_samples=40, n_windows=18, seed=406
+    )
+    haplotypes = [f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)]
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai,
+        samples=list(sample_ids),
+        ancestry_map={str(key): value for key, value in ancestry_map.items()},
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+
+    phe_path = tmp_path / "toy.phe"
+    _write_phe(phe_path, sample_ids, y)
+
+    baseline = run_admixture_mapping(
+        phe_path=phe_path,
+        lai_source=laiobj,
+        results_path=tmp_path / "out_path",
+        phe_id="toy",
+        batch_size=9,
+        keep_hla=True,
+    )
+    phen = PhenotypeObject(sample_ids, y, phenotype_name="toy")
+    in_memory = run_admixture_mapping(
+        phe_path=phen,
+        lai_source=laiobj,
+        results_path=tmp_path / "out_memory",
+        batch_size=9,
+        keep_hla=True,
+    )
+
+    pd.testing.assert_frame_equal(baseline, in_memory)
 
 
 def test_deprecated_msp_path_keyword_is_supported(tmp_path: Path):

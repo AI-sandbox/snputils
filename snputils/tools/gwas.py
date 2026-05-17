@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from snputils.phenotype.io.read import PhenotypeReader
+from snputils.phenotype.genobj import PhenotypeObject
+from snputils.snp.genobj import SNPObject
 from snputils.snp.io.read import BEDReader, PGENReader, SNPReader, VCFReader
 from snputils.snp.io.read.vcf import VCFReaderPolars
 from ._association import (
@@ -139,6 +141,14 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         default="polars",
         help="VCF reader backend (used only when --snp-path is VCF).",
     )
+    parser.add_argument(
+        "--results-path",
+        dest="results_path",
+        required=False,
+        type=str,
+        default="gwas.tsv.gz",
+        help="Path used to save resulting data in compressed .tsv file (default: gwas.tsv.gz).",
+    )
     required_argv = parser.add_argument_group("required arguments")
     required_argv.add_argument(
         "--phe-id",
@@ -160,13 +170,6 @@ def add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         type=str,
         help="Path to genotype input (VCF/BED/PGEN).",
-    )
-    required_argv.add_argument(
-        "--results-path",
-        dest="results_path",
-        required=True,
-        type=str,
-        help="Path used to save resulting data in compressed .tsv file.",
     )
 
 
@@ -201,6 +204,12 @@ def _read_vcf_sample_ids(path: Union[str, Path]) -> List[str]:
 
 
 def _read_snp_samples(snp_reader: object) -> List[str]:
+    if isinstance(snp_reader, SNPObject):
+        samples = snp_reader.samples
+        if samples is None:
+            raise ValueError("In-memory SNPObject must include sample IDs for GWAS.")
+        return [str(sample) for sample in np.asarray(samples, dtype=object).tolist()]
+
     if isinstance(snp_reader, (VCFReaderPolars, VCFReader)):
         return _read_vcf_sample_ids(getattr(snp_reader, "filename"))
 
@@ -212,6 +221,44 @@ def _read_snp_samples(snp_reader: object) -> List[str]:
         return [str(sample) for sample in np.asarray(samples, dtype=object).tolist()]
 
     raise ValueError(f"Unsupported SNP reader type: {type(snp_reader).__name__}")
+
+
+def _coerce_phenotype_source(
+    phe_source: Union[str, Path, PhenotypeObject],
+    *,
+    phe_id: Optional[str],
+    quantitative: Optional[bool],
+) -> Tuple[PhenotypeObject, str]:
+    if isinstance(phe_source, PhenotypeObject):
+        phenotype_obj = (
+            phe_source
+            if quantitative is None
+            else PhenotypeObject(
+                samples=phe_source.samples,
+                values=phe_source.values,
+                phenotype_name=phe_source.phenotype_name,
+                quantitative=quantitative,
+            )
+        )
+        return phenotype_obj, str(phe_id or phenotype_obj.phenotype_name)
+
+    if phe_id is None:
+        raise TypeError("run_gwas() missing required argument: 'phe_id' when phenotype input is a path.")
+    phenotype_obj = PhenotypeReader(phe_source).read(
+        phenotype_col=phe_id,
+        quantitative=quantitative,
+    )
+    return phenotype_obj, str(phe_id)
+
+
+def _coerce_snp_source(
+    snp_source: Union[str, Path, SNPObject, SNPReader, BEDReader, PGENReader, VCFReader, VCFReaderPolars],
+    *,
+    vcf_backend: str,
+) -> object:
+    if isinstance(snp_source, (str, Path)):
+        return SNPReader(snp_source, vcf_backend=vcf_backend)
+    return snp_source
 
 
 def _read_variant_list(path: Union[str, Path]) -> Set[str]:
@@ -299,6 +346,31 @@ def _iter_snp_chunks(
     sample_indices: np.ndarray,
     aligned_samples: Sequence[str],
 ) -> Iterator[Dict[str, Optional[np.ndarray]]]:
+    if isinstance(snp_reader, SNPObject):
+        if snp_reader.calldata_gt is None:
+            return
+        gt = np.asarray(snp_reader.calldata_gt)
+        if gt.ndim not in (2, 3):
+            raise ValueError("GWAS expects SNPObject.calldata_gt with shape (variants, samples[, strands]).")
+
+        sample_indices = np.asarray(sample_indices, dtype=np.int64)
+        n_variants = int(gt.shape[0])
+        for start in range(0, n_variants, int(chunk_size)):
+            stop = min(start + int(chunk_size), n_variants)
+            if gt.ndim == 2:
+                calldata_gt = gt[start:stop, :][:, sample_indices]
+            else:
+                calldata_gt = gt[start:stop, :, :][:, sample_indices, :]
+            yield {
+                "calldata_gt": calldata_gt,
+                "variants_chrom": None if snp_reader.variants_chrom is None else snp_reader.variants_chrom[start:stop],
+                "variants_pos": None if snp_reader.variants_pos is None else snp_reader.variants_pos[start:stop],
+                "variants_id": None if snp_reader.variants_id is None else snp_reader.variants_id[start:stop],
+                "variants_ref": None if snp_reader.variants_ref is None else snp_reader.variants_ref[start:stop],
+                "variants_alt": None if snp_reader.variants_alt is None else snp_reader.variants_alt[start:stop],
+            }
+        return
+
     if isinstance(snp_reader, (BEDReader, PGENReader)):
         for chunk in snp_reader.iter_read(
             fields=["GT", "#CHROM", "POS", "ID", "REF", "ALT"],
@@ -549,10 +621,10 @@ def _compute_linear_stats_from_dosage_batch(
 
 
 def run_gwas(
-    phe_path: Union[str, Path],
-    snp_path: Union[str, Path],
-    results_path: Union[str, Path],
-    phe_id: str,
+    phe_path: Union[str, Path, PhenotypeObject],
+    snp_path: Union[str, Path, SNPObject, SNPReader, BEDReader, PGENReader, VCFReader, VCFReaderPolars],
+    results_path: Union[str, Path] = "gwas.tsv.gz",
+    phe_id: Optional[str] = None,
     batch_size: int = 256,
     memory: Optional[int] = None,
     return_results: bool = True,
@@ -568,13 +640,22 @@ def run_gwas(
     exclude_path: Optional[Union[str, Path]] = None,
     vcf_backend: str = "polars",
 ) -> pd.DataFrame:
+    """Run variant-level association testing.
+
+    ``phe_path`` may be a phenotype file path or an in-memory
+    :class:`PhenotypeObject`. ``snp_path`` may be a genotype file path, reader,
+    or in-memory :class:`SNPObject`. ``phe_id`` is required only when the
+    phenotype input is a file path. Results are written to ``results_path``
+    (default: gwas.tsv.gz).
+    """
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal GWAS processing.")
     if ci is not None and (ci <= 0.0 or ci >= 1.0):
         raise ValueError("--ci must be in the open interval (0, 1).")
 
-    phenotype_obj = PhenotypeReader(phe_path).read(
-        phenotype_col=phe_id,
+    phenotype_obj, output_phe_id = _coerce_phenotype_source(
+        phe_path,
+        phe_id=phe_id,
         quantitative=quantitative,
     )
     phe_samples = phenotype_obj.samples
@@ -594,7 +675,7 @@ def run_gwas(
             variance_standardize=covar_variance_standardize,
         )
 
-    snp_reader = SNPReader(snp_path, vcf_backend=vcf_backend)
+    snp_reader = _coerce_snp_source(snp_path, vcf_backend=vcf_backend)
     snp_samples = _read_snp_samples(snp_reader)
 
     sample_indexes, y_aligned, aligned_samples, covar_aligned = _align_samples_to_snp_order(
@@ -620,7 +701,7 @@ def run_gwas(
 
     obs_ct = int(y_aligned.size)
     rss_baseline_mb = _get_process_rss_mb() if memory is not None else None
-    output_file = _resolve_output_path(results_path, phe_id, default_suffix="_gwas.tsv.gz")
+    output_file = _resolve_output_path(results_path, output_phe_id, default_suffix="_gwas.tsv.gz")
 
     ci_cols: List[str] = []
     if ci is not None:

@@ -73,7 +73,7 @@ def _generate_distinct_colors(n: int) -> list:
 
 def scatter(
     dimredobj: np.ndarray,
-    labels_file: str,
+    labels_file: Union[str, pd.DataFrame],
     abbreviation_inside_dots: bool = True,
     arrows_for_titles: bool = False,
     dots: bool = True,
@@ -106,8 +106,8 @@ def scatter(
             :class:`~snputils.processing.mdpca.mdPCA`, or
             :class:`~snputils.processing.pca.PCA`. Must expose ``X_new_`` (``(n, 2)`` embedding) and
             ``samples_`` (identifiers aligned with embedding rows).
-        labels_file (str):
-            TSV with columns ``indID`` and ``label``.
+        labels_file (str or pandas.DataFrame):
+            TSV path or in-memory table with columns ``indID`` and ``label``.
         abbreviation_inside_dots (bool):
             If True, show a short acronym inside each centroid marker.
         arrows_for_titles (bool):
@@ -206,8 +206,8 @@ def scatter(
         for k, v in default_savefig_kwargs(str(save_path)).items():
             savefig_kwargs.setdefault(k, v)
 
-    # Load labels from TSV
-    labels_df = pd.read_csv(labels_file, sep="\t")
+    # Load labels from TSV or use an in-memory table.
+    labels_df = labels_file.copy() if isinstance(labels_file, pd.DataFrame) else pd.read_csv(labels_file, sep="\t")
 
     # Ensure 'indID' is treated as a string
     labels_df["indID"] = labels_df["indID"].astype(str)

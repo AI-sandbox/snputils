@@ -25,16 +25,18 @@ class mdPCA:
     single composite representation for each individual. Moreover, the analysis can be performed on individual-level data, group-level SNP 
     frequencies, or a combination of both.
 
-    If the `snpobj`, `laiobj`, `labels_file`, and `ancestry` parameters are all provided during instantiation, the `fit_transform` method 
-    will be automatically called, applying the specified mdPCA method to transform the data upon instantiation.
+    If ``snpobj``, ``laiobj``, ``labels_file``, and ``ancestry`` are all provided during instantiation, the
+    :meth:`fit_transform` method will be automatically called, applying the specified mdPCA method to transform
+    the data upon instantiation.
     """
     def __init__(
         self,
-        method: str = 'weighted_cov_pca',
         snpobj: Optional['SNPObject'] = None,
         laiobj: Optional['LocalAncestryObject'] = None,
         labels_file: Optional[str] = None,
+        *,
         ancestry: Optional[Union[int, str]] = None,
+        method: str = 'weighted_cov_pca',
         is_masked: bool = True,
         average_strands: bool = False,
         force_nan_incomplete_strands: bool = False,
@@ -150,7 +152,12 @@ class mdPCA:
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
-        self.__ancestry = self._define_ancestry(ancestry, laiobj.ancestry_map)
+        if ancestry is not None and laiobj is not None:
+            self.__ancestry = self._define_ancestry(ancestry, laiobj.ancestry_map)
+        elif isinstance(ancestry, int):
+            self.__ancestry = ancestry
+        else:
+            self.__ancestry = None
         self.__method = method
         self.__is_masked = is_masked
         self.__average_strands = average_strands
@@ -1031,11 +1038,12 @@ class mdPCA:
 
     def fit_transform(
             self,
-            snpobj: Optional['SNPObject'] = None, 
+            snpobj: Optional['SNPObject'] = None,
             laiobj: Optional['LocalAncestryObject'] = None,
             labels_file: Optional[str] = None,
-            ancestry: Optional[str] = None,
-            average_strands: Optional[bool] = None
+            ancestry: Optional[Union[int, str]] = None,
+            *,
+            average_strands: Optional[bool] = None,
         ) -> np.ndarray:
         """
         Fit the model to the SNP data stored in the provided `snpobj` and apply the dimensionality reduction on the same SNP data.

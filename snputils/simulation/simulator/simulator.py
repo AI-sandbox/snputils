@@ -436,7 +436,10 @@ class OnlineSimulator:
         Make self.labels have shape (N, D) for discrete or (N, D, coord_dim) for continuous
         so we can do per-SNP crossovers that also scramble the labels.
         """
-        N, D = self.snps.shape
+        if self.snps.ndim == 3:
+            N, _, D = self.snps.shape   # (samples, ploidy, snps)
+        else:
+            N, D = self.snps.shape      # (haplotypes, snps) after --make-haploid
         
         # Discrete
         if self.labels_discrete is not None:
@@ -526,19 +529,29 @@ class OnlineSimulator:
         # pick random subset of samples
         N = self.snps.shape[0]
         idx = torch.randint(N, (batch_size,))
-        batch_snps = self.snps[idx, :].clone()  # shape (B, D)
-        
+        batch_snps = self.snps[idx].clone()
+
         # Subset discrete
         if self.labels_discrete is not None:
-            batch_discrete = self.labels_discrete[idx, :].clone()  # shape (B, D)
+            batch_discrete = self.labels_discrete[idx].clone()
         else:
             batch_discrete = None
 
         # Subset continuous
         if self.labels_continuous is not None:
-            batch_continuous = self.labels_continuous[idx, :, :].clone() # (B, D, dim)
+            batch_continuous = self.labels_continuous[idx].clone()
         else:
             batch_continuous = None
+
+        # Diploid input: (B, 2, D) → flatten strands into haplotype rows (B*2, D)
+        # so that _simulate_from_pool and all downstream logic see a 2-D tensor.
+        if batch_snps.ndim == 3:
+            B_dip, ploidy, D = batch_snps.shape
+            batch_snps = batch_snps.reshape(B_dip * ploidy, D)
+            if batch_discrete is not None:
+                batch_discrete = batch_discrete.repeat_interleave(ploidy, dim=0)
+            if batch_continuous is not None:
+                batch_continuous = batch_continuous.repeat_interleave(ploidy, dim=0)
             
         # 2) possibly do single_ancestry or balanced logic if you want
         # We'll skip it for brevity; your original code had that logic.

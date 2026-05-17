@@ -30,15 +30,10 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s │ %(levelname)-8s │ %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 log = logging.getLogger("simulator_cli")
-    
-def parse_sim_args() -> argparse.Namespace:
-    """Parse command-line flags for the simulator CLI."""
-    p = argparse.ArgumentParser(
-        prog="simulator_cli",
-        description="Batch-simulate admixed haplotypes with OnlineSimulator.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
 
+
+def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
+    """Add command-line flags for the simulator CLI."""
     # Required I/O
     p.add_argument("--vcf", required=True,
                    help="Path to the phased VCF/VCF-gz file.")
@@ -74,15 +69,26 @@ def parse_sim_args() -> argparse.Namespace:
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Print additional debugging info.")
 
-    args = p.parse_args()
+
+def parse_sim_args(argv=None) -> argparse.Namespace:
+    """Parse command-line flags for the simulator CLI."""
+    p = argparse.ArgumentParser(
+        prog="simulator_cli",
+        description="Batch-simulate admixed haplotypes with OnlineSimulator.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    add_simulator_arguments(p)
+    args = p.parse_args(argv)
 
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
     return args
 
-def main():
-    args = parse_sim_args()
+
+def run_simulator_command(args: argparse.Namespace) -> int:
+    if getattr(args, "verbose", False):
+        log.setLevel(logging.DEBUG)
 
     # 1) Sanity checks / output directory
     out_dir = Path(args.output_dir).expanduser()
@@ -154,11 +160,17 @@ def main():
         log.info("Saved %s", out_path.name)
 
     log.info("[✓] All done. %d files written to %s", args.n_batches, out_dir)
+    return 0
+
+
+def main(argv=None) -> int:
+    args = parse_sim_args(argv)
+    return run_simulator_command(args)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except Exception as exc:
         log.exception("Fatal error: %s", exc)
         sys.exit(1)

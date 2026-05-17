@@ -29,6 +29,27 @@ Optionally, for PyTorch-backed features, install with the `[torch]` extra:
 pip install 'snputils[torch]'
 ```
 
+## Command-Line Interface
+
+Installing the package provides a `snputils` command for common file-backed workflows:
+
+```bash
+snputils --help
+snputils --version
+```
+
+Available subcommands include:
+
+- `pca`: run standard PCA and save coordinates/components and a scatter plot.
+- `mdpca`: run missing-data PCA and save an embedding table.
+- `maasmds`: run ancestry-specific MDS and save an embedding table.
+- `admixture-map`: run admixture mapping from phenotype and local ancestry files.
+- `gwas`: run variant-level association testing from phenotype and genotype files.
+- `simulate`: simulate admixed haplotype batches from phased founder haplotypes.
+- `plot-manhattan` and `plot-qq`: render association result visualizations.
+
+The Python API remains the full surface for low-level readers/writers, object manipulation, IBD filtering and trimming, f-statistics, allele-frequency helpers, custom visualizations, and notebook-oriented workflows. Use the CLI when a workflow naturally starts from files and produces files; use Python when you need programmatic composition or in-memory objects.
+
 ## Key Features
 
 ### Ease of Use

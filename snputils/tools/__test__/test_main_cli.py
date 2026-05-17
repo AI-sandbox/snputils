@@ -317,3 +317,28 @@ def test_main_help_flag_prints_help_and_exits_0(
     assert "usage:" in captured.out
     assert "admixture-map" in captured.out
     assert "gwas" in captured.out
+    assert "simulate" in captured.out
+    assert "https://docs.snputils.org" in captured.out
+
+
+def test_main_version_flag_prints_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["snputils", "--version"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("snputils ")
+
+
+def test_main_version_subcommand_prints_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["snputils", "version"])
+
+    assert main() == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("snputils ")

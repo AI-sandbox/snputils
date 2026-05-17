@@ -606,19 +606,19 @@ class LocalAncestryObject(AncestryObject):
         Args:
             snpobject (SNPObject, optional):
                 An existing `SNPObject` to extract SNP attributes from.
-            variants_chrom (array of shape (n_snps,), optional): 
+            variants_chrom (array, optional): 
                 An array containing the chromosome for each SNP.
-            variants_pos (array of shape (n_snps,), optional): 
+            variants_pos (array, optional): 
                 An array containing the chromosomal positions for each SNP.
-            variants_ref (array of shape (n_snps,), optional): 
+            variants_ref (array, optional): 
                 An array containing the reference allele for each SNP.
-            variants_alt (array of shape (n_snps,), optional): 
+            variants_alt (array, optional): 
                 An array containing the alternate allele for each SNP.
-            variants_filter_pass (array of shape (n_snps,), optional): 
+            variants_filter_pass (array, optional): 
                 An array indicating whether each SNP passed control checks.
-            variants_id (array of shape (n_snps,), optional): 
+            variants_id (array, optional): 
                 An array containing unique identifiers (IDs) for each SNP.
-            variants_qual (array of shape (n_snps,), optional): 
+            variants_qual (array, optional): 
                 An array containing the Phred-scaled quality score for each SNP.
             lai_format (str, optional):
                 Determines the shape of `calldata_lai`:

@@ -108,7 +108,7 @@ class TorchPCA:
         """
         Args:
             n_components (int, default=2): 
-                The number of principal components. If None, defaults to the minimum of `n_samples` and `n_snps`.
+                The number of principal components. If None, defaults to the minimum of ``n_samples`` and ``n_snps``.
             fitting (str, default='exact'): 
                 SVD mode for PCA. Use ``'exact'`` for economy SVD via
                 ``torch.linalg.svd`` (``full_matrices=False``), or ``'lowrank'``
@@ -162,19 +162,19 @@ class TorchPCA:
     @property
     def n_components_(self) -> Optional[int]:
         """
-        Retrieve `n_components_`.
+        Retrieve ``n_components_``.
         
         Returns:
             int: 
                 The effective number of components retained after fitting, 
-                calculated as `min(self.n_components, min(n_samples, n_snps))`.
+                calculated as ``min(self.n_components, min(n_samples, n_snps))``.
         """
         return self.__n_components_
 
     @n_components_.setter
     def n_components_(self, x: int) -> None:
         """
-        Update `n_components_`.
+        Update ``n_components_``.
         """
         self.__n_components_ = x
 
@@ -184,7 +184,7 @@ class TorchPCA:
         Retrieve `components_`.
         
         Returns:
-            tensor of shape (n_components_, n_snps): 
+            tensor: 
                 Matrix of principal components, where each row is a principal component vector.
         """
         return self.__components_
@@ -202,7 +202,7 @@ class TorchPCA:
         Retrieve `mean_`.
 
         Returns:
-            tensor of shape (n_snps,): 
+            tensor: 
                 Per-feature mean vector of the input data used for centering.
         """
         return self.__mean_
@@ -220,8 +220,8 @@ class TorchPCA:
         Retrieve `X_new_`.
 
         Returns:
-            tensor of shape (n_samples, n_components_): 
-                The transformed SNP data projected onto the `n_components_` principal components.
+            tensor: 
+                The transformed SNP data projected onto the ``n_components_`` principal components.
         """
         return self.__X_new_
 
@@ -247,7 +247,7 @@ class TorchPCA:
         Internal method to fit the PCA model to the data `X`.
 
         Args:
-            X (tensor of shape (n_samples, n_snps)): 
+            X (tensor): 
                 Input SNP data used for fitting the model.
 
         Returns:
@@ -291,7 +291,7 @@ class TorchPCA:
         Fit the model to the input SNP data.
 
         Args:
-            X (tensor of shape (n_samples, n_snps)): 
+            X (tensor): 
                 The SNP data matrix to fit the model.
 
         Returns:
@@ -306,12 +306,12 @@ class TorchPCA:
         Apply dimensionality reduction to the input SNP data using the fitted model.
 
         Args:
-            X (tensor of shape (n_samples, n_snps)): 
+            X (tensor): 
                 The SNP data matrix to be transformed.
 
         Returns:
-            tensor of shape (n_samples, n_components_): 
-                The transformed SNP data projected onto the `n_components_` principal components, 
+            tensor: 
+                The transformed SNP data projected onto the ``n_components_`` principal components, 
                 stored in `self.X_new_`.
         """
         if self.components_ is None or self.mean_ is None:
@@ -326,12 +326,12 @@ class TorchPCA:
         Fit the model to the SNP data and apply dimensionality reduction on the same SNP data.
 
         Args:
-            X (tensor of shape n_samples, n_snps): 
+            X (tensor): 
                 The SNP data matrix used for both fitting and transformation.
 
         Returns:
-            tensor of shape (n_samples, n_components_): 
-                The transformed SNP data projected onto the `n_components_` principal components, 
+            tensor: 
+                The transformed SNP data projected onto the ``n_components_`` principal components, 
                 stored in `self.X_new_`.
         """
         U, S, _ = self._fit(X)
@@ -569,19 +569,19 @@ class PCA:
     @property
     def n_components_(self) -> Optional[int]:
         """
-        Retrieve `n_components_`.
+        Retrieve ``n_components_``.
 
         Returns:
             int: 
                 The effective number of components retained after fitting, 
-                calculated as `min(self.n_components, min(n_samples, n_snps))`.
+                calculated as ``min(self.n_components, min(n_samples, n_snps))``.
         """
         return self.__n_components_
 
     @n_components_.setter
     def n_components_(self, x: int) -> None:
         """
-        Update `n_components_`.
+        Update ``n_components_``.
         """
         self.__n_components_ = x
 
@@ -591,7 +591,7 @@ class PCA:
         Retrieve `components_`.
 
         Returns:
-            tensor or array of shape (n_components_, n_snps): 
+            tensor or array: 
                 Matrix of principal components, where each row is a principal component vector.
         """
         return self.__components_
@@ -609,7 +609,7 @@ class PCA:
         Retrieve `mean_`.
 
         Returns:
-            tensor or array of shape (n_snps,): 
+            tensor or array: 
                 Per-feature mean vector of the input data used for centering.
         """
         return self.__mean_
@@ -627,7 +627,7 @@ class PCA:
         Retrieve `X_`.
 
         Returns:
-            tensor or array of shape (n_samples, n_snps): 
+            tensor or array: 
                 The SNP data matrix used to fit the model.
         """
         return self.__X_
@@ -645,8 +645,8 @@ class PCA:
         Retrieve `X_new_`.
 
         Returns:
-            tensor or array of shape (n_samples, n_components_): 
-                The transformed SNP data projected onto the `n_components_` principal components.
+            tensor or array: 
+                The transformed SNP data projected onto the ``n_components_`` principal components.
         """
         return self.__X_new_
 
@@ -884,8 +884,8 @@ class PCA:
                 If None, defaults to `self.snps_subset`.
 
         Returns:
-            tensor or array of shape (n_samples, n_components):
-                The transformed SNP data projected onto the `n_components_` principal components,
+            tensor or array:
+                The transformed SNP data projected onto the ``n_components_`` principal components,
                 stored in `self.X_new_`.
         """
         # Retrieve or update the data to transform
@@ -915,8 +915,8 @@ class PCA:
                 If None, defaults to `self.snps_subset`.
 
         Returns:
-            tensor or array of shape (n_samples, n_components): 
-                The transformed SNP data projected onto the `n_components_` principal components,
+            tensor or array: 
+                The transformed SNP data projected onto the ``n_components_`` principal components,
                 stored in `self.X_new_`.
         """
         self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)

@@ -21,19 +21,20 @@ class GlobalAncestryObject(AncestryObject):
     ) -> None:
         """
         Args:
-            Q (array of shape (n_samples, n_ancestries)):
+            Q (array):
                 A 2D array containing per-sample ancestry proportions. Each row corresponds to a sample,
                 and each column corresponds to an ancestry.
-            P (array of shape (n_snps, n_ancestries)):
-                A 2D array containing per-ancestry SNP frequencies. Each row corresponds to a SNP,
-                and each column corresponds to an ancestry.
-            samples (sequence of length n_samples, optional):
+            P (array):
+                A 2D array containing per-ancestry SNP frequencies with shape
+                ``(n_snps, n_ancestries)``. Each row corresponds to a SNP, and each
+                column corresponds to an ancestry.
+            samples (sequence, optional):
                 A sequence containing unique identifiers for each sample. If None, sample identifiers 
                 are assigned as integers from `0` to `n_samples - 1`.
-            snps (sequence of length n_snps, optional):
+            snps (sequence, optional):
                 A sequence containing identifiers for each SNP. If None, SNPs are assigned as integers 
-                from `0` to `n_snps - 1`.
-            ancestries (sequence of length n_samples, optional):
+                from ``0`` to ``n_snps - 1``.
+            ancestries (sequence, optional):
                 A sequence containing ancestry labels for each sample.
         """
         # Determine dimensions
@@ -131,7 +132,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `Q`.
 
         Returns:
-            array of shape (n_samples, n_ancestries): 
+            array: 
                 A 2D array containing per-sample ancestry proportions. Each row corresponds to a sample,
                 and each column corresponds to an ancestry.
         """
@@ -154,9 +155,10 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `P`.
 
         Returns:
-            array of shape (n_snps, n_ancestries): 
-                A 2D array containing per-ancestry SNP frequencies. Each row corresponds to a SNP,
-                and each column corresponds to an ancestry.
+            array:
+                A 2D array containing per-ancestry SNP frequencies with shape
+                ``(n_snps, n_ancestries)``. Each row corresponds to a SNP, and each
+                column corresponds to an ancestry.
         """
         return self.__P
 
@@ -178,9 +180,10 @@ class GlobalAncestryObject(AncestryObject):
         Alias for `P`.
 
         Returns:
-            array of shape (n_snps, n_ancestries): 
-                A 2D array containing per-ancestry SNP frequencies. Each row corresponds to a SNP,
-                and each column corresponds to an ancestry.
+            array:
+                A 2D array containing per-ancestry SNP frequencies with shape
+                ``(n_snps, n_ancestries)``. Each row corresponds to a SNP, and each
+                column corresponds to an ancestry.
         """
         return self.P
 
@@ -201,7 +204,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `samples`.
 
         Returns:
-            array of shape (n_samples,): 
+            array: 
                 An array containing unique identifiers for each sample. If None, sample 
                 identifiers are assigned as integers from `0` to `n_samples - 1`.
         """
@@ -225,9 +228,9 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `snps`.
 
         Returns:
-            array of shape (n_snps,): 
+            array:
                 An array containing identifiers for each SNP. If None, SNPs are assigned as integers 
-                from `0` to `n_snps - 1`.
+                from ``0`` to ``n_snps - 1``.
         """
         return self.__snps
 
@@ -249,7 +252,7 @@ class GlobalAncestryObject(AncestryObject):
         Retrieve `ancestries`.
 
         Returns:
-            array of shape (n_samples,): 
+            array: 
                 An array containing ancestry labels for each sample.
         """
         return self.__ancestries
@@ -276,7 +279,7 @@ class GlobalAncestryObject(AncestryObject):
     @property
     def n_samples(self) -> int:
         """
-        Retrieve `n_samples`.
+        Retrieve ``n_samples``.
 
         Returns:
             int: The total number of samples.
@@ -286,7 +289,7 @@ class GlobalAncestryObject(AncestryObject):
     @property
     def n_snps(self) -> int:
         """
-        Retrieve `n_snps`.
+        Retrieve ``n_snps``.
 
         Returns:
             int: The total number of SNPs.

@@ -272,7 +272,7 @@ class OnlineSimulator:
     Example usage:
     -------------
         sim = OnlineSimulator(
-            vcf_data=my_species_chrX_vcf_data,
+            snp_data=my_snpobj,
             meta=metadata_df,
             genetic_map=genetic_map_df,  # optional
             ...
@@ -283,7 +283,7 @@ class OnlineSimulator:
     
     def __init__(
         self,
-        vcf_data,
+        snp_data,
         meta,
         genetic_map = None,
         make_haploid = True,
@@ -291,7 +291,7 @@ class OnlineSimulator:
         store_latlon_as_nvec = False,
         cp_tolerance = 0,
     ):
-        self.vcf_data = vcf_data
+        self.snp_data = snp_data
         self.meta = meta
         self.genetic_map = genetic_map
         self.make_haploid = make_haploid
@@ -299,13 +299,11 @@ class OnlineSimulator:
         self.store_latlon_as_nvec = store_latlon_as_nvec
         self.cp_tolerance = cp_tolerance
         
-        # We will keep discrete and continuous labels separately
         self.labels_discrete = None
         self.labels_continuous = None
 
-        # Load everything
         self._check_sample_metadata()
-        self._intersect_vcf_metadata()
+        self._intersect_snp_metadata()
         self._build_descriptors()
         self._broadcast_labels_across_snps() 
 
@@ -344,56 +342,41 @@ class OnlineSimulator:
 
         log.info('Metadata OK.')
             
-    def _intersect_vcf_metadata(self):
+    def _intersect_snp_metadata(self):
         """
-        Intersects VCF samples with metadata samples.
+        Intersects SNP samples with metadata samples.
         Produces:
           self.snps: shape (N, D) or (N,2,D) if not yet flattened
           self.samples: array of sample names
         If self.make_haploid is True, flattens to haplotype level => shape (N*2, D).
         """
-        # Intersect VCF samples with metadata samples
-        vcf_samples = self.vcf_data["samples"]
-        log.info(f"VCF has {len(vcf_samples)} samples total.")
+        snp_samples = np.asarray(self.snp_data.samples)
+        log.info(f"SNP input has {len(snp_samples)} samples total.")
         meta_samples = self.meta["Sample"].values
-        # Return intersection array plus index arrays
-        #   isamples = intersected sample IDs
-        #   iidx = indices in vcf_samples that match
-        inter = np.intersect1d(vcf_samples, meta_samples, assume_unique=False, return_indices=True)
+        inter = np.intersect1d(snp_samples, meta_samples, assume_unique=False, return_indices=True)
         isamples, iidx = inter[0], inter[1]
-        log.info(f"{len(isamples)} samples found in both VCF and metadata.")
+        log.info(f"{len(isamples)} samples found in both SNP input and metadata.")
         if len(isamples) == 0:
-            raise ValueError("No overlap between VCF samples and metadata samples. Check your paths or sample naming.")
+            raise ValueError("No overlap between SNP samples and metadata samples. Check your paths or sample naming.")
         
-        # Reindex the metadata so it lines up with 'intersect_samples'
-        # idx_meta is the array of indices in self.metadata that correspond
-        # to the intersected sample set
-        #self.meta = self.meta.iloc[iidx].copy().reset_index(drop=True)
         samp2idx = {s: idx for idx, s in enumerate(meta_samples)}
         meta_idxs = [samp2idx[s] for s in isamples]
         self.meta = self.meta.iloc[meta_idxs].copy().reset_index(drop=True)
         
-        # Load genotype data: shape (variants, samples, ploidy)
-        snps = self.vcf_data["calldata_gt"].transpose(1,2,0)[iidx, ...] 
+        snps = np.asarray(self.snp_data.calldata_gt).transpose(1, 2, 0)[iidx, ...]
         n_samples, ploidy, n_snps = snps.shape
         
-        # Note that if we flatten into haploid, we need to repeat rows
         if self.make_haploid:
-            # Flatten into haploid if requested
             snps = snps.reshape(n_samples * ploidy, n_snps)
-            # If we flattened from (samples, 2, snps) => (samples*2, snps)
-            # we must also repeat the metadata rows for the 2 haplotypes
             isamples = np.repeat(isamples, ploidy)
             self.meta = self.meta.loc[self.meta.index.repeat(2)].reset_index(drop=True)
             
-        # Convert to torch
         self.snps = torch.tensor(snps, dtype=torch.int8)
         self.samples = np.array(isamples)
         log.info(f"snps shape = {self.snps.shape}, sample length = {len(self.samples)}")
                                  
-        # Read genetic map
         if self.genetic_map is not None:
-            cm_interp = np.interp(self.vcf_data["variants_pos"], self.genetic_map['pos'], self.genetic_map['cM'])
+            cm_interp = np.interp(self.snp_data.variants_pos, self.genetic_map['pos'], self.genetic_map['cM'])
             self.rate_per_snp = np.gradient(cm_interp/100.0)
             log.info(f"rate/snp shape = {self.rate_per_snp.shape}")
         else:
@@ -436,7 +419,10 @@ class OnlineSimulator:
         Make self.labels have shape (N, D) for discrete or (N, D, coord_dim) for continuous
         so we can do per-SNP crossovers that also scramble the labels.
         """
-        N, D = self.snps.shape
+        if self.snps.ndim == 3:
+            N, _, D = self.snps.shape   # (samples, ploidy, snps)
+        else:
+            N, D = self.snps.shape      # (haplotypes, snps) after --make-haploid
         
         # Discrete
         if self.labels_discrete is not None:
@@ -526,19 +512,29 @@ class OnlineSimulator:
         # pick random subset of samples
         N = self.snps.shape[0]
         idx = torch.randint(N, (batch_size,))
-        batch_snps = self.snps[idx, :].clone()  # shape (B, D)
-        
+        batch_snps = self.snps[idx].clone()
+
         # Subset discrete
         if self.labels_discrete is not None:
-            batch_discrete = self.labels_discrete[idx, :].clone()  # shape (B, D)
+            batch_discrete = self.labels_discrete[idx].clone()
         else:
             batch_discrete = None
 
         # Subset continuous
         if self.labels_continuous is not None:
-            batch_continuous = self.labels_continuous[idx, :, :].clone() # (B, D, dim)
+            batch_continuous = self.labels_continuous[idx].clone()
         else:
             batch_continuous = None
+
+        # Diploid input: (B, 2, D) → flatten strands into haplotype rows (B*2, D)
+        # so that _simulate_from_pool and all downstream logic see a 2-D tensor.
+        if batch_snps.ndim == 3:
+            B_dip, ploidy, D = batch_snps.shape
+            batch_snps = batch_snps.reshape(B_dip * ploidy, D)
+            if batch_discrete is not None:
+                batch_discrete = batch_discrete.repeat_interleave(ploidy, dim=0)
+            if batch_continuous is not None:
+                batch_continuous = batch_continuous.repeat_interleave(ploidy, dim=0)
             
         # 2) possibly do single_ancestry or balanced logic if you want
         # We'll skip it for brevity; your original code had that logic.

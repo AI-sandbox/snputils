@@ -29,6 +29,27 @@ Optionally, for PyTorch-backed features, install with the `[torch]` extra:
 pip install 'snputils[torch]'
 ```
 
+## Command-Line Interface
+
+Installing the package provides a `snputils` command for common file-backed workflows:
+
+```bash
+snputils --help
+snputils --version
+```
+
+Available subcommands include:
+
+- `pca`: run standard PCA and save coordinates/components and a scatter plot.
+- `mdpca`: run missing-data PCA and save an embedding table.
+- `maasmds`: run ancestry-specific MDS and save an embedding table.
+- `admixture-map`: run admixture mapping from phenotype and local ancestry files.
+- `gwas`: run variant-level association testing from phenotype and genotype files.
+- `simulate`: simulate admixed haplotype batches from phased founder haplotypes.
+- `plot-manhattan` and `plot-qq`: render association result visualizations.
+
+The Python API remains the full surface for low-level readers/writers, object manipulation, IBD filtering and trimming, f-statistics, allele-frequency helpers, custom visualizations, and notebook-oriented workflows. Use the CLI when a workflow naturally starts from files and produces files; use Python when you need programmatic composition or in-memory objects.
+
 ## Key Features
 
 ### Ease of Use
@@ -122,14 +143,13 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
 
 ```bibtex
 @article{snputils2026,
-  author = {Bonet, David and Comajoan Cara, Marçal and Barrabés, Míriam and Smeriglio, Riccardo and Agrawal, Devang and Aounallah, Khaled and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Shanks, Cole and Huang, Edward C. and Franquesa Monés, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and López, Cayetana and Sabat, Benet Oriol and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
-  title = {{snputils}: A High-Performance {Python} Library for Genetic Variation and Population Structure},
-  year = {2026},
-  month = feb,
-  doi = {10.64898/2026.02.28.708618},
-  url = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
-  journal = {bioRxiv},
-  publisher = {Cold Spring Harbor Laboratory},
+    author    = {Bonet, David and Comajoan Cara, Marçal and Barrabés, Míriam and Smeriglio, Riccardo and Agrawal, Devang and Aounallah, Khaled and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Shanks, Cole and Huang, Edward C. and Franquesa Monés, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and López, Cayetana and Sabat, Benet Oriol and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
+    title     = {{snputils}: A High-Performance {Python} Library for Genetic Variation and Population Structure},
+    year      = {2026},
+    doi       = {10.64898/2026.02.28.708618},
+    url       = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
+    journal   = {bioRxiv},
+    publisher = {Cold Spring Harbor Laboratory},
 }
 ```
 

@@ -25,8 +25,24 @@ The statistics module supports D, f2, f3, f4, f4-ratio, and FST with jackknife s
 
 ## Command-Line Tools
 
-The package installs a `snputils` command with analysis-oriented subcommands. Run:
+The package installs a `snputils` command with analysis-oriented subcommands for workflows that start from files and produce files:
 
 ```bash
 snputils --help
+snputils --version
 ```
+
+CLI-backed workflows include standard PCA, mdPCA, maasMDS, admixture mapping, GWAS, simulation, and Manhattan/QQ plots:
+
+```bash
+snputils pca --help
+snputils mdpca --help
+snputils maasmds --help
+snputils admixture-map --help
+snputils gwas --help
+snputils simulate --help
+snputils plot-manhattan --help
+snputils plot-qq --help
+```
+
+Use the Python API for lower-level data containers, IBD object operations, f-statistics, allele-frequency helpers, and custom visualization workflows that use in-memory composition.

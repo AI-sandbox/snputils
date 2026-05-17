@@ -1,4 +1,5 @@
 import builtins
+import re
 import sys
 from pathlib import Path
 
@@ -66,7 +67,7 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
 
     vcf_path = tmp_path / "tiny.vcf"
     fig_path = tmp_path / "pca.png"
-    npy_path = tmp_path / "components.npy"
+    coords_path = tmp_path / "pca.tsv"
     _write_tiny_vcf(vcf_path)
 
     original_import = builtins.__import__
@@ -85,10 +86,10 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
             "pca",
             "--snp-path",
             str(vcf_path),
-            "--fig-path",
+            "--plot",
             str(fig_path),
-            "--npy-path",
-            str(npy_path),
+            "--coords",
+            str(coords_path),
             "--backend",
             "sklearn",
             "--n-components",
@@ -98,10 +99,7 @@ def test_main_pca_sklearn_smoke_without_torch(tmp_path: Path, monkeypatch: pytes
 
     assert main() == 0
     assert fig_path.exists()
-    assert npy_path.exists()
-
-    components = np.load(npy_path)
-    assert components.shape == (2, 2)
+    assert coords_path.exists()
 
 
 def test_main_pca_sklearn_allows_one_component(
@@ -123,9 +121,9 @@ def test_main_pca_sklearn_allows_one_component(
             "pca",
             "--snp-path",
             str(vcf_path),
-            "--fig-path",
+            "--plot",
             str(fig_path),
-            "--npy-path",
+            "--components",
             str(npy_path),
             "--backend",
             "sklearn",
@@ -160,9 +158,9 @@ def test_main_pca_sklearn_smoke_with_pgen_auto_reader(
             "pca",
             "--snp-path",
             str(pgen_path),
-            "--fig-path",
+            "--plot",
             str(fig_path),
-            "--npy-path",
+            "--components",
             str(npy_path),
             "--backend",
             "sklearn",
@@ -317,3 +315,56 @@ def test_main_help_flag_prints_help_and_exits_0(
     assert "usage:" in captured.out
     assert "admixture-map" in captured.out
     assert "gwas" in captured.out
+    assert "simulate" in captured.out
+    assert re.search(r"https://docs\.snputils\.org\b", captured.out)
+
+
+def test_main_version_flag_prints_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["snputils", "--version"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("snputils ")
+
+
+def test_main_version_subcommand_prints_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["snputils", "version"])
+
+    assert main() == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("snputils ")
+
+
+def test_projection_cli_flags_are_specific_and_short(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["snputils", "mdpca", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "--coords" in captured.out
+    assert "--embedding-path" not in captured.out
+
+    monkeypatch.setattr(sys, "argv", ["snputils", "pca", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "--coords" in captured.out
+    assert "--plot" in captured.out
+    assert "--components" in captured.out
+    assert "--embedding-path" not in captured.out
+    assert "--output-path" not in captured.out
+    assert "--components-path" not in captured.out

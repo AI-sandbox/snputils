@@ -569,7 +569,7 @@ class mdPCA:
         Retrieve `X_new_`.
 
         Returns:
-            array of shape (n_samples, n_components): 
+            array: 
                 The transformed SNP data projected onto the `n_components` principal components.
                 ``n_haplotypes_`` is the number of haplotypes, potentially reduced if filtering is applied 
                 (`min_percent_snps > 0`). For diploid individuals without filtering, the shape is 
@@ -642,7 +642,7 @@ class mdPCA:
         Retrieve `variants_id_`.
 
         Returns:
-            array of shape (n_snp,): 
+            array: 
                 An array containing unique identifiers (IDs) for each SNP,
                 potentially reduced if there are SNPs not present in the `laiobj`.
                 The format will depend on `rsid_or_chrompos`.
@@ -671,7 +671,7 @@ class mdPCA:
     @property
     def n_samples(self) -> Optional[int]:
         """
-        Retrieve `n_samples`.
+        Retrieve ``n_samples``.
 
         Returns:
             int:
@@ -1070,7 +1070,7 @@ class mdPCA:
                 If None, defaults to `self.average_strands`.
 
         Returns:
-            array of shape (n_samples, n_components): 
+            array: 
                 The transformed SNP data projected onto the `n_components` principal components, stored in `self.X_new_`.
         """
         if snpobj is None:

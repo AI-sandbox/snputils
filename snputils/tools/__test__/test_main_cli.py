@@ -1,4 +1,5 @@
 import builtins
+import re
 import sys
 from pathlib import Path
 
@@ -315,10 +316,7 @@ def test_main_help_flag_prints_help_and_exits_0(
     assert "admixture-map" in captured.out
     assert "gwas" in captured.out
     assert "simulate" in captured.out
-    assert any(
-        word == "https://docs.snputils.org"
-        for word in captured.out.split()
-    )
+    assert re.search(r"https://docs\.snputils\.org\b", captured.out)
 
 
 def test_main_version_flag_prints_version(

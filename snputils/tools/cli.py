@@ -79,7 +79,7 @@ def _run_mdpca(args: argparse.Namespace) -> int:
         save_masks=args.save_masks,
         load_masks=args.load_masks,
         masks_file=args.masks_file,
-        embedding_table_path=args.embedding_table_path,
+        embedding_table_path=args.coords,
         covariance_matrix_file=args.covariance_matrix_file,
         n_components=args.n_components,
         rsid_or_chrompos=args.rsid_or_chrompos,
@@ -125,7 +125,7 @@ def _run_maasmds(args: argparse.Namespace) -> int:
         distance_type=args.distance_type,
         n_components=args.n_components,
         rsid_or_chrompos=args.rsid_or_chrompos,
-        embedding_table_path=args.embedding_table_path,
+        embedding_table_path=args.coords,
     )
     return 0
 
@@ -183,25 +183,25 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to genotype input (VCF, BED, or PGEN fileset).",
     )
     parser.add_argument(
-        "--fig-path",
-        dest="fig_path",
+        "--plot",
+        dest="plot",
         required=True,
         type=str,
         help="Path to save the PCA scatter plot (.pdf / .svg / .png, ...; vector formats use rasterized points at 300 dpi by default).",
     )
     parser.add_argument(
-        "--embedding-tsv-path",
-        dest="embedding_tsv_path",
+        "--coords",
+        dest="coords",
         default=None,
         type=str,
         help="Optional path to write PC coordinates as TSV/CSV (see snputils.processing.dimred_tabular).",
     )
     parser.add_argument(
-        "--npy-path",
-        dest="npy_path",
-        required=True,
+        "--components",
+        dest="components",
+        default=None,
         type=str,
-        help="Path to save PCA components as a .npy file.",
+        help="Optional path to save PCA components as a .npy file.",
     )
     parser.add_argument(
         "--backend",
@@ -476,7 +476,7 @@ def _add_dimred_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lai-path", required=True, help="Path to MSP/local ancestry input. For maasmds, pass comma-separated paths matching --snp-path.")
     parser.add_argument("--labels-file", required=True, help="TSV labels file with indID and label columns.")
     parser.add_argument("--ancestry", required=True, help="Ancestry index or ancestry-map label to analyze.")
-    parser.add_argument("--embedding-table-path", required=True, help="Output TSV/CSV path for coordinates and row metadata.")
+    parser.add_argument("--coords", required=True, help="Output TSV/CSV path for coordinates and row metadata.")
     parser.add_argument("--n-components", type=_positive_int, default=2, help="Number of dimensions/components to compute.")
     parser.add_argument("--unmasked", action="store_true", help="Use unmasked genotypes instead of ancestry-specific masking.")
     parser.add_argument("--average-strands", action="store_true", help="Average each individual's two haplotypes.")

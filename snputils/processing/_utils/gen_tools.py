@@ -206,7 +206,16 @@ def process_laiobj(laiobj, snpobj):
 
     if snpobj.calldata_lai is not None:
         logging.info("Using pre-populated calldata_lai from SNPObject")
-        return snpobj.calldata_lai
+        cached = snpobj.calldata_lai
+        # Ensure the cached array is 2-D (n_snps, n_haplotypes).
+        # mask_calldata_gt requires the flat 2-D layout.
+        if cached.ndim == 3:
+            n_snps_c, n_samples_c, ploidy_c = cached.shape
+            cached = cached.reshape(n_snps_c, n_samples_c * ploidy_c)
+            logging.info(
+                "Reshaped pre-populated calldata_lai from 3-D to 2-D: %s", cached.shape
+            )
+        return cached
 
     if getattr(laiobj, 'physical_pos', None) is None and getattr(laiobj, 'chromosomes', None) is None:
         if laiobj.lai.shape[0] != n_snps:

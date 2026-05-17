@@ -30,7 +30,7 @@ def _iter_snpobject_chunks(snpobj: Any, chunk_size: int) -> Iterator[Any]:
     for start in range(0, n_snps, int(chunk_size)):
         stop = min(start + int(chunk_size), n_snps)
         yield SNPObject(
-            calldata_gt=_slice_variant_axis(snpobj.calldata_gt, start, stop),
+            genotypes=_slice_variant_axis(snpobj.genotypes, start, stop),
             samples=None if snpobj.samples is None else np.asarray(snpobj.samples),
             variants_ref=_slice_variant_axis(snpobj.variants_ref, start, stop),
             variants_alt=_slice_variant_axis(snpobj.variants_alt, start, stop),
@@ -376,12 +376,12 @@ def allele_freq_stream(
     counts_parts: List[np.ndarray] = []
 
     for chunk in chunk_iter:
-        if chunk is None or getattr(chunk, "calldata_gt", None) is None:
+        if chunk is None or getattr(chunk, "genotypes", None) is None:
             continue
 
-        gt_chunk = np.asarray(chunk.calldata_gt)
+        gt_chunk = np.asarray(chunk.genotypes)
         if gt_chunk.ndim not in (2, 3):
-            raise ValueError("'calldata_gt' must be 2D or 3D array")
+            raise ValueError("'genotypes' must be 2D or 3D array")
 
         n_samples = gt_chunk.shape[1]
         if n_samples_ref is None:
@@ -394,7 +394,7 @@ def allele_freq_stream(
                     labels = labels.ravel()
                 if labels.shape[0] != n_samples_ref:
                     raise ValueError(
-                        "'sample_labels' must have length equal to the number of samples in `calldata_gt`."
+                        "'sample_labels' must have length equal to the number of samples in `genotypes`."
                     )
         elif n_samples != n_samples_ref:
             raise ValueError("All chunks must have the same number of samples.")
@@ -428,7 +428,7 @@ def allele_freq_stream(
             )
 
         afs_chunk, counts_chunk, pops = aggregate_pop_allele_freq(
-            calldata_gt=gt_chunk,
+            genotypes=gt_chunk,
             sample_labels=labels,
             ancestry=ancestry,
             calldata_lai=calldata_lai,

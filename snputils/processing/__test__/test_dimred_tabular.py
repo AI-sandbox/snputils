@@ -49,7 +49,7 @@ def test_pca_row_haplotype_ids_3d_two_rows_per_sample():
     # (n_snps, n_samples, 2) as SNPObject stores
     gt = np.zeros((3, 2, 2))
     samples = np.array(["x", "y"], dtype=object)
-    snp = SNPObject(calldata_gt=gt, samples=samples)
+    snp = SNPObject(genotypes=gt, samples=samples)
     out = pca_row_haplotype_ids(snp, average_strands=False)
     assert len(out) == 4
     assert out[0].startswith("x|") and out[1].startswith("x|")

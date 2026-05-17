@@ -601,7 +601,7 @@ class VCFReader(SNPBaseReader):
     def _make_snpobject(
         self,
         *,
-        calldata_gt: np.ndarray,
+        genotypes: np.ndarray,
         sample_columns: Sequence[str],
         arrays: dict[str, np.ndarray],
     ) -> SNPObject:
@@ -612,7 +612,7 @@ class VCFReader(SNPBaseReader):
             else np.array([])
         )
         return SNPObject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             samples=np.asarray(sample_columns),
             variants_ref=arrays.get("REF", np.array([])),
             variants_alt=arrays.get("ALT", np.array([])),
@@ -650,7 +650,7 @@ class VCFReader(SNPBaseReader):
                 if n_records == 0:
                     gt_shape = (0, len(sample_columns)) if sum_strands else (0, len(sample_columns), 2)
                     return self._make_snpobject(
-                        calldata_gt=np.empty(gt_shape, dtype=np.int8) if sample_columns else np.array([], dtype=np.int8),
+                        genotypes=np.empty(gt_shape, dtype=np.int8) if sample_columns else np.array([], dtype=np.int8),
                         sample_columns=sample_columns,
                         arrays={},
                     )
@@ -666,11 +666,11 @@ class VCFReader(SNPBaseReader):
 
                 n_selected = len(sample_columns)
                 if n_selected == 0:
-                    calldata_gt = np.array([], dtype=np.int8)
+                    genotypes = np.array([], dtype=np.int8)
                 elif sum_strands:
-                    calldata_gt = np.empty((n_records, n_selected), dtype=np.int8)
+                    genotypes = np.empty((n_records, n_selected), dtype=np.int8)
                 else:
-                    calldata_gt = np.empty((n_records, n_selected, 2), dtype=np.int8)
+                    genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
 
                 arrays: dict[str, np.ndarray] = {}
                 dynamic_arrays: dict[str, Optional[np.ndarray]] = {}
@@ -711,10 +711,10 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            calldata_gt[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = maternal + paternal
                         else:
-                            calldata_gt[lo:hi, :, 0] = maternal
-                            calldata_gt[lo:hi, :, 1] = paternal
+                            genotypes[lo:hi, :, 0] = maternal
+                            genotypes[lo:hi, :, 1] = paternal
 
                     if "POS" in include:
                         arrays["POS"][lo:hi] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
@@ -806,7 +806,7 @@ class VCFReader(SNPBaseReader):
                     arrays[field] = _finalize_string_array(dynamic_arrays, constants, field, n_records)
 
                 return self._make_snpobject(
-                    calldata_gt=calldata_gt,
+                    genotypes=genotypes,
                     sample_columns=sample_columns,
                     arrays=arrays,
                 )
@@ -949,13 +949,13 @@ class VCFReader(SNPBaseReader):
                     break
 
         if n_selected == 0:
-            calldata_gt = np.array([], dtype=np.int8)
+            genotypes = np.array([], dtype=np.int8)
         elif gt_chunks:
-            calldata_gt = np.concatenate(gt_chunks, axis=0)
+            genotypes = np.concatenate(gt_chunks, axis=0)
         elif sum_strands:
-            calldata_gt = np.empty((0, n_selected), dtype=np.int8)
+            genotypes = np.empty((0, n_selected), dtype=np.int8)
         else:
-            calldata_gt = np.empty((0, n_selected, 2), dtype=np.int8)
+            genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
 
         arrays = {
             field: np.concatenate(chunks, axis=0)
@@ -963,7 +963,7 @@ class VCFReader(SNPBaseReader):
             if chunks
         }
         return self._make_snpobject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             sample_columns=sample_columns,
             arrays=arrays,
         )
@@ -1125,13 +1125,13 @@ class VCFReader(SNPBaseReader):
                     break
 
         if n_selected == 0:
-            calldata_gt = np.array([], dtype=np.int8)
+            genotypes = np.array([], dtype=np.int8)
         elif gt_chunks:
-            calldata_gt = np.concatenate(gt_chunks, axis=0)
+            genotypes = np.concatenate(gt_chunks, axis=0)
         elif sum_strands:
-            calldata_gt = np.empty((0, n_selected), dtype=np.int8)
+            genotypes = np.empty((0, n_selected), dtype=np.int8)
         else:
-            calldata_gt = np.empty((0, n_selected, 2), dtype=np.int8)
+            genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
 
         arrays = {
             field: np.concatenate(chunks, axis=0)
@@ -1139,7 +1139,7 @@ class VCFReader(SNPBaseReader):
             if chunks
         }
         return self._make_snpobject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             sample_columns=sample_columns,
             arrays=arrays,
         )
@@ -1162,15 +1162,15 @@ class VCFReader(SNPBaseReader):
         n_records = _count_vcf_records(self._filename, region_filter=region_filter, separator="\t")
         n_selected = len(sample_columns)
         if n_selected == 0:
-            calldata_gt = np.array([], dtype=np.int8)
+            genotypes = np.array([], dtype=np.int8)
         elif sum_strands:
-            calldata_gt = np.empty((n_records, n_selected), dtype=np.int8)
+            genotypes = np.empty((n_records, n_selected), dtype=np.int8)
         else:
-            calldata_gt = np.empty((n_records, n_selected, 2), dtype=np.int8)
+            genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
 
         if n_records == 0:
             return self._make_snpobject(
-                calldata_gt=calldata_gt,
+                genotypes=genotypes,
                 sample_columns=sample_columns,
                 arrays={},
             )
@@ -1186,7 +1186,7 @@ class VCFReader(SNPBaseReader):
             first_line = file.readline()
             if not first_line:
                 return self._make_snpobject(
-                    calldata_gt=calldata_gt,
+                    genotypes=genotypes,
                     sample_columns=sample_columns,
                         arrays={},
                     )
@@ -1297,10 +1297,10 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            calldata_gt[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = maternal + paternal
                         else:
-                            calldata_gt[lo:hi, :, 0] = maternal
-                            calldata_gt[lo:hi, :, 1] = paternal
+                            genotypes[lo:hi, :, 0] = maternal
+                            genotypes[lo:hi, :, 1] = paternal
 
                     if "POS" in include:
                         arrays["POS"][lo:hi] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
@@ -1399,7 +1399,7 @@ class VCFReader(SNPBaseReader):
             arrays[field] = _finalize_string_array(dynamic_arrays, constants, field, n_records)
 
         return self._make_snpobject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             sample_columns=sample_columns,
             arrays=arrays,
         )
@@ -1429,11 +1429,11 @@ class VCFReader(SNPBaseReader):
 
         n_selected = len(sample_columns)
         if n_selected == 0:
-            calldata_gt = np.array([], dtype=np.int8)
+            genotypes = np.array([], dtype=np.int8)
         elif sum_strands:
-            calldata_gt = np.empty((n_records, n_selected), dtype=np.int8)
+            genotypes = np.empty((n_records, n_selected), dtype=np.int8)
         else:
-            calldata_gt = np.empty((n_records, n_selected, 2), dtype=np.int8)
+            genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
 
         filter_columns = []
         if region_filter is not None:
@@ -1468,7 +1468,7 @@ class VCFReader(SNPBaseReader):
             if height == 0:
                 continue
             if n_selected:
-                calldata_gt[offset:offset + height] = _parse_gt_sample_matrix(
+                genotypes[offset:offset + height] = _parse_gt_sample_matrix(
                     frame[sample_columns].to_numpy(dtype=object),
                     frame["FORMAT"].to_numpy(dtype=object),
                     sum_strands=bool(sum_strands),
@@ -1484,10 +1484,10 @@ class VCFReader(SNPBaseReader):
         if offset != n_records:
             arrays = {field: values[:offset] for field, values in arrays.items()}
             if n_selected:
-                calldata_gt = calldata_gt[:offset]
+                genotypes = genotypes[:offset]
 
         return self._make_snpobject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             sample_columns=sample_columns,
             arrays=arrays,
         )
@@ -1508,7 +1508,7 @@ class VCFReader(SNPBaseReader):
         ``POS``, ``ID``, ``REF``, ``ALT``, ``QUAL``, and ``FILTER``, plus all
         sample genotype columns. Genotypes are read from the ``GT`` FORMAT
         field and returned as an ``int8`` array. With ``sum_strands=False``,
-        ``calldata_gt`` has shape ``(n_variants, n_samples, 2)``; with
+        ``genotypes`` has shape ``(n_variants, n_samples, 2)``; with
         ``sum_strands=True``, the two alleles are summed into shape
         ``(n_variants, n_samples)``.
 
@@ -1528,7 +1528,7 @@ class VCFReader(SNPBaseReader):
                 sample indexes. If omitted, all samples are read; pass an empty
                 sequence to read variant metadata without genotypes.
             sum_strands: If ``True``, sum the two diploid alleles per sample and
-                return dosages in ``calldata_gt``. If ``False``, keep the two
+                return dosages in ``genotypes``. If ``False``, keep the two
                 allele columns separate.
             separator: Optional column separator. If omitted, the separator is
                 detected from the VCF header. Tab-delimited files use optimized
@@ -1707,7 +1707,7 @@ class VCFReader(SNPBaseReader):
             if "INFO" in include:
                 arrays["INFO"] = np.asarray(records["info"], dtype=object)
             snpobj = self._make_snpobject(
-                calldata_gt=gt,
+                genotypes=gt,
                 sample_columns=sample_columns,
                 arrays=arrays,
             )
@@ -1951,7 +1951,7 @@ class VCFReaderPolars(SNPBaseReader):
             chrom_column = None
 
         return SNPObject(
-            calldata_gt=genotypes,
+            genotypes=genotypes,
             samples=np.asarray(sample_columns),
             variants_ref=vcf["REF"].to_numpy() if "REF" in field_columns else np.array([]),
             variants_alt=vcf["ALT"].to_numpy() if "ALT" in field_columns else np.array([]),

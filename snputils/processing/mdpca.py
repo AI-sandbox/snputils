@@ -12,7 +12,7 @@ from sklearn.decomposition import TruncatedSVD
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from ._utils.gen_tools import process_calldata_gt, process_labels_weights
+from ._utils.gen_tools import process_genotypes, process_labels_weights
 from ._utils.iterative_svd import IterativeSVD
 
 
@@ -1089,7 +1089,7 @@ class mdPCA:
             mask, variants_id, haplotypes, _, weights = self._load_mask_file()
         else:
             # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
-            mask, variants_id, haplotypes, _ = process_calldata_gt(
+            mask, variants_id, haplotypes, _ = process_genotypes(
                 self.snpobj,
                 self.laiobj,
                 self.ancestry,

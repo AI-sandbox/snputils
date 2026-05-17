@@ -8,13 +8,13 @@ MAX_VARIANTS = 10_000
 
 
 def _concat_chunks(chunks):
-    calldata_gt = np.concatenate([chunk.calldata_gt for chunk in chunks], axis=0)
+    genotypes = np.concatenate([chunk.genotypes for chunk in chunks], axis=0)
     variants_id = np.concatenate([chunk.variants_id for chunk in chunks], axis=0)
     variants_pos = np.concatenate([chunk.variants_pos for chunk in chunks], axis=0)
     variants_ref = np.concatenate([chunk.variants_ref for chunk in chunks], axis=0)
     variants_alt = np.concatenate([chunk.variants_alt for chunk in chunks], axis=0)
     variants_chrom = np.concatenate([chunk.variants_chrom for chunk in chunks], axis=0)
-    return calldata_gt, variants_id, variants_pos, variants_ref, variants_alt, variants_chrom
+    return genotypes, variants_id, variants_pos, variants_ref, variants_alt, variants_chrom
 
 
 def _first_n_variant_idxs(reader, max_variants: int = MAX_VARIANTS) -> np.ndarray:
@@ -44,7 +44,7 @@ def test_bed_iter_read_reconstructs_eager_object(data_path):
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -63,7 +63,7 @@ def test_bed_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_pa
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -86,7 +86,7 @@ def test_bed_iter_read_matches_eager_for_unsorted_duplicate_variant_ids(data_pat
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -104,7 +104,7 @@ def test_pgen_iter_read_reconstructs_subset_eager_object(data_path):
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -123,7 +123,7 @@ def test_pgen_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_p
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -159,7 +159,7 @@ def test_vcf_polars_iter_read_reconstructs_eager_object(data_path, tmp_path):
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager.calldata_gt)
+    np.testing.assert_array_equal(gt, eager.genotypes)
     np.testing.assert_array_equal(var_id, eager.variants_id)
     np.testing.assert_array_equal(var_pos, eager.variants_pos)
     np.testing.assert_array_equal(var_ref, eager.variants_ref)
@@ -193,7 +193,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_ids(data_path
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)
@@ -227,7 +227,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_idxs(data_pat
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
 
-    np.testing.assert_array_equal(gt, eager_subset.calldata_gt)
+    np.testing.assert_array_equal(gt, eager_subset.genotypes)
     np.testing.assert_array_equal(var_id, eager_subset.variants_id)
     np.testing.assert_array_equal(var_pos, eager_subset.variants_pos)
     np.testing.assert_array_equal(var_ref, eager_subset.variants_ref)

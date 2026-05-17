@@ -363,22 +363,22 @@ def _iter_snp_chunks(
     aligned_samples: Sequence[str],
 ) -> Iterator[Dict[str, Optional[np.ndarray]]]:
     if isinstance(snp_reader, SNPObject):
-        if snp_reader.calldata_gt is None:
+        if snp_reader.genotypes is None:
             return
-        gt = np.asarray(snp_reader.calldata_gt)
+        gt = np.asarray(snp_reader.genotypes)
         if gt.ndim not in (2, 3):
-            raise ValueError("GWAS expects SNPObject.calldata_gt with shape (variants, samples[, strands]).")
+            raise ValueError("GWAS expects SNPObject.genotypes with shape (variants, samples[, strands]).")
 
         sample_indices = np.asarray(sample_indices, dtype=np.int64)
         n_variants = int(gt.shape[0])
         for start in range(0, n_variants, int(chunk_size)):
             stop = min(start + int(chunk_size), n_variants)
             if gt.ndim == 2:
-                calldata_gt = gt[start:stop, :][:, sample_indices]
+                genotypes = gt[start:stop, :][:, sample_indices]
             else:
-                calldata_gt = gt[start:stop, :, :][:, sample_indices, :]
+                genotypes = gt[start:stop, :, :][:, sample_indices, :]
             yield {
-                "calldata_gt": calldata_gt,
+                "genotypes": genotypes,
                 "variants_chrom": None if snp_reader.variants_chrom is None else snp_reader.variants_chrom[start:stop],
                 "variants_pos": None if snp_reader.variants_pos is None else snp_reader.variants_pos[start:stop],
                 "variants_id": None if snp_reader.variants_id is None else snp_reader.variants_id[start:stop],
@@ -395,7 +395,7 @@ def _iter_snp_chunks(
             chunk_size=chunk_size,
         ):
             yield {
-                "calldata_gt": chunk.calldata_gt,
+                "genotypes": chunk.genotypes,
                 "variants_chrom": chunk.variants_chrom,
                 "variants_pos": chunk.variants_pos,
                 "variants_id": chunk.variants_id,
@@ -412,7 +412,7 @@ def _iter_snp_chunks(
             chunk_size=chunk_size,
         ):
             yield {
-                "calldata_gt": chunk.calldata_gt,
+                "genotypes": chunk.genotypes,
                 "variants_chrom": chunk.variants_chrom,
                 "variants_pos": chunk.variants_pos,
                 "variants_id": chunk.variants_id,
@@ -434,13 +434,13 @@ def _iter_snp_chunks(
             samples=list(aligned_samples),
             sum_strands=True,
         )
-        if full.calldata_gt is None:
+        if full.genotypes is None:
             return
-        n_variants = int(full.calldata_gt.shape[0])
+        n_variants = int(full.genotypes.shape[0])
         for start in range(0, n_variants, int(chunk_size)):
             stop = min(start + int(chunk_size), n_variants)
             yield {
-                "calldata_gt": full.calldata_gt[start:stop],
+                "genotypes": full.genotypes[start:stop],
                 "variants_chrom": None if full.variants_chrom is None else full.variants_chrom[start:stop],
                 "variants_pos": None if full.variants_pos is None else full.variants_pos[start:stop],
                 "variants_id": None if full.variants_id is None else full.variants_id[start:stop],
@@ -549,7 +549,7 @@ def _extract_chunk_arrays(
     chunk: Dict[str, Optional[np.ndarray]],
     variant_offset: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    gt = chunk.get("calldata_gt")
+    gt = chunk.get("genotypes")
     if gt is None:
         raise ValueError("Missing genotype calls in GWAS chunk.")
 

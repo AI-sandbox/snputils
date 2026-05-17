@@ -204,7 +204,7 @@ class BEDReader(SNPBaseReader):
             sex_col = fam.get_column("Sex code").to_numpy()
 
         snpobj = SNPObject(
-            calldata_gt=genotypes if "GT" in fields else None,
+            genotypes=genotypes if "GT" in fields else None,
             samples=fam.get_column("IID").to_numpy() if "IID" in fields and "IID" in fam.columns else None,
             sample_fid=fid_col,
             sample_sex=sex_col,

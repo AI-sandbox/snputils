@@ -25,7 +25,7 @@ class SNPObject:
     """
     def __init__(
         self,
-        calldata_gt: Optional[np.ndarray] = None,
+        genotypes: Optional[np.ndarray] = None,
         samples: Optional[np.ndarray] = None,
         variants_ref: Optional[np.ndarray] = None,
         variants_alt: Optional[np.ndarray] = None,
@@ -40,10 +40,11 @@ class SNPObject:
         ancestry_map: Optional[Dict[str, str]] = None,
         sample_fid: Optional[np.ndarray] = None,
         sample_sex: Optional[np.ndarray] = None,
+        calldata_gt: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
-            calldata_gt (array, optional): 
+            genotypes (array, optional): 
                 An array containing genotype data for each sample. This array can be either 2D with shape 
                 `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
@@ -78,8 +79,15 @@ class SNPObject:
                 `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
             ancestry_map (dict of str to str, optional): 
                 A dictionary mapping ancestry codes to region names.
+            calldata_gt (array, optional):
+                Backward-compatible alias for `genotypes`.
         """
-        self.__calldata_gt = calldata_gt
+        if genotypes is not None and calldata_gt is not None:
+            raise ValueError("Specify only one of `genotypes` or `calldata_gt`, not both.")
+        if genotypes is None and calldata_gt is not None:
+            genotypes = calldata_gt
+
+        self.__genotypes = genotypes
         self.__samples = samples
         self.__variants_ref = variants_ref
         self.__variants_alt = variants_alt
@@ -123,7 +131,7 @@ class SNPObject:
             shape=self.shape,
             n_snps=self._n_snps_or_none(),
             n_samples=self._n_samples_or_none(),
-            calldata_gt_shape=array_shape(self.__calldata_gt),
+            genotypes_shape=array_shape(self.__genotypes),
             calldata_lai_shape=array_shape(self.__calldata_lai),
             has_variant_metadata=any(
                 attr is not None
@@ -158,9 +166,9 @@ class SNPObject:
             return None
 
     @property
-    def calldata_gt(self) -> np.ndarray:
+    def genotypes(self) -> np.ndarray:
         """
-        Retrieve `calldata_gt`.
+        Retrieve `genotypes`.
 
         Returns:
             array: 
@@ -168,14 +176,28 @@ class SNPObject:
                 `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
         """
-        return self.__calldata_gt
+        return self.__genotypes
+
+    @genotypes.setter
+    def genotypes(self, x: np.ndarray):
+        """
+        Update `genotypes`.
+        """
+        self.__genotypes = x
+
+    @property
+    def calldata_gt(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `genotypes` via legacy alias.
+        """
+        return self.__genotypes
 
     @calldata_gt.setter
     def calldata_gt(self, x: np.ndarray):
         """
-        Update `calldata_gt`.
+        Update `genotypes` via legacy alias.
         """
-        self.__calldata_gt = x
+        self.__genotypes = x
 
     @property
     def samples(self) -> Optional[np.ndarray]:
@@ -446,8 +468,8 @@ class SNPObject:
         """
         if self.__samples is not None:
             return len(self.__samples)
-        elif self.__calldata_gt is not None:
-            return self.__calldata_gt.shape[1]
+        elif self.__genotypes is not None:
+            return self.__genotypes.shape[1]
         elif self.__calldata_lai is not None:
             if self.__calldata_lai.ndim == 2:
                 return self.__calldata_lai.shape[1] // 2
@@ -466,7 +488,7 @@ class SNPObject:
         """
         # List of attributes that can indicate the number of SNPs
         potential_attributes = [
-            self.__calldata_gt,
+            self.__genotypes,
             self.__variants_ref,
             self.__variants_alt,
             self.__variants_chrom,
@@ -519,11 +541,11 @@ class SNPObject:
         Retrieve the primary data shape.
 
         Returns:
-            tuple: The shape of `calldata_gt` when present, otherwise the shape
+            tuple: The shape of `genotypes` when present, otherwise the shape
             of `calldata_lai`. If only metadata is available, returns
             `(n_snps, n_samples)` with unknown dimensions represented as None.
         """
-        gt_shape = array_shape(self.__calldata_gt)
+        gt_shape = array_shape(self.__genotypes)
         if gt_shape is not None:
             return gt_shape
 
@@ -558,14 +580,14 @@ class SNPObject:
         Returns:
             bool: 
                 True if the maternal and paternal strands have been summed together, which is indicated by 
-                `calldata_gt` having shape `(n_samples, n_snps)`. False if the strands are stored separately, 
-                indicated by `calldata_gt` having shape `(n_samples, n_snps, 2)`.
+                `genotypes` having shape `(n_samples, n_snps)`. False if the strands are stored separately, 
+                indicated by `genotypes` having shape `(n_samples, n_snps, 2)`.
         """
-        if self.calldata_gt is None:
-            warnings.warn("Genotype data `calldata_gt` is None.")
+        if self.genotypes is None:
+            warnings.warn("Genotype data `genotypes` is None.")
             return None
         
-        return self.calldata_gt.ndim == 2
+        return self.genotypes.ndim == 2
 
     def copy(self) -> SNPObject:
         """
@@ -598,7 +620,7 @@ class SNPObject:
         as_dataframe: bool = False,
     ) -> Any:
         """
-        Compute per-SNP alternate allele frequencies from `calldata_gt`.
+        Compute per-SNP alternate allele frequencies from `genotypes`.
 
         Args:
             sample_labels (sequence, optional):
@@ -620,12 +642,12 @@ class SNPObject:
             Frequencies as a NumPy array (or DataFrame if `as_dataframe=True`).
             If `return_counts=True`, returns `(freq, counts)`.
         """
-        if self.calldata_gt is None:
-            raise ValueError("Genotype data `calldata_gt` is None.")
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
 
-        gt = np.asarray(self.calldata_gt)
+        gt = np.asarray(self.genotypes)
         if gt.ndim not in (2, 3):
-            raise ValueError("'calldata_gt' must be 2D or 3D array")
+            raise ValueError("'genotypes' must be 2D or 3D array")
 
         n_samples = gt.shape[1]
 
@@ -638,7 +660,7 @@ class SNPObject:
                 labels = labels.ravel()
             if labels.shape[0] != n_samples:
                 raise ValueError(
-                    "'sample_labels' must have length equal to the number of samples in `calldata_gt`."
+                    "'sample_labels' must have length equal to the number of samples in `genotypes`."
                 )
 
         calldata_lai = None
@@ -659,7 +681,7 @@ class SNPObject:
                 )
 
         afs, counts, pops = aggregate_pop_allele_freq(
-            calldata_gt=gt,
+            genotypes=gt,
             sample_labels=labels,
             ancestry=ancestry,
             calldata_lai=calldata_lai,
@@ -701,20 +723,20 @@ class SNPObject:
                 A new `SNPObject` with summed strands if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
-        if self.calldata_gt is None:
-            warnings.warn("Genotype data `calldata_gt` is None.")
+        if self.genotypes is None:
+            warnings.warn("Genotype data `genotypes` is None.")
             return None if not inplace else self
 
         if self.are_strands_summed:
-            warnings.warn("Genotype data `calldata_gt` is already summed.")
+            warnings.warn("Genotype data `genotypes` is already summed.")
             return self if inplace else self.copy()
         
         if inplace:
-            self.calldata_gt = self.calldata_gt.sum(axis=2, dtype=np.int8)
+            self.genotypes = self.genotypes.sum(axis=2, dtype=np.int8)
             return self
         else:
             snpobj = self.copy()
-            snpobj.calldata_gt = self.calldata_gt.sum(axis=2, dtype=np.int8)
+            snpobj.genotypes = self.genotypes.sum(axis=2, dtype=np.int8)
             return snpobj
 
     def filter_variants(
@@ -729,7 +751,7 @@ class SNPObject:
         """
         Filter variants based on chromosome names, variant positions, indexes, or a boolean mask.
 
-        This method updates the `calldata_gt`, `variants_ref`, `variants_alt`, 
+        This method updates the `genotypes`, `variants_ref`, `variants_alt`, 
         `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`,  
         `variants_qual`, and `lai` attributes to include or exclude the specified variants. The filtering 
         criteria can be based on chromosome names, variant positions, or indexes. If multiple 
@@ -847,7 +869,7 @@ class SNPObject:
 
         # Define keys to filter
         keys = [
-            'calldata_gt', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
+            'genotypes', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
             'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai'
         ]
 
@@ -918,26 +940,26 @@ class SNPObject:
         """
         Keep variants with no missing genotype calls across all samples.
 
-        Missing calls are represented as negative values in ``calldata_gt``.
+        Missing calls are represented as negative values in ``genotypes``.
         """
-        if self.calldata_gt is None:
-            raise ValueError("Genotype data `calldata_gt` is None.")
-        gt = np.asarray(self.calldata_gt)
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+        gt = np.asarray(self.genotypes)
         if gt.ndim == 2:
             mask = np.all(gt >= 0, axis=1)
         elif gt.ndim == 3:
             mask = np.all(gt >= 0, axis=(1, 2))
         else:
-            raise ValueError("'calldata_gt' must be a 2D or 3D array.")
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
     def filter_polymorphic_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
         Keep variants with at least two observed genotype dosages among called samples.
         """
-        if self.calldata_gt is None:
-            raise ValueError("Genotype data `calldata_gt` is None.")
-        gt = np.asarray(self.calldata_gt)
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+        gt = np.asarray(self.genotypes)
         if gt.ndim == 3:
             called = np.all(gt >= 0, axis=2)
             dosages = gt.sum(axis=2, dtype=np.int16)
@@ -945,7 +967,7 @@ class SNPObject:
             called = gt >= 0
             dosages = gt
         else:
-            raise ValueError("'calldata_gt' must be a 2D or 3D array.")
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
 
         mask = np.zeros(gt.shape[0], dtype=bool)
         for i in range(gt.shape[0]):
@@ -964,7 +986,7 @@ class SNPObject:
         """
         Filter samples based on specified names or indexes.
 
-        This method updates the `samples` and `calldata_gt` attributes to include or exclude the specified 
+        This method updates the `samples` and `genotypes` attributes to include or exclude the specified 
         samples. The order of the samples is preserved. Set `reorder=True` to match the ordering of the
         provided `samples` and/or `indexes` lists when including.
 
@@ -1097,7 +1119,7 @@ class SNPObject:
         )
         data_updates = {
             key: subset_sample_axis(key, self[key])
-            for key in ['calldata_gt', 'calldata_lai']
+            for key in ['genotypes', 'calldata_lai']
             if self[key] is not None
         }
 
@@ -1333,14 +1355,14 @@ class SNPObject:
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
-        Replace missing values in the `calldata_gt` attribute.
+        Replace missing values in the `genotypes` attribute.
 
-        This method identifies missing values in 'calldata_gt' and replaces them with a specified 
+        This method identifies missing values in 'genotypes' and replaces them with a specified 
         value. By default, it replaces occurrences of `-1` (often used to signify missing data) with `'.'`.
 
         Args:
             before (int, float, or str, default=-1): 
-                The current representation of missing values in `calldata_gt`. Common values might be -1, '.', or NaN.
+                The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'): 
                 The value that will replace `before`. Default is '.'.
@@ -1353,13 +1375,13 @@ class SNPObject:
                 A new `SNPObject` with the renamed missing values if `inplace=False`. 
                 If `inplace=True`, modifies `self` in place and returns None.
         """
-        # Rename missing values in the `calldata_gt` attribute based on inplace flag
+        # Rename missing values in the `genotypes` attribute based on inplace flag
         if inplace:
-            self['calldata_gt'] = np.where(self['calldata_gt'] == before, after, self['calldata_gt'])
+            self['genotypes'] = np.where(self['genotypes'] == before, after, self['genotypes'])
             return None
         else:
             snpobj = self.copy()
-            snpobj['calldata_gt'] = np.where(snpobj['calldata_gt'] == before, after, snpobj['calldata_gt'])
+            snpobj['genotypes'] = np.where(snpobj['genotypes'] == before, after, snpobj['genotypes'])
             return snpobj
 
     def get_common_variants_intersection(
@@ -1543,7 +1565,7 @@ class SNPObject:
         Merge `self` with `snpobj` along the sample axis.
 
         This method expects both SNPObjects to contain the same set of SNPs in the same order, 
-        then combines their genotype (`calldata_gt`) and LAI (`calldata_lai`) arrays by 
+        then combines their genotype (`genotypes`) and LAI (`calldata_lai`) arrays by 
         concatenating the sample dimension. Samples from `snpobj` are appended to those in `self`.
 
         Args:
@@ -1563,13 +1585,13 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the merged sample data.
         """
-        # Merge calldata_gt if present and compatible
-        if self.calldata_gt is not None and snpobj.calldata_gt is not None:
-            if self.calldata_gt.shape[0] != snpobj.calldata_gt.shape[0]:
+        # Merge genotypes if present and compatible
+        if self.genotypes is not None and snpobj.genotypes is not None:
+            if self.genotypes.shape[0] != snpobj.genotypes.shape[0]:
                 raise ValueError(
-                    f"Cannot merge SNPObjects: Mismatch in the number of SNPs in `calldata_gt`.\n"
-                    f"`self.calldata_gt` has {self.calldata_gt.shape[0]} SNPs, "
-                    f"while `snpobj.calldata_gt` has {snpobj.calldata_gt.shape[0]} SNPs."
+                    f"Cannot merge SNPObjects: Mismatch in the number of SNPs in `genotypes`.\n"
+                    f"`self.genotypes` has {self.genotypes.shape[0]} SNPs, "
+                    f"while `snpobj.genotypes` has {snpobj.genotypes.shape[0]} SNPs."
                 )
             if self.are_strands_summed and not snpobj.are_strands_summed:
                 raise ValueError(
@@ -1581,9 +1603,9 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
                     "Ensure both objects have the same genotype summation state before merging."
                 )
-            calldata_gt = np.concatenate([self.calldata_gt, snpobj.calldata_gt], axis=1)
+            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=1)
         else:
-            calldata_gt = None
+            genotypes = None
 
         # Merge samples if present and compatible, handling duplicates if `force_samples=True`
         merged_fid: Optional[np.ndarray] = None
@@ -1640,7 +1662,7 @@ class SNPObject:
             calldata_lai = None
 
         if inplace:
-            self.calldata_gt = calldata_gt
+            self.genotypes = genotypes
             self.calldata_lai = calldata_lai
             self.sample_fid = None
             self.sample_sex = None
@@ -1651,7 +1673,7 @@ class SNPObject:
 
         # Create and return a new SNPObject containing the merged samples
         return SNPObject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             samples=samples,
             sample_fid=merged_fid,
             sample_sex=merged_sex,
@@ -1690,13 +1712,13 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the concatenated SNP data.
         """
-        # Merge calldata_gt if present and compatible
-        if self.calldata_gt is not None and snpobj.calldata_gt is not None:
-            if self.calldata_gt.shape[1] != snpobj.calldata_gt.shape[1]:
+        # Merge genotypes if present and compatible
+        if self.genotypes is not None and snpobj.genotypes is not None:
+            if self.genotypes.shape[1] != snpobj.genotypes.shape[1]:
                 raise ValueError(
-                    f"Cannot merge SNPObjects: Mismatch in the number of samples in `calldata_gt`.\n"
-                    f"`self.calldata_gt` has {self.calldata_gt.shape[1]} samples, "
-                    f"while `snpobj.calldata_gt` has {snpobj.calldata_gt.shape[1]} samples."
+                    f"Cannot merge SNPObjects: Mismatch in the number of samples in `genotypes`.\n"
+                    f"`self.genotypes` has {self.genotypes.shape[1]} samples, "
+                    f"while `snpobj.genotypes` has {snpobj.genotypes.shape[1]} samples."
                 )
             if self.are_strands_summed and not snpobj.are_strands_summed:
                 raise ValueError(
@@ -1708,9 +1730,9 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
                     "Ensure both objects have the same genotype summation state before merging."
                 )
-            calldata_gt = np.concatenate([self.calldata_gt, snpobj.calldata_gt], axis=0)
+            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=0)
         else:
-            calldata_gt = None
+            genotypes = None
 
         if self.samples is not None and snpobj.samples is not None:
             if not np.array_equal(self.samples, snpobj.samples):
@@ -1765,7 +1787,7 @@ class SNPObject:
             calldata_lai = None
         
         if inplace:
-            self.calldata_gt = calldata_gt
+            self.genotypes = genotypes
             self.calldata_lai = calldata_lai
             self.sample_sex = merged_sample_sex
             for attr in attributes:
@@ -1774,7 +1796,7 @@ class SNPObject:
         
         # Create and return a new SNPObject containing the concatenated SNPs
         return SNPObject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             calldata_lai=calldata_lai,
             samples=self.samples,
             sample_fid=self.sample_fid,
@@ -1875,7 +1897,7 @@ class SNPObject:
 
         Correction Process: 
         - Swaps `variants_ref` and `variants_alt` alleles in `self` to align with `snpobj`.
-        - Flips `calldata_gt` values (0 becomes 1, and 1 becomes 0) to match the updated allele configuration.
+        - Flips `genotypes` values (0 becomes 1, and 1 becomes 0) to match the updated allele configuration.
 
         Args:
             snpobj (SNPObject): 
@@ -1957,13 +1979,13 @@ class SNPObject:
             if inplace:
                 self['variants_alt'][flip_idx_query] = temp_refs
                 self['variants_ref'][flip_idx_query] = temp_alts
-                self['calldata_gt'][flip_idx_query] = 1 - self['calldata_gt'][flip_idx_query]
+                self['genotypes'][flip_idx_query] = 1 - self['genotypes'][flip_idx_query]
                 return None
             else:
                 snpobj = self.copy()
                 snpobj['variants_alt'][flip_idx_query] = temp_refs
                 snpobj['variants_ref'][flip_idx_query] = temp_alts
-                snpobj['calldata_gt'][flip_idx_query] = 1 - snpobj['calldata_gt'][flip_idx_query]
+                snpobj['genotypes'][flip_idx_query] = 1 - snpobj['genotypes'][flip_idx_query]
                 return snpobj
         else:
             log.info('No variant flips found to correct.')
@@ -2025,7 +2047,7 @@ class SNPObject:
     def shuffle_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
         Randomly shuffle the positions of variants in the SNPObject, ensuring that all associated 
-        data (e.g., `calldata_gt` and variant-specific attributes) remain aligned.
+        data (e.g., `genotypes` and variant-specific attributes) remain aligned.
 
         Args:
             inplace (bool, default=False): 
@@ -2044,8 +2066,8 @@ class SNPObject:
         if inplace:
             for key in self.keys():
                 if self[key] is not None:
-                    if key == 'calldata_gt':
-                        # `calldata_gt`` has a different shape, so it's shuffled along axis 0
+                    if key == 'genotypes':
+                        # `genotypes`` has a different shape, so it's shuffled along axis 0
                         self[key] = self[key][shuffle_index, ...]
                     elif 'variant' in key:
                         # snpobj attributes are 1D arrays
@@ -2055,7 +2077,7 @@ class SNPObject:
             shuffled_snpobj = self.copy()
             for key in shuffled_snpobj.keys():
                 if shuffled_snpobj[key] is not None:
-                    if key == 'calldata_gt':
+                    if key == 'genotypes':
                         shuffled_snpobj[key] = shuffled_snpobj[key][shuffle_index, ...]
                     elif 'variant' in key:
                         shuffled_snpobj[key] = np.asarray(shuffled_snpobj[key])[shuffle_index]
@@ -2296,9 +2318,9 @@ class SNPObject:
                 Path to the file where the data will be saved. It should end with `.bed`. 
                 If the provided path does not have this extension, it will be appended.
             rename_missing_values (bool, optional):
-                If True, renames potential missing values in `calldata_gt` before writing.
+                If True, renames potential missing values in `genotypes` before writing.
             before (int, float, or str, default=-1):
-                The current representation of missing values in `calldata_gt`.
+                The current representation of missing values in `genotypes`.
             after (int, float, or str, default='.'):
                 The value that will replace `before`.
             sample_phenotype (optional):

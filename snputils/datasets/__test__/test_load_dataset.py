@@ -15,7 +15,7 @@ def _streaming_chunk(
     n_variants = len(variant_ids)
     n_samples = len(samples)
     return SNPObject(
-        calldata_gt=np.zeros((n_variants, n_samples, 2), dtype=np.int8),
+        genotypes=np.zeros((n_variants, n_samples, 2), dtype=np.int8),
         samples=np.array(samples, dtype=object),
         variants_ref=np.resize(np.array(["A", "C", "G"], dtype=object), n_variants),
         variants_alt=np.resize(np.array(["G", "T", "A"], dtype=object), n_variants),

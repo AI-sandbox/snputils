@@ -283,7 +283,7 @@ def _weighted_jackknife_ratio_from_block_sums(
 
 
 def _aggregate_to_pop_allele_freq(
-    calldata_gt: np.ndarray,
+    genotypes: np.ndarray,
     sample_labels: Sequence[str],
     *,
     ancestry: Optional[Union[str, int]] = None,
@@ -312,7 +312,7 @@ def _aggregate_to_pop_allele_freq(
             )
 
     afs, counts, pops = aggregate_pop_allele_freq(
-        calldata_gt=calldata_gt,
+        genotypes=genotypes,
         sample_labels=sample_labels,
         ancestry=ancestry,
         calldata_lai=calldata_lai,
@@ -364,7 +364,7 @@ def _prepare_inputs(
         if sample_labels is None:
             sample_labels = _default_sample_labels_from_snpobj(snpobj)
         afs, counts, pops = _aggregate_to_pop_allele_freq(
-            snpobj.calldata_gt,
+            snpobj.genotypes,
             sample_labels,
             ancestry=ancestry,
             snpobj=snpobj,

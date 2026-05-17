@@ -272,7 +272,7 @@ class PGENReader(SNPBaseReader):
             sex_col = psam.get_column("SEX").fill_null("NA").cast(pl.String).to_numpy()
 
         snpobj = SNPObject(
-            calldata_gt=genotypes if "GT" in fields else None,
+            genotypes=genotypes if "GT" in fields else None,
             samples=psam.get_column("IID").to_numpy() if "IID" in fields and "IID" in psam.columns else None,
             sample_fid=fid_col,
             sample_sex=sex_col,

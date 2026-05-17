@@ -249,7 +249,7 @@ def run_snputils_pca(
     """
     reader = SNPReader(plink_prefix.with_suffix(".bed"))
     snpobj = reader.read(sum_strands=True)
-    if snpobj.samples is None or snpobj.calldata_gt is None:
+    if snpobj.samples is None or snpobj.genotypes is None:
         raise RuntimeError("BEDReader did not return genotypes or sample IDs.")
     if backend == "pytorch":
         pca = PCA(

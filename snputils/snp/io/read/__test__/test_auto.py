@@ -9,7 +9,7 @@ def test_auto_reader(data_path, snpobj_pgen):
     reader = SNPReader(data_path + "/pgen/subset.pgen")
     snpobj = reader.read(sum_strands=False)
 
-    assert np.array_equal(snpobj.calldata_gt, snpobj_pgen.calldata_gt)
+    assert np.array_equal(snpobj.genotypes, snpobj_pgen.genotypes)
 
 
 def test_auto_reader_uses_default_vcf_backend(data_path):
@@ -28,4 +28,4 @@ def test_read_vcf_uses_default_backend(tmp_path: Path):
 
     snpobj = read_vcf(vcf_path)
 
-    assert snpobj.calldata_gt.shape == (1, 2, 2)
+    assert snpobj.genotypes.shape == (1, 2, 2)

@@ -50,9 +50,9 @@ def _build_grg_file(path: Path) -> Path:
 
 def test_grg_object_properties_and_basic_counts(tmp_path):
     grg = _build_toy_grg()
-    obj = GRGObject(calldata_gt=grg, filename=str(tmp_path / "toy.grg"), mutable=True)
+    obj = GRGObject(genotypes=grg, filename=str(tmp_path / "toy.grg"), mutable=True)
 
-    assert obj.calldata_gt is grg
+    assert obj.genotypes is grg
     assert obj.filename.endswith("toy.grg")
     assert obj.mutable is True
     assert obj.n_samples() == 3
@@ -60,14 +60,14 @@ def test_grg_object_properties_and_basic_counts(tmp_path):
     assert obj.n_snps() == 5
 
     replacement = pyg.MutableGRG(2, 2, True)
-    obj.calldata_gt = replacement
+    obj.genotypes = replacement
     obj.filename = str(tmp_path / "updated.grg")
-    assert obj.calldata_gt is replacement
+    assert obj.genotypes is replacement
     assert obj.filename.endswith("updated.grg")
 
 
 def test_grg_object_allele_freq_for_toy_grg():
-    obj = GRGObject(calldata_gt=_build_toy_grg())
+    obj = GRGObject(genotypes=_build_toy_grg())
     np.testing.assert_allclose(
         obj.allele_freq(),
         np.array([1.0, 0.5, 0.5, 1.0 / 6.0, 1.0 / 6.0]),
@@ -75,7 +75,7 @@ def test_grg_object_allele_freq_for_toy_grg():
 
 
 def test_grg_object_to_grg_writes_loadable_file(tmp_path):
-    obj = GRGObject(calldata_gt=_build_toy_grg())
+    obj = GRGObject(genotypes=_build_toy_grg())
     out = tmp_path / "saved.grg"
     obj.to_grg(str(out))
 
@@ -85,11 +85,11 @@ def test_grg_object_to_grg_writes_loadable_file(tmp_path):
 
 
 def test_grg_object_to_snpobject_preserves_genotypes_and_metadata():
-    obj = GRGObject(calldata_gt=_build_toy_grg())
+    obj = GRGObject(genotypes=_build_toy_grg())
     snp = obj.to_snpobject(chrom="22", sum_strands=False)
 
     assert isinstance(snp, SNPObject)
-    assert snp.calldata_gt.shape == (5, 3, 2)
+    assert snp.genotypes.shape == (5, 3, 2)
     assert snp.samples.tolist() == ["sample_0", "sample_1", "sample_2"]
     assert snp.variants_chrom.tolist() == ["22"] * 5
     assert snp.variants_pos.tolist() == [100, 110, 120, 130, 140]
@@ -115,33 +115,33 @@ def test_grg_object_to_snpobject_preserves_genotypes_and_metadata():
         ],
         dtype=np.int8,
     )
-    np.testing.assert_array_equal(snp.calldata_gt, expected)
+    np.testing.assert_array_equal(snp.genotypes, expected)
 
 
 def test_grg_object_to_snpobject_sum_strands_matches_phased_sum():
-    obj = GRGObject(calldata_gt=_build_toy_grg())
+    obj = GRGObject(genotypes=_build_toy_grg())
     phased = obj.to_snpobject(chrom="22", sum_strands=False)
     summed = obj.to_snpobject(chrom="22", sum_strands=True)
 
-    assert summed.calldata_gt.shape == (5, 3)
-    np.testing.assert_array_equal(summed.calldata_gt, phased.calldata_gt.sum(axis=2))
+    assert summed.genotypes.shape == (5, 3)
+    np.testing.assert_array_equal(summed.genotypes, phased.genotypes.sum(axis=2))
 
 
 def test_grg_object_to_snpobject_allows_pgen_roundtrip(tmp_path):
-    obj = GRGObject(calldata_gt=_build_toy_grg())
+    obj = GRGObject(genotypes=_build_toy_grg())
     snp = obj.to_snpobject(chrom="22", sum_strands=False)
 
     out = tmp_path / "from_grg"
     PGENWriter(snp, str(out)).write(vzs=False, rename_missing_values=False)
 
     loaded = PGENReader(out).read(sum_strands=False)
-    assert loaded.calldata_gt.shape == (5, 3, 2)
-    np.testing.assert_array_equal(loaded.calldata_gt, snp.calldata_gt)
+    assert loaded.genotypes.shape == (5, 3, 2)
+    np.testing.assert_array_equal(loaded.genotypes, snp.genotypes)
     np.testing.assert_array_equal(loaded.variants_pos, snp.variants_pos)
 
 
 def test_grg_object_cli_wrappers_use_expected_arguments(monkeypatch):
-    obj = GRGObject(calldata_gt=_build_toy_grg(), filename="/tmp/default.grg")
+    obj = GRGObject(genotypes=_build_toy_grg(), filename="/tmp/default.grg")
     calls = []
 
     def fake_run(cmd, stdout=None, **_kwargs):
@@ -178,7 +178,7 @@ def test_grg_object_merge_delegates_to_underlying_graph():
             self.called = (files, combine_nodes)
 
     dummy = DummyGRG()
-    obj = GRGObject(calldata_gt=dummy)
+    obj = GRGObject(genotypes=dummy)
 
     obj.merge(True, "/tmp/a.grg", "/tmp/b.grg")
     assert dummy.called == (["/tmp/a.grg", "/tmp/b.grg"], True)
@@ -194,16 +194,16 @@ def test_grg_reader_loads_immutable_and_mutable(tmp_path):
     mutable = GRGReader(path).read(mutable=True)
 
     assert isinstance(immutable, GRGObject)
-    assert isinstance(immutable.calldata_gt, pyg.GRG)
+    assert isinstance(immutable.genotypes, pyg.GRG)
     assert immutable.filename == str(path.resolve())
     assert immutable.mutable is False
-    assert immutable.calldata_gt.num_mutations == 5
-    assert immutable.calldata_gt.num_samples == 6
+    assert immutable.genotypes.num_mutations == 5
+    assert immutable.genotypes.num_samples == 6
 
-    assert isinstance(mutable.calldata_gt, pyg.MutableGRG)
+    assert isinstance(mutable.genotypes, pyg.MutableGRG)
     assert mutable.filename == str(path.resolve())
     assert mutable.mutable is True
-    assert mutable.calldata_gt.num_mutations == 5
+    assert mutable.genotypes.num_mutations == 5
 
 
 def test_grg_reader_uses_trees_loader_for_trees_input(monkeypatch, tmp_path):
@@ -220,7 +220,7 @@ def test_grg_reader_uses_trees_loader_for_trees_input(monkeypatch, tmp_path):
     monkeypatch.setattr("snputils.snp.io.read.grg.pyg.grg_from_trees", fake_grg_from_trees)
 
     obj = GRGReader(trees_file).read(binary_mutations=True)
-    assert obj.calldata_gt is expected
+    assert obj.genotypes is expected
     assert obj.mutable is True
     assert called["path"] == str(trees_file.resolve())
     assert called["binary_mutations"] is True
@@ -325,7 +325,7 @@ def test_read_grg_functional_entrypoint(tmp_path):
 
     obj = read_grg(path, mutable=False)
     assert isinstance(obj, GRGObject)
-    assert obj.calldata_gt.num_mutations == 5
+    assert obj.genotypes.num_mutations == 5
 
 
 def test_vcf_to_grg_cli_integration(tmp_path):

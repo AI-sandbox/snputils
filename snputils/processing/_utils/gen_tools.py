@@ -86,7 +86,7 @@ def process_fbk(fbk_file, n_ancestries, prob_thresh):
     return ancestry_matrix
 
 
-def process_tsv_fb(tsv_file, n_ancestries, prob_thresh, variants_pos, calldata_gt, variants_id):
+def process_tsv_fb(tsv_file, n_ancestries, prob_thresh, variants_pos, genotypes, variants_id):
     """                                                                                       
     Process the TSV/FB file to extract ancestry information.
 
@@ -105,7 +105,7 @@ def process_tsv_fb(tsv_file, n_ancestries, prob_thresh, variants_pos, calldata_g
             specific position.
         variants_pos (list of int): 
             A list containing the chromosomal positions for each SNP.
-        calldata_gt (np.ndarray of shape (n_snps, n_samples)): 
+        genotypes (np.ndarray of shape (n_snps, n_samples)): 
             An array containing genotype data for each sample.
         variants_id (list of str): 
             A list containing unique identifiers (IDs) for each SNP.
@@ -139,7 +139,7 @@ def process_tsv_fb(tsv_file, n_ancestries, prob_thresh, variants_pos, calldata_g
         i_end = len(variants_pos)
 
     # Update genome data to match the TSV file range
-    calldata_gt = calldata_gt[i_start:i_end, :]
+    genotypes = genotypes[i_start:i_end, :]
     variants_pos = variants_pos[i_start:i_end]
     variants_id = variants_id[i_start:i_end]
 
@@ -176,7 +176,7 @@ def process_tsv_fb(tsv_file, n_ancestries, prob_thresh, variants_pos, calldata_g
     ancestry_matrix = ancestry_matrix.astype(str)
     logging.info("TSV Processing Time: --- %s seconds ---" % (time.time() - start_time))
     
-    return ancestry_matrix, calldata_gt, variants_id
+    return ancestry_matrix, genotypes, variants_id
 
 
 def process_laiobj(laiobj, snpobj):
@@ -202,13 +202,13 @@ def process_laiobj(laiobj, snpobj):
             ``n_haplotypes`` is the number of haplotype phases.  Ancestry values are
             assigned based on LAI data.
     """
-    n_snps = snpobj['calldata_gt'].shape[0]
+    n_snps = snpobj['genotypes'].shape[0]
 
     if snpobj.calldata_lai is not None:
         logging.info("Using pre-populated calldata_lai from SNPObject")
         cached = snpobj.calldata_lai
         # Ensure the cached array is 2-D (n_snps, n_haplotypes).
-        # mask_calldata_gt requires the flat 2-D layout.
+        # mask_genotypes requires the flat 2-D layout.
         if cached.ndim == 3:
             n_snps_c, n_samples_c, ploidy_c = cached.shape
             cached = cached.reshape(n_snps_c, n_samples_c * ploidy_c)
@@ -286,7 +286,7 @@ def process_beagle(beagle_file, rs_ID_dict, rsid_or_chrompos):
             lis_beagle.append(x_split[2:])
     
     # Initialize genotype matrix
-    calldata_gt = np.zeros((len(lis_beagle),len(lis_beagle[0])), dtype=np.float16)
+    genotypes = np.zeros((len(lis_beagle),len(lis_beagle[0])), dtype=np.float16)
     
     # Process reference allele encoding
     processed_IDs = rs_ID_dict.keys()
@@ -299,11 +299,11 @@ def process_beagle(beagle_file, rs_ID_dict, rsid_or_chrompos):
             rs_ID_dict[variants_id[i]] = ref
 
         for j in range(1, len(lis_beagle[i])):
-            calldata_gt[i, j] = (lis_beagle[i][j] != ref)*1
+            genotypes[i, j] = (lis_beagle[i][j] != ref)*1
 
     logging.info("Beagle Processing Time: --- %s seconds ---" % (time.time() - start_time))
 
-    return calldata_gt, ind_IDs, variants_id, rs_ID_dict
+    return genotypes, ind_IDs, variants_id, rs_ID_dict
 
 
 def _normalize_ref_allele(ref_allele):
@@ -314,7 +314,7 @@ def _normalize_ref_allele(ref_allele):
     return str(ref_allele)
 
 
-def harmonize_calldata_gt_by_variants_ref(calldata_gt, variants_id, variants_ref, variants_ref_map):
+def harmonize_genotypes_by_variants_ref(genotypes, variants_id, variants_ref, variants_ref_map):
     """
     Flip genotype encoding when a shared variant uses a different REF allele in a
     later array.
@@ -324,7 +324,7 @@ def harmonize_calldata_gt_by_variants_ref(calldata_gt, variants_id, variants_ref
     array used the opposite reference allele for the same variant.
     """
     if variants_ref_map is None or variants_ref is None or len(variants_ref) != len(variants_id):
-        return calldata_gt, variants_ref_map
+        return genotypes, variants_ref_map
 
     for i, variant_id in enumerate(variants_id):
         current_ref = _normalize_ref_allele(variants_ref[i])
@@ -337,10 +337,10 @@ def harmonize_calldata_gt_by_variants_ref(calldata_gt, variants_id, variants_ref
             continue
 
         if current_ref != canonical_ref:
-            non_missing = ~np.isnan(calldata_gt[i])
-            calldata_gt[i, non_missing] = 1 - calldata_gt[i, non_missing]
+            non_missing = ~np.isnan(genotypes[i])
+            genotypes[i, non_missing] = 1 - genotypes[i, non_missing]
 
-    return calldata_gt, variants_ref_map
+    return genotypes, variants_ref_map
 
 
 def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
@@ -379,12 +379,12 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     start_time = time.time()
 
     # Extract genotype data and reshape to 2D (n_snps, n_samples * ploidy)
-    calldata_gt = snpobj['calldata_gt']
-    n_snps, n_samples, ploidy = calldata_gt.shape
-    calldata_gt = calldata_gt.reshape(n_snps, n_samples * ploidy).astype(np.float16)
+    genotypes = snpobj['genotypes']
+    n_snps, n_samples, ploidy = genotypes.shape
+    genotypes = genotypes.reshape(n_snps, n_samples * ploidy).astype(np.float16)
 
     # Replace missing genotype values (-1) with NaN
-    np.place(calldata_gt, calldata_gt < 0, np.nan)
+    np.place(genotypes, genotypes < 0, np.nan)
 
     # Extract variant identifiers based on rsID format selection
     if rsid_or_chrompos == 1:
@@ -398,8 +398,8 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
         sys.exit("Illegal value for rsid_or_chrompos. Choose 1 for rsID format or 2 for Chromosome_position format.")
 
     if variants_ref_map is not None:
-        calldata_gt, variants_ref_map = harmonize_calldata_gt_by_variants_ref(
-            calldata_gt,
+        genotypes, variants_ref_map = harmonize_genotypes_by_variants_ref(
+            genotypes,
             variants_id,
             snpobj['variants_ref'],
             variants_ref_map,
@@ -412,7 +412,7 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     ind_IDs = np.array([f"{sample}_{suffix}" for sample in samples for suffix in ["A", "B"]])
     
     logging.info("SNPObject Processing Time: --- %s seconds ---" % (time.time() - start_time))
-    return calldata_gt, ind_IDs, variants_id, variants_ref_map
+    return genotypes, ind_IDs, variants_id, variants_ref_map
 
 
 def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=False):
@@ -457,7 +457,7 @@ def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=Fal
     return avg_matrix
 
 
-def mask_calldata_gt(ancestry_matrix, calldata_gt, ancestry, average_strands=False, force_nan_incomplete_strands=False):
+def mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands=False, force_nan_incomplete_strands=False):
     """
     Mask the genotype matrix by retaining only the entries that match a given ancestry.
 
@@ -469,7 +469,7 @@ def mask_calldata_gt(ancestry_matrix, calldata_gt, ancestry, average_strands=Fal
         ancestry_matrix (np.ndarray of shape (n_snps, n_haplotypes)): 
             Matrix indicating the ancestry assignments, where `n_snps` represents the number of SNPs and 
             `n_haplotypes` represents the number of haplotypes.
-        calldata_gt (np.ndarray of shape (n_snps, n_haplotypes)): 
+        genotypes (np.ndarray of shape (n_snps, n_haplotypes)): 
             Genetic matrix encoding the genotype information for haplotypes.
         ancestry (str): 
             Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
@@ -497,7 +497,7 @@ def mask_calldata_gt(ancestry_matrix, calldata_gt, ancestry, average_strands=Fal
     matching_indices = ancestry_matrix.ravel() == ancestry
 
     # Retain genotype data only for the matched ancestry positions
-    mask[ancestry][matching_indices] = calldata_gt.ravel()[matching_indices]
+    mask[ancestry][matching_indices] = genotypes.ravel()[matching_indices]
 
     # Log the time taken for the masking operation
     logging.info(f"Masking for ancestry {ancestry} --- {time.time() - start_time:.4f} seconds")
@@ -556,7 +556,7 @@ def add_AB_indIDs(ind_IDs):
     return new_ind_IDs
 
 
-def process_calldata_gt(
+def process_genotypes(
         snpobj,
         laiobj,
         ancestry,
@@ -597,7 +597,7 @@ def process_calldata_gt(
         variants_ref_map (dict, optional):
             Running REF-allele map when scanning multiple arrays. Pass ``None`` for the first
             array; downstream callers should pass the dict returned from the previous
-            ``process_snpobj`` / ``process_calldata_gt`` call so genotypes stay comparable.
+            ``process_snpobj`` / ``process_genotypes`` call so genotypes stay comparable.
 
     Returns:
         tuple:
@@ -616,7 +616,7 @@ def process_calldata_gt(
     # Extract genotype data, sample identifiers, and variant identifiers from the SNPObject.
     # When processing multiple arrays, keep genotype encoding aligned to a shared
     # REF allele map so cross-array distances are comparable.
-    calldata_gt, haplotypes, variants_id, variants_ref_map = process_snpobj(
+    genotypes, haplotypes, variants_id, variants_ref_map = process_snpobj(
         snpobj,
         rsid_or_chrompos,
         variants_ref_map=variants_ref_map,
@@ -627,15 +627,15 @@ def process_calldata_gt(
         # with ancestry segments in the LocalAncestryObject
         ancestry_matrix = process_laiobj(laiobj, snpobj)
         # Mask the genotype matrix by retaining only the entries that match a given ancestry
-        mask = mask_calldata_gt(ancestry_matrix, calldata_gt, ancestry, average_strands, force_nan_incomplete_strands)
+        mask = mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands, force_nan_incomplete_strands)
     else:
         # If averaging strands is enabled, compute the average SNP values per individual
         if average_strands:
-            calldata_gt = average_parent_snps(calldata_gt)
+            genotypes = average_parent_snps(genotypes)
         
         # Store the unmasked genotype data in the mask dictionary
         mask = {}
-        mask[ancestry] = calldata_gt
+        mask[ancestry] = genotypes
 
         logging.info("No masking")
 

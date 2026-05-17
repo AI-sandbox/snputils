@@ -793,17 +793,17 @@ class PCA:
         if snps_subset is None:
             snps_subset = self.snps_subset
             
-        if snpobj.calldata_gt.ndim == 2:
-            X = np.transpose(snpobj.calldata_gt.astype(float), (1,0))
-        elif snpobj.calldata_gt.ndim == 3:
-            X = np.transpose(snpobj.calldata_gt.astype(float), (1,0,2))
+        if snpobj.genotypes.ndim == 2:
+            X = np.transpose(snpobj.genotypes.astype(float), (1,0))
+        elif snpobj.genotypes.ndim == 3:
+            X = np.transpose(snpobj.genotypes.astype(float), (1,0,2))
         
             if average_strands:
                 X = np.mean(X, axis=2)
             else:
                 X = np.reshape(X, (-1, X.shape[1]))
         else:
-            raise ValueError(f"Invalid shape for `calldata_gt`: expected a 2D or 3D array, but got {snpobj.calldata_gt.ndim}D array.")
+            raise ValueError(f"Invalid shape for `genotypes`: expected a 2D or 3D array, but got {snpobj.genotypes.ndim}D array.")
     
         # Handle sample and SNP subsets
         if isinstance(samples_subset, int):

@@ -118,7 +118,7 @@ def _make_snpobj_from_dosage(
     gt = np.stack([maternal, paternal], axis=2).astype(np.int8, copy=False)
     n_variants = int(dosage.shape[0])
     return SNPObject(
-        calldata_gt=gt,
+        genotypes=gt,
         samples=np.asarray(sample_ids, dtype=str),
         variants_ref=np.asarray(refs, dtype=str),
         variants_alt=np.asarray(alts, dtype=str),

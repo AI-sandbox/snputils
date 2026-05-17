@@ -30,7 +30,7 @@ def test_f2_uses_plink_fid_when_fid_differs_from_iid():
     )
     samples = np.array(["i1", "i2", "i3", "i4"])
     fids = np.array(["A", "A", "B", "B"])
-    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=fids)
+    obj = SNPObject(genotypes=gt, samples=samples, sample_fid=fids)
     explicit = f2(obj, pop1=["A"], pop2=["B"], sample_labels=["A", "A", "B", "B"], apply_correction=False, block_size=2)
     inferred = f2(obj, pop1=["A"], pop2=["B"], sample_labels=None, apply_correction=False, block_size=2)
     assert np.isclose(explicit.est.iloc[0], inferred.est.iloc[0], atol=1e-15)
@@ -39,7 +39,7 @@ def test_f2_uses_plink_fid_when_fid_differs_from_iid():
 def test_f2_ignores_fid_when_same_as_iid():
     gt = np.array([[0, 1], [1, 0]], dtype=np.int8)
     samples = np.array(["s0", "s1"])
-    obj = SNPObject(calldata_gt=gt, samples=samples, sample_fid=samples.copy())
+    obj = SNPObject(genotypes=gt, samples=samples, sample_fid=samples.copy())
     res = f2(obj, apply_correction=False, block_size=1)
     assert res.shape[0] == 1
     assert {res.pop1.iloc[0], res.pop2.iloc[0]} == {"s0", "s1"}
@@ -582,7 +582,7 @@ def test_fst_and_f2_pseudohaploid():
     ])
     samples = np.array(["s0", "s1", "s2", "s3"])
     labels = np.array(["A", "A", "B", "B"])
-    obj = SNPObject(calldata_gt=gt, samples=samples)
+    obj = SNPObject(genotypes=gt, samples=samples)
 
     # 1. Fst
     res_fst_false = fst(obj, pop1=["A"], pop2=["B"], sample_labels=labels, method="hudson", pseudohaploid=False)

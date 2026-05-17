@@ -122,7 +122,7 @@ def _normalize_lai_for_mask(
 
 
 def aggregate_pop_allele_freq(
-    calldata_gt: np.ndarray,
+    genotypes: np.ndarray,
     sample_labels: Sequence[Any],
     *,
     ancestry: Optional[Union[str, int]] = None,
@@ -141,9 +141,9 @@ def aggregate_pop_allele_freq(
         counts: int array (n_snps, n_pops) with called haplotypes per SNP and population
         pops: list of population labels in column order
     """
-    gt = np.asarray(calldata_gt)
+    gt = np.asarray(genotypes)
     if gt.ndim not in (2, 3):
-        raise ValueError("'calldata_gt' must be 2D or 3D array")
+        raise ValueError("'genotypes' must be 2D or 3D array")
 
     n_snps = gt.shape[0]
     n_samples = gt.shape[1]
@@ -152,7 +152,7 @@ def aggregate_pop_allele_freq(
     if sample_labels.ndim != 1:
         sample_labels = sample_labels.ravel()
     if sample_labels.shape[0] != n_samples:
-        raise ValueError("'sample_labels' must have length equal to the number of samples in `calldata_gt`.")
+        raise ValueError("'sample_labels' must have length equal to the number of samples in `genotypes`.")
 
     pops, pop_indices = np.unique(sample_labels, return_inverse=True)
     n_pops = pops.size

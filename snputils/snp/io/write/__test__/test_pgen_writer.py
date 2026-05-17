@@ -8,7 +8,7 @@ from snputils.snp.io.write.pgen import PGENWriter
 def test_pgen_writer_roundtrips_pvar_info_and_psam_metadata(tmp_path):
     prefix = tmp_path / "toy"
     snpobj = SNPObject(
-        calldata_gt=np.array([[0, 1, 2], [2, 0, 1]], dtype=np.int8),
+        genotypes=np.array([[0, 1, 2], [2, 0, 1]], dtype=np.int8),
         samples=np.array(["s1", "s2", "s3"]),
         sample_fid=np.array(["P1", "P1", "P2"]),
         sample_sex=np.array(["M", "F", "unknown"]),
@@ -42,7 +42,7 @@ def test_pgen_writer_roundtrips_pvar_info_and_psam_metadata(tmp_path):
     ]
 
     observed = PGENReader(prefix).read(sum_strands=True)
-    np.testing.assert_array_equal(observed.calldata_gt, snpobj.calldata_gt)
+    np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
     np.testing.assert_array_equal(observed.samples, snpobj.samples)
     np.testing.assert_array_equal(observed.sample_fid, snpobj.sample_fid)
     np.testing.assert_array_equal(observed.sample_sex, np.array(["1", "2", "NA"]))

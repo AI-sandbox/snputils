@@ -73,7 +73,7 @@ def pca_row_haplotype_ids(
     elif samples_subset is not None:
         s = s[np.asarray(samples_subset, dtype=int)]
 
-    gt = snpobj.calldata_gt
+    gt = snpobj.genotypes
     if gt.ndim == 2:
         return [str(x) for x in s.tolist()]
     if gt.ndim == 3:
@@ -91,7 +91,7 @@ def pca_row_haplotype_ids(
             i, _, k = np.unravel_index(lin, (n_samples, n_snps, 2))
             out.append(f"{s[int(i)]}|{int(k)}")
         return out
-    raise ValueError(f"calldata_gt must be 2D or 3D, got {gt.ndim}D")
+    raise ValueError(f"genotypes must be 2D or 3D, got {gt.ndim}D")
 
 
 def pca_row_individual_ids(haplotype_row_ids: Sequence[str]) -> List[str]:

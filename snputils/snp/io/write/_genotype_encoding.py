@@ -23,15 +23,15 @@ def _native_missing_code(after: Union[int, float, str]) -> np.int32:
 
 
 def phased_to_hardcalls(
-    calldata_gt: np.ndarray,
+    genotypes: np.ndarray,
     *,
     rename_missing_values: bool,
     before: Union[int, float, str],
     after: Union[int, float, str],
 ) -> np.ndarray:
-    gt = np.asarray(calldata_gt)
+    gt = np.asarray(genotypes)
     if gt.ndim not in (2, 3):
-        raise ValueError("`calldata_gt` must be a 2D or 3D array.")
+        raise ValueError("`genotypes` must be a 2D or 3D array.")
 
     missing_code = _native_missing_code(after)
     hardcalls = np.asarray(gt, dtype=np.int16)
@@ -50,15 +50,15 @@ def phased_to_hardcalls(
 
 
 def phased_to_flat_alleles(
-    calldata_gt: np.ndarray,
+    genotypes: np.ndarray,
     *,
     rename_missing_values: bool,
     before: Union[int, float, str],
     after: Union[int, float, str],
 ) -> np.ndarray:
-    gt = np.asarray(calldata_gt)
+    gt = np.asarray(genotypes)
     if gt.ndim != 3:
-        raise ValueError("`calldata_gt` must be a 3D array to write phased alleles.")
+        raise ValueError("`genotypes` must be a 3D array to write phased alleles.")
 
     alleles = np.asarray(gt, dtype=np.int16)
 

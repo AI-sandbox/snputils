@@ -7,7 +7,7 @@ from .utils import create_benchmark_test
 def read_bed_snputils(path, sum_strands=True):
     """Read BED fileset using snputils"""
     import snputils
-    return snputils.read_bed(path, sum_strands=sum_strands, fields=["GT"]).calldata_gt
+    return snputils.read_bed(path, sum_strands=sum_strands, fields=["GT"]).genotypes
 
 
 def read_bed_pgenlib(path, sum_strands=True):

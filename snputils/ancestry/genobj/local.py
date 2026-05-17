@@ -21,13 +21,14 @@ class LocalAncestryObject(AncestryObject):
     def __init__(
         self,
         haplotypes: List[str], 
-        lai: np.ndarray,
+        lai: Optional[np.ndarray] = None,
         samples: Optional[List[str]] = None, 
         ancestry_map: Optional[Dict[str, str]] = None, 
         window_sizes: Optional[np.ndarray] = None,
         centimorgan_pos: Optional[np.ndarray] = None,
         chromosomes: Optional[np.ndarray] = None,
-        physical_pos: Optional[np.ndarray] = None
+        physical_pos: Optional[np.ndarray] = None,
+        calldata_lai: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
@@ -48,7 +49,17 @@ class LocalAncestryObject(AncestryObject):
                 An array with chromosome numbers corresponding to each genomic window.
             physical_pos (array of shape (n_windows, 2), optional): 
                 A 2D array containing the start and end physical positions for each window.
+            calldata_lai (array of shape (n_windows, n_haplotypes), optional):
+                Backward-compatible alias for `lai`.
         """
+        if lai is not None and calldata_lai is not None:
+            raise ValueError("Specify only one of `lai` or `calldata_lai`, not both.")
+        if lai is None and calldata_lai is not None:
+            lai = calldata_lai
+
+        if lai is None:
+            raise ValueError("Either `lai` or its alias `calldata_lai` must be provided.")
+
         if lai.ndim != 2:
             raise ValueError("`lai` must be a 2D array with shape (n_windows, n_haplotypes).")
         
@@ -147,6 +158,20 @@ class LocalAncestryObject(AncestryObject):
     def lai(self, x):
         """
         Update `lai`.
+        """
+        self.__lai = x
+
+    @property
+    def calldata_lai(self) -> np.ndarray:
+        """
+        Retrieve `lai` via legacy alias.
+        """
+        return self.__lai
+
+    @calldata_lai.setter
+    def calldata_lai(self, x):
+        """
+        Update `lai` via legacy alias.
         """
         self.__lai = x
 

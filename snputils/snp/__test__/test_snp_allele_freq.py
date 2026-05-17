@@ -15,7 +15,7 @@ def test_snpobject_allele_freq_default_cohort_from_3d_genotypes():
         ],
         dtype=float,
     )
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     freq = snp.allele_freq()
     np.testing.assert_allclose(freq, np.array([0.75, 1.0 / 3.0, 0.0]))
@@ -30,7 +30,7 @@ def test_snpobject_allele_freq_grouped_from_2d_dosages():
         ]
     )
     labels = np.array(["A", "A", "B"])
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     freq, counts = snp.allele_freq(sample_labels=labels, return_counts=True)
 
@@ -68,7 +68,7 @@ def test_snpobject_allele_freq_ancestry_masking_uses_lai():
         ],
         dtype=int,
     )
-    snp = SNPObject(calldata_gt=gt, calldata_lai=lai)
+    snp = SNPObject(genotypes=gt, calldata_lai=lai)
 
     freq, counts = snp.allele_freq(ancestry=1, return_counts=True)
     np.testing.assert_allclose(freq, np.array([1.0, 0.5]))
@@ -83,7 +83,7 @@ def test_snpobject_allele_freq_handles_missing_values_and_returns_counts():
         ],
         dtype=float,
     )
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     freq, counts = snp.allele_freq(return_counts=True)
     np.testing.assert_allclose(freq, np.array([2.0 / 3.0, 0.5]))
@@ -97,7 +97,7 @@ def test_snpobject_allele_freq_supports_haploid_style_2d_calls():
             [1.0, -1.0, 0.0],
         ]
     )
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     freq, counts = snp.allele_freq(return_counts=True)
     np.testing.assert_allclose(freq, np.array([2.0 / 3.0, 0.5]))
@@ -114,7 +114,7 @@ def test_allele_freq_stream_matches_eager_for_grouped_2d_calls():
         ]
     )
     labels = np.array(["A", "A", "B", "B"])
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     eager_freq, eager_counts = snp.allele_freq(sample_labels=labels, return_counts=True)
     stream_freq, stream_counts = allele_freq_stream(
@@ -146,7 +146,7 @@ def test_allele_freq_stream_matches_eager_for_ancestry_specific_calls():
         dtype=int,
     )
     labels = np.array(["P1", "P1", "P2"])
-    snp = SNPObject(calldata_gt=gt, calldata_lai=lai)
+    snp = SNPObject(genotypes=gt, calldata_lai=lai)
 
     eager_freq, eager_counts = snp.allele_freq(
         sample_labels=labels,
@@ -195,8 +195,8 @@ def test_allele_freq_stream_accepts_msp_reader_for_lai(tmp_path):
     )
     variants_chrom = np.array(["1", "1", "2", "2", "2"], dtype=object)
     variants_pos = np.array([100, 200, 50, 160, 400], dtype=np.int64)
-    snp = SNPObject(calldata_gt=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
-    snp_eager = SNPObject(calldata_gt=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
+    snp = SNPObject(genotypes=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
+    snp_eager = SNPObject(genotypes=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
 
     eager_freq, eager_counts = snp_eager.allele_freq(
         ancestry=1,
@@ -241,8 +241,8 @@ def test_allele_freq_stream_accepts_msp_path_for_lai(tmp_path):
     )
     variants_chrom = np.array(["1", "1"], dtype=object)
     variants_pos = np.array([50, 150], dtype=np.int64)
-    snp = SNPObject(calldata_gt=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
-    snp_eager = SNPObject(calldata_gt=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
+    snp = SNPObject(genotypes=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
+    snp_eager = SNPObject(genotypes=gt, variants_chrom=variants_chrom, variants_pos=variants_pos)
 
     eager_freq, eager_counts = snp_eager.allele_freq(
         ancestry=1,
@@ -274,7 +274,7 @@ def test_allele_freq_pseudohaploid():
             [2.0, 2.0],
         ]
     )
-    snp = SNPObject(calldata_gt=gt)
+    snp = SNPObject(genotypes=gt)
 
     # 1. Default (pseudohaploid=False)
     freq_false, counts_false = snp.allele_freq(pseudohaploid=False, return_counts=True)
@@ -304,7 +304,7 @@ def test_allele_freq_pseudohaploid():
         ],
         dtype=float,
     )
-    snp_3d = SNPObject(calldata_gt=gt_3d)
+    snp_3d = SNPObject(genotypes=gt_3d)
     
     freq_false_3d, counts_false_3d = snp_3d.allele_freq(pseudohaploid=False, return_counts=True)
     np.testing.assert_allclose(freq_false_3d, np.array([0.25, 0.5, 0.25, 1.0]))

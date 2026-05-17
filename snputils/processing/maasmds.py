@@ -13,7 +13,7 @@ from ._utils.mds_distance import (
     mds_transform,
     overlap_blocks,
 )
-from ._utils.gen_tools import process_calldata_gt, process_labels_weights
+from ._utils.gen_tools import process_genotypes, process_labels_weights
 
 
 class maasMDS:
@@ -751,7 +751,7 @@ class maasMDS:
 
         for array_index, current_snpobj in enumerate(snpobjs):
             current_laiobj = laiobjs[array_index] if array_index < len(laiobjs) else None
-            mask, variants_id, haplotypes, variants_ref_map = process_calldata_gt(
+            mask, variants_id, haplotypes, variants_ref_map = process_genotypes(
                 current_snpobj,
                 current_laiobj,
                 ancestry,

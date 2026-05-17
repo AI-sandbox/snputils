@@ -25,7 +25,7 @@ def test_vcf_polars_reads_sample_names_for_both_chrom_headers(tmp_path: Path, ch
 
     expected = np.array([[[0, 1]], [[1, 1]]], dtype=np.int8)
     assert np.array_equal(snpobj.samples, np.array(["HG00096"]))
-    assert np.array_equal(snpobj.calldata_gt, expected)
+    assert np.array_equal(snpobj.genotypes, expected)
     assert np.array_equal(snpobj.variants_chrom, np.array(["1", "1"]))
 
 

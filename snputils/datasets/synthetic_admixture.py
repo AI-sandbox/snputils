@@ -7,7 +7,7 @@ import numpy as np
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.phenotype.genobj import CovariateObject
 
-DEFAULT_ADMIXTURE_ANCESTRY_MAP = {"0": "AFR", "1": "EUR", "2": "NAT"}
+DEFAULT_ADMIXTURE_ANCESTRY_MAP = {"0": "AFR", "1": "EUR", "2": "AMR"}
 
 
 def standardize(values: np.ndarray) -> np.ndarray:

@@ -1,7 +1,8 @@
-from .genobj import MultiPhenotypeObject, PhenotypeObject
+from .genobj import CovariateObject, MultiPhenotypeObject, PhenotypeObject
 from .io import MultiPhenReader, PhenotypeReader, read_pheno
 
 __all__ = [
+    "CovariateObject",
     "MultiPhenotypeObject",
     "MultiPhenReader",
     "PhenotypeObject",

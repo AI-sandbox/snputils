@@ -15,7 +15,7 @@ from snputils.ancestry.io.local.read.__test__.fixtures import (
     make_synthetic_quantitative_dataset,
     write_msp,
 )
-from snputils.phenotype.genobj import PhenotypeObject
+from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.tools.admixture_mapping import run_admixture_mapping
 
 
@@ -755,6 +755,75 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
     diff = diff.dropna(subset=["BETA_adj", "BETA_base"])
     assert not diff.empty
     assert np.mean(np.abs(diff["BETA_adj"] - diff["BETA_base"]) > 1e-6) > 0.25
+
+
+def test_admixture_mapping_accepts_in_memory_covariate_object(tmp_path: Path):
+    (
+        sample_ids,
+        _y_binary,
+        y_quant,
+        lai,
+        chromosomes,
+        starts,
+        ends,
+        ancestry_map,
+        covar_names,
+        covar_matrix,
+        _keep_ids,
+        _remove_ids,
+    ) = make_synthetic_dataset_with_covariates(
+        n_samples=84,
+        n_windows=36,
+        n_covariates=3,
+        seed=671,
+    )
+    haplotypes = [f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)]
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai,
+        samples=list(sample_ids),
+        ancestry_map={str(key): value for key, value in ancestry_map.items()},
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+    phenotype = PhenotypeObject(sample_ids, y_quant, phenotype_name="PHENO", quantitative=True)
+    covariates = CovariateObject(sample_ids, covar_matrix, covariate_names=covar_names)
+
+    covar_path = tmp_path / "toy.covar"
+    _write_covar(covar_path, sample_ids, covar_names, covar_matrix, include_fid=True)
+
+    from_path = run_admixture_mapping(
+        phe_path=phenotype,
+        lai_source=laiobj,
+        results_path=tmp_path / "path.tsv.gz",
+        quantitative=True,
+        covar_path=covar_path,
+        covar_col_nums="1,3",
+        covar_variance_standardize=True,
+        keep_hla=True,
+        return_results=True,
+    ).sort_values(["#CHROM", "POS", "ANCESTRY"]).reset_index(drop=True)
+    from_object = run_admixture_mapping(
+        phe_path=phenotype,
+        lai_source=laiobj,
+        results_path=tmp_path / "object.tsv.gz",
+        quantitative=True,
+        covar=covariates,
+        covar_col_nums="1,3",
+        covar_variance_standardize=True,
+        keep_hla=True,
+        return_results=True,
+    ).sort_values(["#CHROM", "POS", "ANCESTRY"]).reset_index(drop=True)
+
+    numeric_cols = ["BETA", "SE", "T_STAT", "P"]
+    np.testing.assert_allclose(
+        from_object[numeric_cols].to_numpy(),
+        from_path[numeric_cols].to_numpy(),
+        rtol=1e-8,
+        atol=1e-10,
+        equal_nan=True,
+    )
+    assert from_object["ERRCODE"].tolist() == from_path["ERRCODE"].tolist()
 
 
 def test_logistic_covariates_match_reference_and_differ_from_unadjusted(tmp_path: Path):

@@ -5,6 +5,7 @@ from typing import Sequence
 import numpy as np
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.phenotype.genobj import CovariateObject
 
 DEFAULT_ADMIXTURE_ANCESTRY_MAP = {"0": "AFR", "1": "EUR", "2": "NAT"}
 
@@ -175,6 +176,11 @@ def build_synthetic_admixture_dataset(
         "phenotype": phenotype.astype(np.float64, copy=False),
         "covar_names": covar_names,
         "covar_matrix": covar_matrix,
+        "covariates": (
+            CovariateObject(sample_ids, covar_matrix, covariate_names=covar_names)
+            if n_covariates > 0
+            else None
+        ),
         "laiobj": build_lai_object(sample_ids, lai, chromosomes, starts, ends, ancestry_map),
         "effect_windows": effect_windows,
         "effect_ancestries": effect_ancestries,

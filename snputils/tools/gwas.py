@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from snputils.phenotype.io.read import PhenotypeReader
-from snputils.phenotype.genobj import PhenotypeObject
+from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj import SNPObject
 from snputils.snp.io.read import BEDReader, PGENReader, SNPReader, VCFReader
 from snputils.snp.io.read.vcf import VCFReaderPolars
@@ -20,6 +20,7 @@ from ._association import (
     _compute_linear_ci_beta,
     _compute_logistic_ci_or,
     _compute_multiple_testing_adjustments,
+    _coerce_covar_source,
     _confidence_interval_label,
     _enforce_memory_budget,
     _fit_linear_batch,
@@ -31,7 +32,6 @@ from ._association import (
     _odds_ratio_batch,
     _open_tsv_for_write,
     _prepare_fwl,
-    _read_covar,
     _read_sample_list,
     _resolve_output_path,
 )
@@ -646,6 +646,7 @@ def run_gwas(
     return_results: bool = True,
     quantitative: Optional[bool] = None,
     verbose: bool = False,
+    covar: Optional[Union[str, Path, CovariateObject]] = None,
     covar_path: Optional[Union[str, Path]] = None,
     covar_col_nums: Optional[str] = None,
     covar_variance_standardize: bool = False,
@@ -660,10 +661,16 @@ def run_gwas(
 
     ``phe_path`` may be a phenotype file path or an in-memory
     :class:`PhenotypeObject`. ``snp_path`` may be a genotype file path, reader,
-    or in-memory :class:`SNPObject`. ``phe_id`` is required only when the
-    phenotype input is a file path. Results are written to ``results_path``
-    (default: gwas.tsv.gz).
+    or in-memory :class:`SNPObject`. ``covar`` may be a covariate file path or
+    an in-memory :class:`CovariateObject`; ``covar_path`` is retained as a
+    backward-compatible alias. ``phe_id`` is required only when the phenotype
+    input is a file path. Results are written to ``results_path`` (default:
+    gwas.tsv.gz).
     """
+    if covar is not None and covar_path is not None:
+        raise TypeError("Pass only one of `covar` or `covar_path`.")
+    covar_source = covar if covar is not None else covar_path
+
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal GWAS processing.")
     if ci is not None and (ci <= 0.0 or ci >= 1.0):
@@ -682,14 +689,11 @@ def run_gwas(
     remove_ids = _read_sample_list(remove_path) if remove_path is not None else None
     exclude_variants = _read_variant_list(exclude_path) if exclude_path is not None else None
 
-    covar_samples: Optional[List[str]] = None
-    covar_matrix: Optional[np.ndarray] = None
-    if covar_path is not None:
-        covar_samples, _covar_names, covar_matrix = _read_covar(
-            covar_path,
-            col_nums=covar_col_nums,
-            variance_standardize=covar_variance_standardize,
-        )
+    covar_samples, _covar_names, covar_matrix = _coerce_covar_source(
+        covar_source,
+        col_nums=covar_col_nums,
+        variance_standardize=covar_variance_standardize,
+    )
 
     snp_reader = _coerce_snp_source(snp_path, vcf_backend=vcf_backend)
     snp_samples = _read_snp_samples(snp_reader)

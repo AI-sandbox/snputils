@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read import MSPReader
-from snputils.phenotype.genobj import PhenotypeObject
+from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.phenotype.io.read import PhenotypeReader
 
 from ._association import (
@@ -19,6 +19,7 @@ from ._association import (
     _compute_linear_ci_beta,
     _compute_logistic_ci_or,
     _compute_multiple_testing_adjustments,
+    _coerce_covar_source,
     _confidence_interval_label,
     _enforce_memory_budget,
     _fit_linear_batch,
@@ -30,7 +31,6 @@ from ._association import (
     _odds_ratio_batch,
     _open_tsv_for_write,
     _prepare_fwl,
-    _read_covar,
     _read_sample_list,
     _resolve_output_path,
 )
@@ -499,6 +499,7 @@ def run_admixture_mapping(
     return_results: bool = True,
     quantitative: Optional[bool] = None,
     verbose: bool = False,
+    covar: Optional[Union[str, Path, CovariateObject]] = None,
     covar_path: Optional[Union[str, Path]] = None,
     covar_col_nums: Optional[str] = None,
     covar_variance_standardize: bool = False,
@@ -525,7 +526,14 @@ def run_admixture_mapping(
         msp_path:
             Deprecated alias for ``lai_source`` kept for compatibility with
             older callers.
+        covar:
+            Covariate file path or in-memory :class:`CovariateObject`.
+            ``covar_path`` is retained as a backward-compatible alias.
     """
+    if covar is not None and covar_path is not None:
+        raise TypeError("Pass only one of `covar` or `covar_path`.")
+    covar_source = covar if covar is not None else covar_path
+
     if lai_source is None:
         if msp_path is None:
             raise TypeError("run_admixture_mapping() missing required argument: 'lai_source'")
@@ -555,14 +563,11 @@ def run_admixture_mapping(
     keep_ids = _read_sample_list(keep_path) if keep_path is not None else None
     remove_ids = _read_sample_list(remove_path) if remove_path is not None else None
 
-    covar_samples: Optional[List[str]] = None
-    covar_matrix: Optional[np.ndarray] = None
-    if covar_path is not None:
-        covar_samples, _covar_names, covar_matrix = _read_covar(
-            covar_path,
-            col_nums=covar_col_nums,
-            variance_standardize=covar_variance_standardize,
-        )
+    covar_samples, _covar_names, covar_matrix = _coerce_covar_source(
+        covar_source,
+        col_nums=covar_col_nums,
+        variance_standardize=covar_variance_standardize,
+    )
 
     if isinstance(lai_source, LocalAncestryObject):
         laiobj = lai_source

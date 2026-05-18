@@ -48,6 +48,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "allele_freq_stream": (".stats", "allele_freq_stream"),
     "MultiPhenotypeObject": (".phenotype", "MultiPhenotypeObject"),
     "PhenotypeObject": (".phenotype", "PhenotypeObject"),
+    "CovariateObject": (".phenotype", "CovariateObject"),
     "MultiPhenReader": (".phenotype", "MultiPhenReader"),
     "PhenotypeReader": (".phenotype", "PhenotypeReader"),
     "read_pheno": (".phenotype", "read_pheno"),

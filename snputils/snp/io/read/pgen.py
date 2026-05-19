@@ -1,7 +1,6 @@
 import logging
 from typing import Iterator, List, Optional
 import os
-import csv
 
 import numpy as np
 import polars as pl
@@ -22,6 +21,12 @@ def _open_textfile(filename):
         import zstandard as zstd
         return zstd.open(filename, "rt")
     return open(filename, "rt")
+
+
+def _detect_pvar_separator(line: str) -> str:
+    if "\t" in line:
+        return "\t"
+    return " "
 
 
 @SNPBaseReader.register
@@ -108,7 +113,7 @@ class PGENReader(SNPBaseReader):
                         continue
                     else:
                         if separator is None:
-                            separator = csv.Sniffer().sniff(file.readline()).delimiter
+                            separator = _detect_pvar_separator(line)
                         if line.startswith("#CHROM"):  # Header
                             pvar_header_line_num = line_num
                             header = line.strip().split()
@@ -317,7 +322,7 @@ class PGENReader(SNPBaseReader):
                 if line.startswith("##"):
                     continue
                 if local_separator is None:
-                    local_separator = csv.Sniffer().sniff(file.readline()).delimiter
+                    local_separator = _detect_pvar_separator(line)
                 if line.startswith("#CHROM"):
                     pvar_header_line_num = line_num
                     header = line.strip().split()

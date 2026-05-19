@@ -57,8 +57,12 @@ def test_bed_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_pa
     reader = BEDReader(data_path + "/bed/subset")
     subset = np.array([5, 0, 3, 10, 2, 5, 3], dtype=np.uint32)
 
+    full = reader.read(sum_strands=False)
     eager_subset = reader.read(sum_strands=False, variant_idxs=subset)
     chunks = list(reader.iter_read(sum_strands=False, variant_idxs=subset, chunk_size=2))
+
+    np.testing.assert_array_equal(eager_subset.genotypes, full.genotypes[subset])
+    np.testing.assert_array_equal(eager_subset.variants_id, full.variants_id[subset])
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -117,8 +121,12 @@ def test_pgen_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_p
     reader = PGENReader(data_path + "/pgen/subset")
     subset = np.array([5, 0, 3, 10, 2, 5, 3], dtype=np.uint32)
 
+    full = reader.read(sum_strands=False)
     eager_subset = reader.read(sum_strands=False, variant_idxs=subset)
     chunks = list(reader.iter_read(sum_strands=False, variant_idxs=subset, chunk_size=2))
+
+    np.testing.assert_array_equal(eager_subset.genotypes, full.genotypes[subset])
+    np.testing.assert_array_equal(eager_subset.variants_id, full.variants_id[subset])
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)

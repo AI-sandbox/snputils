@@ -178,15 +178,19 @@ class PGENReader(SNPBaseReader):
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
                 pvar = pvar.collect()
             else:
+                requested_variant_idxs = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+                if np.any(requested_variant_idxs >= file_num_variants):
+                    raise ValueError("One or more variant indexes are out of bounds.")
+                selector = pl.DataFrame({"index": requested_variant_idxs}).with_row_index("_selector_order")
                 pvar = (
-                    pvar.with_row_index()
-                    .filter(pl.col("index").is_in(np.asarray(variant_idxs, dtype=np.uint32).ravel()))
+                    selector.lazy()
+                    .join(pvar.with_row_index(), on="index", how="left")
+                    .sort("_selector_order")
                     .collect()
                 )
-                variant_idxs = pvar.select("index").to_series().to_numpy()
-                variant_idxs = np.asarray(variant_idxs, dtype=np.uint32)
+                variant_idxs = requested_variant_idxs
                 num_variants = np.size(variant_idxs)
-                pvar = pvar.drop("index")
+                pvar = pvar.drop(["_selector_order", "index"])
 
             log.info(f"Reading {filename_noext}.psam")
 
@@ -381,13 +385,9 @@ class PGENReader(SNPBaseReader):
 
         if variant_idxs is not None:
             requested = np.asarray(variant_idxs, dtype=np.uint32).ravel()
-            resolved = (
-                variant_meta.filter(pl.col("index").is_in(requested))
-                .select("index")
-                .to_series()
-                .to_numpy()
-            )
-            return np.asarray(resolved, dtype=np.uint32)
+            if np.any(requested >= variant_meta.height):
+                raise ValueError("One or more variant indexes are out of bounds.")
+            return requested
 
         return np.arange(variant_meta.height, dtype=np.uint32)
 

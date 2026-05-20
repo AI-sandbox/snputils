@@ -177,6 +177,21 @@ def _count_vcf_records(
     return n_records
 
 
+def _first_record_is_fixed_width_gt_only(
+    vcf_path: Union[str, pathlib.Path],
+    n_samples_total: int,
+) -> bool:
+    with _open_vcf_binary(vcf_path) as file:
+        for line in file:
+            if line.startswith(b"#"):
+                continue
+            parts = line.rstrip(b"\r\n").split(b"\t", 9)
+            if len(parts) < 10:
+                return False
+            return parts[8] == b"GT" and len(parts[9]) == n_samples_total * 4 - 1
+    return True
+
+
 def _decode_vcf_value(value: bytes) -> str:
     return value.decode("utf-8")
 
@@ -1548,7 +1563,21 @@ class VCFReader(SNPBaseReader):
 
         try:
             if Path(self._filename).suffixes[-2:] == [".vcf", ".gz"]:
-                return self._read_block_gt_only_streaming(
+                use_streaming_gt_only = (
+                    bool(sum_strands)
+                    or not sample_columns
+                    or not _first_record_is_fixed_width_gt_only(self._filename, len(names) - 9)
+                )
+                if use_streaming_gt_only:
+                    return self._read_block_gt_only_streaming(
+                        names=names,
+                        field_columns=field_columns,
+                        sample_columns=sample_columns,
+                        sample_idxs=sample_idxs,
+                        region_filter=region_filter,
+                        sum_strands=bool(sum_strands),
+                    )
+                return self._read_block_gt_only(
                     names=names,
                     field_columns=field_columns,
                     sample_columns=sample_columns,

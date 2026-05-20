@@ -360,6 +360,137 @@ def test_fst_weir_cockerham_matches_manual_ratio_of_sums():
     res = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=3).est.iloc[0]
     assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
 
+
+def test_fst_tsallis_basic():
+    afs, counts, pops = _toy_data()
+    res = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="tsallis", block_size=2)
+    assert res.shape[0] == 1
+    row = res.iloc[0]
+    assert row.method == "tsallis"
+    assert row.q == 2.0
+    assert row.tsallis_weights == "equal"
+    assert np.isfinite(row.est)
+    assert row.n_blocks == 3
+    assert row.n_snps == 6
+
+
+def test_fst_tsallis_q2_equal_weights_matches_manual():
+    afs = np.array([[0.10, 0.90],
+                    [0.25, 0.75],
+                    [0.40, 0.60]], dtype=float)
+    counts = np.array([[40, 30],
+                       [40, 30],
+                       [40, 30]], dtype=float)
+    pops = ["X", "Y"]
+
+    p1, p2 = afs[:, 0], afs[:, 1]
+    w1 = w2 = 0.5
+    p_bar = w1 * p1 + w2 * p2
+    h_total = 2.0 * p_bar * (1.0 - p_bar)
+    h_within = w1 * 2.0 * p1 * (1.0 - p1) + w2 * 2.0 * p2 * (1.0 - p2)
+    expected = np.sum(h_total - h_within) / np.sum(h_total)
+
+    res = fst(
+        (afs, counts, pops),
+        pop1=["X"],
+        pop2=["Y"],
+        method="tsallis",
+        q=2.0,
+        tsallis_weights="equal",
+        block_size=3,
+    ).est.iloc[0]
+    assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_tsallis_q2_sample_size_weights_matches_manual():
+    afs = np.array([[0.10, 0.90],
+                    [0.25, 0.75],
+                    [0.40, 0.60]], dtype=float)
+    counts = np.array([[40, 30],
+                       [40, 30],
+                       [40, 30]], dtype=float)
+    pops = ["X", "Y"]
+
+    p1, p2 = afs[:, 0], afs[:, 1]
+    n1, n2 = counts[:, 0], counts[:, 1]
+    n = n1 + n2
+    w1, w2 = n1 / n, n2 / n
+    p_bar = w1 * p1 + w2 * p2
+    h_total = 2.0 * p_bar * (1.0 - p_bar)
+    h_within = w1 * 2.0 * p1 * (1.0 - p1) + w2 * 2.0 * p2 * (1.0 - p2)
+    expected = np.sum(h_total - h_within) / np.sum(h_total)
+
+    res = fst(
+        (afs, counts, pops),
+        pop1=["X"],
+        pop2=["Y"],
+        method="tsallis",
+        q=2.0,
+        tsallis_weights="sample_size",
+        block_size=3,
+    ).est.iloc[0]
+    assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_tsallis_identical_populations_zero():
+    afs = np.array([[0.1, 0.1],
+                    [0.3, 0.3],
+                    [0.7, 0.7]], dtype=float)
+    counts = np.full_like(afs, 40.0)
+    pops = ["X", "Y"]
+
+    est = fst(
+        (afs, counts, pops),
+        pop1=["X"],
+        pop2=["Y"],
+        method="tsallis",
+        q=2.0,
+        block_size=2,
+    ).est.iloc[0]
+    assert np.isclose(est, 0.0, atol=1e-12)
+
+
+def test_fst_tsallis_invalid_q_raises():
+    afs, counts, pops = _toy_data()
+    for bad_q in [0.0, -1.0, float("nan")]:
+        try:
+            fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="tsallis", q=bad_q)
+            assert False, f"expected ValueError for q={bad_q}"
+        except ValueError:
+            assert True
+
+
+def test_fst_tsallis_invalid_weights_raises():
+    afs, counts, pops = _toy_data()
+    try:
+        fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="tsallis", tsallis_weights="bad")
+        assert False, "expected ValueError"
+    except ValueError:
+        assert True
+
+
+def test_fst_tsallis_blocks_with_labels_invariant():
+    afs, counts, pops = _toy_data()
+    n = afs.shape[0]
+    labels = np.array([0, 0, 1, 1, 2, 2])
+    base = fst(
+        (afs, counts, pops),
+        pop1=["A"],
+        pop2=["B"],
+        method="tsallis",
+        blocks=labels,
+    ).est.iloc[0]
+    perm = np.random.permutation(n)
+    alt = fst(
+        (afs[perm], counts[perm], pops),
+        pop1=["A"],
+        pop2=["B"],
+        method="tsallis",
+        blocks=labels[perm],
+    ).est.iloc[0]
+    assert np.isclose(base, alt, atol=1e-15)
+
+
 def test_fst_hudson_identical_populations_expected_bias():
     # Two identical pops across SNPs; equal haplotype counts per pop (n=40)
     afs = np.array([[0.1, 0.1],

@@ -87,7 +87,7 @@ Working with ancestry files, performing processing operations, and creating visu
   - Multi-array ancestry-specific MDS (maasMDS)
 
 - **Population Genetic Statistics**
-  - Compute $D$, $f_2$, $f_3$, $f_4$, the $f_4$-ratio, and $F_{ST}$ (Hudson and Weir-Cockerham)
+  - Compute $D$, $f_2$, $f_3$, $f_4$, the $f_4$-ratio, and $F_{ST}$ (Hudson, Weir-Cockerham, and Tsallis $F_{q}$)
   - Includes block jackknife standard errors and optional ancestry masking
 
 - **Identity-by-Descent (IBD) & Relatedness**

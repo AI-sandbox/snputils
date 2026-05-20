@@ -818,6 +818,9 @@ class LocalAncestryObject(AncestryObject):
         - `.msp.tsv`: Text-based MSP format with TSV extension.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
+        FLARE `.anc.vcf` / `.anc.vcf.gz` output requires genotype data and
+        should be written with :meth:`save_flare`.
+
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
@@ -828,12 +831,18 @@ class LocalAncestryObject(AncestryObject):
 
         if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
             self.save_msp(file)
+        elif suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
+            raise ValueError(
+                "FLARE output requires genotype data. Use "
+                "`save_flare(file, snpobj=...)` or `save_flare(file, genotype_file=...)`."
+            )
         elif suffixes[-1] == '.pkl':
             self.save_pickle(file)
         else:
             raise ValueError(
                 f"Unsupported file extension: {suffixes[-1]}"
-                "Supported extensions are: .msp, .msp.tsv, .pkl."
+                "Supported extensions are: .msp, .msp.tsv, .pkl. "
+                "Use save_flare(...) for .anc.vcf/.anc.vcf.gz output."
             )
 
     def save_msp(self, file: Union[str, Path]) -> None:
@@ -849,6 +858,23 @@ class LocalAncestryObject(AncestryObject):
         from snputils.ancestry.io.local.write import MSPWriter
 
         MSPWriter(self, file).write()
+
+    def save_flare(
+        self,
+        file: Union[str, Path],
+        *,
+        snpobj: Optional['SNPObject'] = None,
+        genotype_file: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """
+        Save the data stored in `self` to a FLARE-style `.anc.vcf` or `.anc.vcf.gz` file.
+
+        FLARE output VCFs include phased input genotypes and variant metadata,
+        so pass either ``snpobj`` or ``genotype_file``.
+        """
+        from snputils.ancestry.io.local.write import FLAREWriter
+
+        FLAREWriter(self, file, snpobj=snpobj, genotype_file=genotype_file).write()
 
     def save_pickle(self, file: Union[str, Path]) -> None:
         """

@@ -1,7 +1,9 @@
 import numpy as np
 
+from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read import MSPReader
 from snputils.ancestry.io.local.read.__test__.fixtures import write_msp
+from snputils.ancestry.io.local.write import FLAREWriter
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.stats import allele_freq_stream
 
@@ -216,7 +218,7 @@ def test_allele_freq_stream_accepts_msp_reader_for_lai(tmp_path):
     np.testing.assert_array_equal(stream_counts, eager_counts)
 
 
-def test_allele_freq_stream_accepts_msp_path_for_lai(tmp_path):
+def test_allele_freq_stream_accepts_lai_path(tmp_path):
     sample_ids = ["S0", "S1"]
     chromosomes = np.array([1, 1], dtype=np.int64)
     starts = np.array([1, 101], dtype=np.int64)
@@ -229,8 +231,8 @@ def test_allele_freq_stream_accepts_msp_path_for_lai(tmp_path):
         ],
         dtype=np.uint8,
     )
-    msp_path = tmp_path / "toy_path.msp"
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    lai_path = tmp_path / "toy_path.msp"
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     gt = np.array(
         [
@@ -246,13 +248,73 @@ def test_allele_freq_stream_accepts_msp_path_for_lai(tmp_path):
 
     eager_freq, eager_counts = snp_eager.allele_freq(
         ancestry=1,
-        laiobj=MSPReader(msp_path).read(),
+        laiobj=MSPReader(lai_path).read(),
         return_counts=True,
     )
     stream_freq, stream_counts = allele_freq_stream(
         snp,
         ancestry=1,
-        laiobj=msp_path,
+        laiobj=lai_path,
+        chunk_size=1,
+        lai_chunk_size=1,
+        return_counts=True,
+    )
+
+    np.testing.assert_allclose(stream_freq, eager_freq)
+    np.testing.assert_array_equal(stream_counts, eager_counts)
+
+
+def test_allele_freq_stream_accepts_flare_path_for_lai(tmp_path):
+    sample_ids = ["S0", "S1"]
+    chromosomes = np.array(["1", "1"], dtype=object)
+    positions = np.array([50, 150], dtype=np.int64)
+    ancestry_map = {"0": "AFR", "1": "EUR"}
+    lai = np.array(
+        [
+            [1, 1, 0, 1],
+            [0, 1, 1, 0],
+        ],
+        dtype=np.uint8,
+    )
+    gt = np.array(
+        [
+            [[0, 1], [1, 1]],
+            [[1, 0], [0, 1]],
+        ],
+        dtype=float,
+    )
+    snp = SNPObject(genotypes=gt, variants_chrom=chromosomes, variants_pos=positions)
+    snp_eager = SNPObject(genotypes=gt, variants_chrom=chromosomes, variants_pos=positions)
+    snp_for_flare = SNPObject(
+        samples=np.asarray(sample_ids, dtype=object),
+        genotypes=gt.astype(np.int8),
+        variants_chrom=chromosomes,
+        variants_pos=positions,
+        variants_id=np.array(["v0", "v1"], dtype=object),
+        variants_ref=np.array(["A", "G"], dtype=object),
+        variants_alt=np.array(["C", "T"], dtype=object),
+    )
+
+    flare_path = tmp_path / "toy_path.anc.vcf.gz"
+    laiobj = LocalAncestryObject(
+        haplotypes=[f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)],
+        samples=sample_ids,
+        ancestry_map=ancestry_map,
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([positions, positions]),
+        lai=lai,
+    )
+    FLAREWriter(laiobj, flare_path, snpobj=snp_for_flare).write()
+
+    eager_freq, eager_counts = snp_eager.allele_freq(
+        ancestry=1,
+        laiobj=laiobj,
+        return_counts=True,
+    )
+    stream_freq, stream_counts = allele_freq_stream(
+        snp,
+        ancestry=1,
+        laiobj=flare_path,
         chunk_size=1,
         lai_chunk_size=1,
         return_counts=True,

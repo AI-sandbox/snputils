@@ -184,10 +184,10 @@ def test_main_admixture_map_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         seed=77,
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_dir = tmp_path / "out"
     _write_binary_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     monkeypatch.setattr(
         sys,
@@ -199,8 +199,8 @@ def test_main_admixture_map_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             "toy",
             "--phe-path",
             str(phe_path),
-            "--msp-path",
-            str(msp_path),
+            "--lai-path",
+            str(lai_path),
             "--results-path",
             str(out_dir),
             "--batch-size",

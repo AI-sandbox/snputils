@@ -1,14 +1,13 @@
 import argparse
 import csv
 import logging
-import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from snputils.ancestry.io.local.read import MSPReader
+from snputils.ancestry.io.local.read import LAIReader
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.phenotype.io.read import PhenotypeReader
 
@@ -204,7 +203,11 @@ def add_admixmap_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to phenotype file (headered text with IID column and one or more phenotype columns; e.g. .txt, .phe, .pheno).",
     )
     required_argv.add_argument(
-        "--msp-path", dest="msp_path", required=True, type=str, help="Path of the .msp file (include file)."
+        "--lai-path",
+        dest="lai_path",
+        required=True,
+        type=str,
+        help="Path of the local ancestry file (.msp/.msp.tsv or FLARE .anc.vcf.gz).",
     )
 
 
@@ -219,36 +222,36 @@ def _chromosome_as_int(chromosome: object) -> Optional[int]:
     return int(text_lower) if text_lower.isdigit() else None
 
 
-def _remove_hla_windows(msp_obj) -> int:
-    if msp_obj.chromosomes is None or msp_obj.physical_pos is None:
+def _remove_hla_windows(lai_obj) -> int:
+    if lai_obj.chromosomes is None or lai_obj.physical_pos is None:
         return 0
 
     indexes_to_remove: List[int] = []
-    for i, chrom in enumerate(msp_obj.chromosomes):
+    for i, chrom in enumerate(lai_obj.chromosomes):
         chrom_int = _chromosome_as_int(chrom)
         if chrom_int != 6:
             continue
-        start_pos = int(msp_obj.physical_pos[i, 0])
-        end_pos = int(msp_obj.physical_pos[i, 1])
+        start_pos = int(lai_obj.physical_pos[i, 0])
+        end_pos = int(lai_obj.physical_pos[i, 1])
         if (HLA_START <= start_pos <= HLA_END) or (HLA_START <= end_pos <= HLA_END):
             indexes_to_remove.append(i)
 
     if indexes_to_remove:
-        msp_obj.filter_windows(indexes=np.asarray(indexes_to_remove, dtype=int), include=False, inplace=True)
+        lai_obj.filter_windows(indexes=np.asarray(indexes_to_remove, dtype=int), include=False, inplace=True)
     return len(indexes_to_remove)
 
 
-def _resolve_ancestries(msp_obj) -> List[Tuple[int, str]]:
-    if msp_obj.ancestry_map is None:
-        return [(int(code), f"ANC{int(code)}") for code in sorted(np.unique(msp_obj.lai).astype(int))]
+def _resolve_ancestries(lai_obj) -> List[Tuple[int, str]]:
+    if lai_obj.ancestry_map is None:
+        return [(int(code), f"ANC{int(code)}") for code in sorted(np.unique(lai_obj.lai).astype(int))]
     pairs = []
-    for code_str, label in msp_obj.ancestry_map.items():
+    for code_str, label in lai_obj.ancestry_map.items():
         pairs.append((int(code_str), str(label)))
     return sorted(pairs, key=lambda x: x[0])
 
 
 def _resolve_ancestries_from_metadata(
-    msp_reader: MSPReader,
+    lai_reader,
     ancestry_map: Optional[Dict[str, str]],
     chunk_size: int,
     sample_indices: Optional[np.ndarray] = None,
@@ -258,7 +261,7 @@ def _resolve_ancestries_from_metadata(
         return sorted(pairs, key=lambda x: x[0])
 
     unique_codes: set[int] = set()
-    for chunk in msp_reader.iter_windows(chunk_size=chunk_size, sample_indices=sample_indices):
+    for chunk in lai_reader.iter_windows(chunk_size=chunk_size, sample_indices=sample_indices):
         unique_codes.update(int(code) for code in np.unique(chunk["lai"]))
     return [(code, f"ANC{code}") for code in sorted(unique_codes)]
 
@@ -361,13 +364,13 @@ def _align_samples(
     if quantitative:
         y_arr = np.asarray(y_aligned, dtype=np.float64)
         if np.var(y_arr) <= 0.0:
-            raise ValueError("Quantitative phenotype has zero variance after MSP/PHE sample intersection.")
+            raise ValueError("Quantitative phenotype has zero variance after LAI/PHE sample intersection.")
     else:
         y_arr = np.asarray(y_aligned, dtype=np.int8)
         if int(np.sum(y_arr)) == 0:
-            raise ValueError("No cases after MSP/PHE sample intersection.")
+            raise ValueError("No cases after LAI/PHE sample intersection.")
         if int(np.sum(y_arr)) == len(y_arr):
-            raise ValueError("No controls after MSP/PHE sample intersection.")
+            raise ValueError("No controls after LAI/PHE sample intersection.")
 
     covar_out = (
         np.asarray(covar_aligned, dtype=np.float64)
@@ -507,15 +510,14 @@ def run_admixture_mapping(
     adjust: bool = False,
     keep_path: Optional[Union[str, Path]] = None,
     remove_path: Optional[Union[str, Path]] = None,
-    msp_path: Optional[Union[str, Path, LocalAncestryObject]] = None,
 ) -> pd.DataFrame:
-    """Run window-level admixture mapping from an MSP file or LAI object.
+    """Run window-level admixture mapping from a local ancestry file or LAI object.
 
     Args:
         phe_path:
             Phenotype file path or in-memory :class:`PhenotypeObject`.
         lai_source:
-            Local ancestry source. Pass either an MSP file path or an in-memory
+            Local ancestry source. Pass an MSP/FLARE file path or an in-memory
             :class:`LocalAncestryObject`.
         results_path:
             Output TSV path or directory (default: admixmap.tsv.gz).
@@ -523,9 +525,6 @@ def run_admixture_mapping(
             Phenotype column name to analyze. Required when ``phe_path`` is a
             file path; inferred from ``PhenotypeObject.phenotype_name`` for
             in-memory phenotype input.
-        msp_path:
-            Deprecated alias for ``lai_source`` kept for compatibility with
-            older callers.
         covar:
             Covariate file path or in-memory :class:`CovariateObject`.
             ``covar_path`` is retained as a backward-compatible alias.
@@ -535,16 +534,7 @@ def run_admixture_mapping(
     covar_source = covar if covar is not None else covar_path
 
     if lai_source is None:
-        if msp_path is None:
-            raise TypeError("run_admixture_mapping() missing required argument: 'lai_source'")
-        warnings.warn(
-            "`msp_path` is deprecated; use `lai_source` for MSP paths or LocalAncestryObject inputs.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        lai_source = msp_path
-    elif msp_path is not None:
-        raise TypeError("Pass only one of `lai_source` or deprecated `msp_path`.")
+        raise TypeError("run_admixture_mapping() missing required argument: 'lai_source'")
 
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal admixture mapping.")
@@ -571,7 +561,7 @@ def run_admixture_mapping(
 
     if isinstance(lai_source, LocalAncestryObject):
         laiobj = lai_source
-        msp_reader = None
+        lai_reader = None
         lai_samples = (
             list(laiobj.samples)
             if laiobj.samples is not None
@@ -580,8 +570,8 @@ def run_admixture_mapping(
         ancestry_map = laiobj.ancestry_map
     else:
         laiobj = None
-        msp_reader = MSPReader(lai_source)
-        metadata = msp_reader.read_metadata()
+        lai_reader = LAIReader(lai_source)
+        metadata = lai_reader.read_metadata()
         lai_samples = metadata.samples
         ancestry_map = metadata.ancestry_map
 
@@ -610,10 +600,10 @@ def run_admixture_mapping(
     if laiobj is not None:
         ancestries = _resolve_ancestries(laiobj)
     else:
-        if msp_reader is None:
-            raise ValueError("Internal error: missing MSP reader.")
+        if lai_reader is None:
+            raise ValueError("Internal error: missing LAI reader.")
         ancestries = _resolve_ancestries_from_metadata(
-            msp_reader=msp_reader,
+            lai_reader=lai_reader,
             ancestry_map=ancestry_map,
             chunk_size=chunk_size,
             sample_indices=lai_sample_indexes,
@@ -669,7 +659,7 @@ def run_admixture_mapping(
             writer.writerow(columns_without_adjust)
 
             if verbose:
-                source_name = "LocalAncestryObject" if laiobj is not None else "MSP file"
+                source_name = "LocalAncestryObject" if laiobj is not None else "LAI file"
                 print(f"Reading LAI source ({source_name})...", flush=True)
             if laiobj is not None:
                 chunk_iter = _iter_laiobj_windows(
@@ -678,9 +668,9 @@ def run_admixture_mapping(
                     sample_indices=lai_sample_indexes,
                 )
             else:
-                if msp_reader is None:
-                    raise ValueError("Internal error: missing MSP reader.")
-                chunk_iter = msp_reader.iter_windows(
+                if lai_reader is None:
+                    raise ValueError("Internal error: missing LAI reader.")
+                chunk_iter = lai_reader.iter_windows(
                     chunk_size=chunk_size,
                     sample_indices=lai_sample_indexes,
                 )
@@ -901,7 +891,7 @@ def admixmap(argv: Sequence[str]):
 def run_admixmap_command(args: argparse.Namespace) -> int:
     run_admixture_mapping(
         phe_path=args.phe_path,
-        lai_source=args.msp_path,
+        lai_source=args.lai_path,
         results_path=args.results_path,
         phe_id=args.phe_id,
         batch_size=args.batch_size,

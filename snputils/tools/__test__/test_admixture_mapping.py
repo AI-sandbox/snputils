@@ -15,7 +15,9 @@ from snputils.ancestry.io.local.read.__test__.fixtures import (
     make_synthetic_quantitative_dataset,
     write_msp,
 )
+from snputils.ancestry.io.local.write import FLAREWriter
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
+from snputils.snp.genobj.snpobj import SNPObject
 from snputils.tools.admixture_mapping import run_admixture_mapping
 
 
@@ -253,14 +255,14 @@ def test_internal_matches_reference_logistic_across_scales(
         n_samples=n_samples, n_windows=n_windows, seed=seed
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_dir = tmp_path / "out"
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     internal = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_dir,
         phe_id="toy",
         batch_size=64,
@@ -291,16 +293,16 @@ def test_internal_streaming_memory_matches_default(tmp_path: Path):
         n_samples=140, n_windows=75, seed=909
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_default = tmp_path / "out_default"
     out_stream = tmp_path / "out_stream"
 
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_default,
         phe_id="toy",
         batch_size=64,
@@ -309,7 +311,7 @@ def test_internal_streaming_memory_matches_default(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_stream,
         phe_id="toy",
         batch_size=7,
@@ -359,15 +361,15 @@ def test_lai_object_input_matches_msp_input(tmp_path: Path):
     )
 
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_msp = tmp_path / "out_msp"
     out_lai = tmp_path / "out_lai"
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     msp_results = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_msp,
         phe_id="toy",
         batch_size=17,
@@ -383,6 +385,54 @@ def test_lai_object_input_matches_msp_input(tmp_path: Path):
     )
 
     pd.testing.assert_frame_equal(msp_results, lai_results)
+
+
+def test_flare_input_matches_msp_input(tmp_path: Path):
+    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(24, 18, 314)
+    phe_path = tmp_path / "toy.phe"
+    lai_path = tmp_path / "toy.msp"
+    flare_path = tmp_path / "toy.anc.vcf.gz"
+    out_msp = tmp_path / "out_msp"
+    out_flare = tmp_path / "out_flare"
+
+    _write_phe(phe_path, sample_ids, y)
+    marker_ends = starts.copy()
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, marker_ends, ancestry_map)
+    laiobj = LocalAncestryObject(
+        haplotypes=[f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)],
+        samples=sample_ids,
+        ancestry_map={str(code): label for code, label in ancestry_map.items()},
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, marker_ends]),
+        lai=lai,
+    )
+    snpobj = SNPObject(
+        samples=np.asarray(sample_ids, dtype=object),
+        genotypes=np.zeros((len(starts), len(sample_ids), 2), dtype=np.int8),
+        variants_chrom=chromosomes,
+        variants_pos=starts,
+        variants_id=np.asarray([f"v{i}" for i in range(len(starts))], dtype=object),
+        variants_ref=np.full(len(starts), "A", dtype=object),
+        variants_alt=np.full(len(starts), "C", dtype=object),
+    )
+    FLAREWriter(laiobj, flare_path, snpobj=snpobj).write()
+
+    msp_results = run_admixture_mapping(
+        phe_path=phe_path,
+        lai_source=lai_path,
+        results_path=out_msp,
+        phe_id="PHENO",
+        batch_size=7,
+    )
+    flare_results = run_admixture_mapping(
+        phe_path=phe_path,
+        lai_source=flare_path,
+        results_path=out_flare,
+        phe_id="PHENO",
+        batch_size=7,
+    )
+
+    pd.testing.assert_frame_equal(msp_results, flare_results)
 
 
 def test_admixture_mapping_accepts_in_memory_phenotype_object(tmp_path: Path):
@@ -422,43 +472,20 @@ def test_admixture_mapping_accepts_in_memory_phenotype_object(tmp_path: Path):
     pd.testing.assert_frame_equal(baseline, in_memory)
 
 
-def test_deprecated_msp_path_keyword_is_supported(tmp_path: Path):
-    sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
-        n_samples=32, n_windows=12, seed=405
-    )
-    phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
-    out_dir = tmp_path / "out"
-    _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
-
-    with pytest.warns(DeprecationWarning, match="msp_path"):
-        results = run_admixture_mapping(
-            phe_path=phe_path,
-            msp_path=msp_path,
-            results_path=out_dir,
-            phe_id="toy",
-            batch_size=8,
-            keep_hla=True,
-        )
-
-    assert not results.empty
-
-
 def test_internal_total_memory_cap_enforced(tmp_path: Path):
     sample_ids, y, lai, chromosomes, starts, ends, ancestry_map = make_synthetic_dataset(
         n_samples=32, n_windows=16, seed=777
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_dir = tmp_path / "out"
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     with pytest.raises(MemoryError):
         run_admixture_mapping(
             phe_path=phe_path,
-            lai_source=msp_path,
+            lai_source=lai_path,
             results_path=out_dir,
             phe_id="toy",
             batch_size=8,
@@ -563,14 +590,14 @@ def test_quantitative_internal_matches_reference_ols_across_scales(
         n_samples=n_samples, n_windows=n_windows, seed=seed
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_dir = tmp_path / "out"
     _write_phe_quantitative(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     internal = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_dir,
         phe_id="toy",
         batch_size=64,
@@ -601,16 +628,16 @@ def test_quantitative_streaming_memory_matches_default(tmp_path: Path):
         n_samples=140, n_windows=75, seed=909
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     out_default = tmp_path / "out_default"
     out_stream = tmp_path / "out_stream"
 
     _write_phe_quantitative(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_default,
         phe_id="toy",
         batch_size=64,
@@ -619,7 +646,7 @@ def test_quantitative_streaming_memory_matches_default(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=out_stream,
         phe_id="toy",
         batch_size=7,
@@ -675,10 +702,10 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
         seed=707,
     )
     phe_path = tmp_path / "quant.phe"
-    msp_path = tmp_path / "quant.msp"
+    lai_path = tmp_path / "quant.msp"
     covar_path = tmp_path / "quant.covar"
     _write_phe_quantitative(phe_path, sample_ids, y_quant)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
     _write_covar(covar_path, sample_ids, covar_names, covar_matrix, include_fid=True)
 
     selected_idx = [0, 2]
@@ -687,7 +714,7 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_adjusted",
         phe_id="toy",
         batch_size=64,
@@ -699,7 +726,7 @@ def test_quantitative_covariates_match_reference_with_col_selection_standardizat
     ).copy()
     unadjusted = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_unadjusted",
         phe_id="toy",
         batch_size=64,
@@ -847,15 +874,15 @@ def test_logistic_covariates_match_reference_and_differ_from_unadjusted(tmp_path
         seed=808,
     )
     phe_path = tmp_path / "binary.phe"
-    msp_path = tmp_path / "binary.msp"
+    lai_path = tmp_path / "binary.msp"
     covar_path = tmp_path / "binary.covar"
     _write_phe(phe_path, sample_ids, y_binary)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
     _write_covar(covar_path, sample_ids, covar_names, covar_matrix, include_fid=False)
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_adjusted",
         phe_id="toy",
         batch_size=64,
@@ -866,7 +893,7 @@ def test_logistic_covariates_match_reference_and_differ_from_unadjusted(tmp_path
     ).copy()
     unadjusted = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_unadjusted",
         phe_id="toy",
         batch_size=64,
@@ -945,15 +972,15 @@ def test_logistic_covariate_streaming_consistency(tmp_path: Path):
         seed=990,
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     covar_path = tmp_path / "toy.covar"
     _write_phe(phe_path, sample_ids, y_binary)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
     _write_covar(covar_path, sample_ids, covar_names, covar_matrix, include_fid=True)
 
     baseline = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_default",
         phe_id="toy",
         batch_size=64,
@@ -963,7 +990,7 @@ def test_logistic_covariate_streaming_consistency(tmp_path: Path):
     ).copy()
     streamed = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_stream",
         phe_id="toy",
         batch_size=7,
@@ -998,13 +1025,13 @@ def test_ci_columns_logistic_and_quantitative(tmp_path: Path):
         n_samples=90, n_windows=36, seed=612
     )
     phe_path = tmp_path / "bin.phe"
-    msp_path = tmp_path / "bin.msp"
+    lai_path = tmp_path / "bin.msp"
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     logistic = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_bin",
         phe_id="toy",
         batch_size=64,
@@ -1045,15 +1072,15 @@ def test_ci_columns_logistic_and_quantitative(tmp_path: Path):
         seed=613,
     )
     phe_q_path = tmp_path / "quant.phe"
-    msp_q_path = tmp_path / "quant.msp"
+    lai_q_path = tmp_path / "quant.msp"
     covar_q_path = tmp_path / "quant.covar"
     _write_phe_quantitative(phe_q_path, sample_ids_q, y_quant)
-    write_msp(msp_q_path, sample_ids_q, lai_q, chromosomes_q, starts_q, ends_q, ancestry_map_q)
+    write_msp(lai_q_path, sample_ids_q, lai_q, chromosomes_q, starts_q, ends_q, ancestry_map_q)
     _write_covar(covar_q_path, sample_ids_q, covar_names_q, covar_matrix_q, include_fid=True)
 
     linear = run_admixture_mapping(
         phe_path=phe_q_path,
-        lai_source=msp_q_path,
+        lai_source=lai_q_path,
         results_path=tmp_path / "out_quant",
         phe_id="toy",
         batch_size=64,
@@ -1082,13 +1109,13 @@ def test_adjustment_columns_match_reference(tmp_path: Path):
         n_samples=88, n_windows=34, seed=414
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     _write_phe(phe_path, sample_ids, y)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
 
     adjusted = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out",
         phe_id="toy",
         batch_size=64,
@@ -1145,13 +1172,13 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
         seed=515,
     )
     phe_path = tmp_path / "toy.phe"
-    msp_path = tmp_path / "toy.msp"
+    lai_path = tmp_path / "toy.msp"
     covar_path = tmp_path / "toy.covar"
     keep_path = tmp_path / "keep.txt"
     remove_path = tmp_path / "remove.txt"
 
     _write_phe(phe_path, sample_ids, y_binary)
-    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    write_msp(lai_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
     _write_covar(covar_path, sample_ids, covar_names, covar_matrix, include_fid=True)
 
     keep_ids = sample_ids[:80]
@@ -1163,7 +1190,7 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
 
     filtered = run_admixture_mapping(
         phe_path=phe_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_filtered",
         phe_id="toy",
         batch_size=64,
@@ -1184,7 +1211,7 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
 
     reference = run_admixture_mapping(
         phe_path=phe_pref_path,
-        lai_source=msp_path,
+        lai_source=lai_path,
         results_path=tmp_path / "out_reference",
         phe_id="toy",
         batch_size=64,

@@ -37,9 +37,10 @@ bgen_snpobj = bgen_reader.read()
 ## Ancestry and IBD Formats
 
 ```python
-lai = su.read_msp("local_ancestry.msp")
+msp_lai = su.read_lai("local_ancestry.msp")          # MSP
+flare_lai = su.read_lai("flare.out.anc.vcf.gz")  # FLARE
 adm = su.read_admixture("admixture_prefix")
 ibd = su.read_ibd("segments.hapibd")
 ```
 
-Writers are available for SNP files, local ancestry files, global ancestry files, and admixture-mapping VCF output.
+Local ancestry readers support MSP (`.msp`, `.msp.tsv`) and FLARE (`.anc.vcf`, `.anc.vcf.gz`) outputs. FLARE writing requires genotype data from a `SNPObject` or genotype file because FLARE VCF output includes the phased `GT` field and variant metadata alongside `AN1`/`AN2`. Writers are also available for SNP files, global ancestry files, and admixture-mapping VCF output.

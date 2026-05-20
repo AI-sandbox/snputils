@@ -54,7 +54,7 @@ docs = [
     "sphinx-design>=0.6",
 ]
 benchmark = ["pytest", "pytest-benchmark", "memory_profiler",
-             "pandas-plink", "pysam", "scikit-allel", "sgkit[plink]", "hail", "pysnptools", "Pgenlib", "cyvcf2", "plinkio", "PyVCF3"]
+             "pandas-plink", "pysam", "scikit-allel", "sgkit[plink]", "hail>=0.2.130", "pysnptools", "Pgenlib", "cyvcf2", "plinkio", "PyVCF3"]
 
 [project.urls]
 "Homepage" = "https://snputils.org"

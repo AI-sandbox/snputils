@@ -124,10 +124,10 @@ Working with ancestry files, performing processing operations, and creating visu
 Our benchmark demonstrates superior performance compared to existing tools:
 
 <p align="center">
-    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/benchmark/benchmark.png" width="800">
+    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/benchmark/readers_benchmark.png" width="800">
 </p>
 
-*Reading performance comparison for chromosome 22 data across different tools. See the [benchmark directory](https://github.com/AI-sandbox/snputils/tree/main/benchmark) for detailed methodology and results.*
+*Reading time and peak-memory comparison for chromosome 22 data across different tools. See the [benchmark directory](https://github.com/AI-sandbox/snputils/tree/main/benchmark) for detailed methodology and results.*
 
 The **snputils** package is continuously updated with new features and improvements.
 

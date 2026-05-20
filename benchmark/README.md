@@ -6,22 +6,14 @@ On the chromosome 22 of the 1000 Genomes Project dataset:
 
 ![Benchmark results](readers_benchmark.png)
 
-## Running the benchmark
+## Methodology
 
-The benchmark can be run using conda and pip:
+The reader benchmark measures wall-clock read time and peak memory on chromosome 22 from the 1000 Genomes Project dataset.
 
-```bash
-conda create -n snputils python=3.12
-conda activate snputils
-pip install snputils[benchmark]
-bash benchmark/run.sh --data-dir $DATA_DIR
-```
-The `--data-dir` argument specifies the directory where the data is stored. If the argument is not provided, it is stored in the `data` directory in the root of the repository. If the data is not found in the directory, it is downloaded from the internet.
+Each reader is run in an Slurm allocation with 8 AMD EPYC 9684X CPU cores and 200 GB of RAM and a Python 3.12 environment.
+Python 3.12 is used because some libraries are not yet compatible with Python 3.13 or 3.14.
 
-All results computed on a Slurm allocation with 8 AMD EPYC 9684X CPU cores and 200 GB of RAM.
-Python 3.12 is used since some of the libraries are not yet compatible with Python 3.13 or 3.14 (not the case with snputils).
-
-After running the benchmark, use the provided `plot_time_memory.py` script to visualize the results.
+After running the benchmark, the plotting utility `benchmark/plot_time_memory.py` writes both `benchmark/readers_benchmark.png` and `benchmark/readers_benchmark.pdf` from existing benchmark JSON files.
 
 ## Contributing
 

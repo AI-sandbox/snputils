@@ -565,6 +565,33 @@ def _complete_block_pair_het_product_sums(
 
     return out, pair_to_idx
 
+def _tsallis_entropy_bernoulli(p: np.ndarray, q: float) -> np.ndarray:
+    """
+    Tsallis q-entropy for Bernoulli(p).
+
+    For q -> 1, returns Shannon entropy:
+        -p log p - (1-p) log(1-p)
+
+    For q != 1:
+        S_q(p) = (1 - (p^q + (1-p)^q)) / (q - 1)
+    """
+    q = float(q)
+    if not np.isfinite(q) or q <= 0:
+        raise ValueError("q must be a finite positive number")
+
+    p = np.asarray(p, dtype=float)
+    p = np.clip(p, 0.0, 1.0)
+
+    if np.isclose(q, 1.0):
+        out = np.zeros_like(p, dtype=float)
+        mask = (p > 0.0) & (p < 1.0)
+        out[mask] = -(
+            p[mask] * np.log(p[mask])
+            + (1.0 - p[mask]) * np.log1p(-p[mask])
+        )
+        return out
+
+    return (1.0 - (np.power(p, q) + np.power(1.0 - p, q))) / (q - 1.0)
 
 def f2(
     data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
@@ -1239,6 +1266,8 @@ def fst(
     pop2: Optional[Sequence[str]] = None,
     *,
     method: str = "hudson",
+    q: float = 2.0,
+    tsallis_weights: str = "equal",
     sample_labels: Optional[Sequence[str]] = None,
     block_size: int = 5000,
     blocks: Optional[np.ndarray] = None,
@@ -1259,6 +1288,21 @@ def fst(
             Weir and Cockerham's theta for two populations. Computes per-SNP
             variance components `a`, `b`, and `c`, then uses a ratio-of-sums
             jackknife with `num = a` and `den = a + b + c`.
+        `tsallis`:
+            Tsallis q-entropy F-statistic. For two populations, computes
+            per-SNP total entropy S_q(Bern(p_bar)) and within entropy
+            w1*S_q(Bern(p1)) + w2*S_q(Bern(p2)), then returns the
+            genome-wide micro-average:
+                sum_l [S_total(l) - S_within(l)] / sum_l S_total(l)
+
+            With q=2, this equals the classical heterozygosity-based F_ST:
+                (H_T - H_S) / H_T
+
+            With q=1, this is the Shannon entropy / normalized mutual
+            information analogue.
+
+            `tsallis_weights="equal"` uses w1=w2=0.5, for OVR equal-group weighting. 
+            `tsallis_weights="sample_size"` uses per-SNP haplotype count weights.
 
     Notes:
       * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
@@ -1267,8 +1311,8 @@ def fst(
       * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     method = str(method).strip().lower().replace("-", "_")
-    if method not in {"hudson", "weir_cockerham"}:
-        raise ValueError("method must be 'hudson' or 'weir_cockerham'")
+    if method not in {"hudson", "weir_cockerham", "tsallis"}:
+        raise ValueError("method must be 'hudson', 'weir_cockerham', or 'tsallis'")
 
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
     n_snps, n_pops = afs.shape
@@ -1317,6 +1361,14 @@ def fst(
                 )
             return pd.DataFrame(out_rows)
 
+    if method == "tsallis":
+        q = float(q)
+        if not np.isfinite(q) or q <= 0:
+            raise ValueError("q must be a finite positive number")
+        tsallis_weights = str(tsallis_weights).strip().lower().replace("-", "_")
+        if tsallis_weights not in {"equal", "sample_size"}:
+            raise ValueError("tsallis_weights must be 'equal' or 'sample_size'")
+
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
     for pA, pB in pairs:
@@ -1338,7 +1390,7 @@ def fst(
             num_snp = d_xy - 0.5 * (pi1 + pi2)
             den_snp = d_xy
             snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
-        else:
+        elif method == "weir_cockerham":
             # Weir-Cockerham θ components (r=2)
             n = n1 + n2
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -1357,6 +1409,45 @@ def fst(
                 den_snp = a + b + c
             # Need at least 2 haplotypes per pop and well-defined denominators
             snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
+        elif method == "tsallis":
+            # Tsallis q-entropy F-statistic.
+            #
+            # S_total(l)  = S_q(Bern(p_bar_l))
+            # S_within(l) = w1*S_q(Bern(p1_l)) + w2*S_q(Bern(p2_l))
+            # F_q         = sum_l [S_total(l) - S_within(l)] / sum_l S_total(l)
+            #
+            # q=2 recovers heterozygosity-based F_ST.
+            if tsallis_weights == "equal":
+                w1 = np.full_like(p1, 0.5, dtype=float)
+                w2 = np.full_like(p2, 0.5, dtype=float)
+                count_mask = (n1 > 0) & (n2 > 0)
+            else:
+                n = n1 + n2
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    w1 = np.where(n > 0, n1 / n, np.nan)
+                    w2 = np.where(n > 0, n2 / n, np.nan)
+                count_mask = (n1 > 0) & (n2 > 0) & (n > 0)
+
+            with np.errstate(divide="ignore", invalid="ignore"):
+                p_bar = w1 * p1 + w2 * p2
+
+                s_total = _tsallis_entropy_bernoulli(p_bar, q)
+                s_within = (
+                    w1 * _tsallis_entropy_bernoulli(p1, q)
+                    + w2 * _tsallis_entropy_bernoulli(p2, q)
+                )
+
+                num_snp = s_total - s_within
+                den_snp = s_total
+
+            snp_mask = (
+                valid
+                & count_mask
+                & np.isfinite(num_snp)
+                & np.isfinite(den_snp)
+                & (den_snp > 1e-12)
+            )
+        else: raise Exception("Undefined method")
 
         # Aggregate by blocks
         num_block_sums = np.full(n_blocks, np.nan, dtype=float)
@@ -1380,19 +1471,23 @@ def fst(
             res = _jackknife_block_ratio_estimates(num_block_sums, den_block_sums, ct_block_sums)
         else:
             res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
-        out_rows.append(
-            {
-                "pop1": pA,
-                "pop2": pB,
-                "method": method,
-                "est": res.est,
-                "se": res.se,
-                "z": res.z,
-                "p": res.p,
-                "n_blocks": res.n_blocks,
-                "n_snps": int(ct_block_sums.sum()),
-            }
-        )
+        
+        row = {
+            "pop1": pA,
+            "pop2": pB,
+            "method": method,
+            "est": res.est,
+            "se": res.se,
+            "z": res.z,
+            "p": res.p,
+            "n_blocks": res.n_blocks,
+            "n_snps": int(ct_block_sums.sum()),
+        }
+        if method == "tsallis":
+            row["q"] = q
+            row["tsallis_weights"] = tsallis_weights
+        
+        out_rows.append(row)
 
     return pd.DataFrame(out_rows)
 

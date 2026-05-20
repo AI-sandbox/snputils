@@ -111,7 +111,7 @@ READERS = [
 ]
 
 
-@pytest.mark.benchmark(group="VCF-readers", warmup=False, min_rounds=3)
+@pytest.mark.benchmark(group="VCF-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
 def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name, sum_strands):
     """Benchmark readers and verify output"""

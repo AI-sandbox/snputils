@@ -47,10 +47,20 @@ def _load_values(results_dir: Path, fmt: str, metric: str) -> dict[str, tuple[fl
             continue
         if metric == "time":
             value = bench.get("stats", {}).get("mean")
-        else:
-            value = bench.get("extra_info", {}).get("max_memory_mb")
-        if value is not None:
             std = bench.get("stats", {}).get("stddev") or 0.0
+        else:
+            extra_info = bench.get("extra_info", {})
+            value = extra_info.get("max_memory_mb_mean")
+            if value is None:
+                value = extra_info.get("max_memory_mb")
+            std = extra_info.get("max_memory_mb_stddev")
+            if std is None:
+                memory_data = extra_info.get("max_memory_mb_data") or []
+                if len(memory_data) > 1:
+                    std = float(np.std(memory_data, ddof=1))
+                else:
+                    std = 0.0
+        if value is not None:
             values[name] = (float(value), float(std))
     return values
 

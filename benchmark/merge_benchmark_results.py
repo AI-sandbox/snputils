@@ -3,11 +3,50 @@ import csv
 import json
 from copy import deepcopy
 from pathlib import Path
+from statistics import mean, stdev
 
 
 def read_manifest(path: Path) -> list[dict[str, str]]:
     with path.open(newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def collapse_replicates(benchmarks: list[dict]) -> list[dict]:
+    grouped = {}
+    order = []
+    for bench in benchmarks:
+        name = bench.get("params", {}).get("name") or bench.get("name")
+        if name not in grouped:
+            grouped[name] = []
+            order.append(name)
+        grouped[name].append(bench)
+
+    collapsed = []
+    for name in order:
+        group = grouped[name]
+        if len(group) == 1:
+            collapsed.append(group[0])
+            continue
+
+        bench = deepcopy(group[0])
+        memory_values = []
+        for replicate in group:
+            extra_info = replicate.get("extra_info", {})
+            value = extra_info.get("max_memory_mb_mean")
+            if value is None:
+                value = extra_info.get("max_memory_mb")
+            if value is not None:
+                memory_values.append(float(value))
+
+        if memory_values:
+            extra_info = bench.setdefault("extra_info", {})
+            extra_info["max_memory_mb"] = max(memory_values)
+            extra_info["max_memory_mb_mean"] = mean(memory_values)
+            extra_info["max_memory_mb_stddev"] = stdev(memory_values) if len(memory_values) > 1 else 0.0
+            extra_info["max_memory_mb_data"] = memory_values
+
+        collapsed.append(bench)
+    return collapsed
 
 
 def merge_results(manifest: Path, output_dir: Path, chrom: str) -> list[Path]:
@@ -39,7 +78,7 @@ def merge_results(manifest: Path, output_dir: Path, chrom: str) -> list[Path]:
         if merged is None:
             raise ValueError(f"No benchmark JSON files were found for {fmt}")
 
-        merged["benchmarks"] = benchmarks
+        merged["benchmarks"] = collapse_replicates(benchmarks)
         out_path = output_dir / f"{fmt}_{chrom}.json"
         with out_path.open("w") as handle:
             json.dump(merged, handle, indent=2)

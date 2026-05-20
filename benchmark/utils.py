@@ -17,6 +17,8 @@ def create_benchmark_test(
     if memory_profile:
         from memory_profiler import memory_usage
 
+        memory_peaks = []
+
         def run_with_memory_profile():
             def read_file():
                 return timed_reader()
@@ -27,15 +29,22 @@ def create_benchmark_test(
                 interval=0.1,
                 include_children=True
             )
-            return result, max(mem_usage)
+            memory_peaks.append(float(max(mem_usage)))
+            return result
 
-        # Run benchmark with memory profiling
-        result, max_mem = benchmark.pedantic(
+        # Profile one read per process. Repeated reads keep allocator state in
+        # RSS, so memory error bars are computed from independent JSON files.
+        result = benchmark.pedantic(
             run_with_memory_profile,
             rounds=1,
             iterations=1,
         )
-        benchmark.extra_info['max_memory_mb'] = max_mem
+        benchmark.extra_info['max_memory_mb'] = max(memory_peaks)
+        benchmark.extra_info['max_memory_mb_mean'] = float(np.mean(memory_peaks))
+        benchmark.extra_info['max_memory_mb_stddev'] = (
+            float(np.std(memory_peaks, ddof=1)) if len(memory_peaks) > 1 else 0.0
+        )
+        benchmark.extra_info['max_memory_mb_data'] = memory_peaks
 
     else:
         # Use fixed rounds so slow readers do not perform extra full-file

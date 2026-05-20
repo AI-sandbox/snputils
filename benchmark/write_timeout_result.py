@@ -54,6 +54,9 @@ def write_timeout_result(
                     "timeout": True,
                     "timeout_seconds": timeout_seconds,
                     "max_memory_mb": None,
+                    "max_memory_mb_mean": None,
+                    "max_memory_mb_stddev": None,
+                    "max_memory_mb_data": [],
                 },
             }
         ],

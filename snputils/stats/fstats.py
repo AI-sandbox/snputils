@@ -1301,7 +1301,7 @@ def fst(
             With q=1, this is the Shannon entropy / normalized mutual
             information analogue.
 
-            `tsallis_weights="equal"` uses w1=w2=0.5, for OVR equal-group weighting. 
+            `tsallis_weights="equal"` uses w1=w2=0.5, for OVR equal-group weighting.
             `tsallis_weights="sample_size"` uses per-SNP haplotype count weights.
 
     Notes:
@@ -1447,7 +1447,6 @@ def fst(
                 & np.isfinite(den_snp)
                 & (den_snp > 1e-12)
             )
-        else: raise Exception("Undefined method")
 
         # Aggregate by blocks
         num_block_sums = np.full(n_blocks, np.nan, dtype=float)

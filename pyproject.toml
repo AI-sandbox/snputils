@@ -29,6 +29,7 @@ dependencies = [
     "pandas-stubs",
     "scikit-learn",
     "Pgenlib",
+    "bgen>=1.9.9",
     "matplotlib",
     "joblib",
     "tqdm",

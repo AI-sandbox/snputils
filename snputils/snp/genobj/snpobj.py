@@ -37,6 +37,7 @@ class SNPObject:
         variants_qual: Optional[np.ndarray] = None,
         variants_info: Optional[np.ndarray] = None,
         calldata_lai: Optional[np.ndarray] = None,
+        calldata_gp: Optional[np.ndarray] = None,
         ancestry_map: Optional[Dict[str, str]] = None,
         sample_fid: Optional[np.ndarray] = None,
         sample_sex: Optional[np.ndarray] = None,
@@ -77,6 +78,12 @@ class SNPObject:
             calldata_lai (array, optional): 
                 An array containing the ancestry for each SNP. This array can be either 2D with shape
                 `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
+            calldata_gp (array, optional):
+                Genotype probabilities for each SNP and sample, with shape
+                `(n_snps, n_samples, n_probabilities)`. For diploid biallelic BGEN data,
+                unphased probabilities typically have three columns and phased probabilities
+                typically have four columns. Mixed-width BGEN reads are padded with NaN
+                columns to keep this as a single array.
             ancestry_map (dict of str to str, optional): 
                 A dictionary mapping ancestry codes to region names.
             calldata_gt (array, optional):
@@ -99,6 +106,7 @@ class SNPObject:
         self.__variants_qual = variants_qual
         self.__variants_info = variants_info
         self.__calldata_lai = calldata_lai
+        self.__calldata_gp = calldata_gp
         self.__ancestry_map = ancestry_map
         self.__sample_fid = None if sample_fid is None else np.asarray(sample_fid)
         self.__sample_sex = None if sample_sex is None else np.asarray(sample_sex)
@@ -133,6 +141,7 @@ class SNPObject:
             n_samples=self._n_samples_or_none(),
             genotypes_shape=array_shape(self.__genotypes),
             calldata_lai_shape=array_shape(self.__calldata_lai),
+            calldata_gp_shape=array_shape(self.__calldata_gp),
             has_variant_metadata=any(
                 attr is not None
                 for attr in (
@@ -442,6 +451,24 @@ class SNPObject:
         self.__calldata_lai = x
 
     @property
+    def calldata_gp(self) -> Optional[np.ndarray]:
+        """
+        Retrieve `calldata_gp`.
+
+        Returns:
+            array:
+                Genotype probabilities with shape `(n_snps, n_samples, n_probabilities)`.
+        """
+        return self.__calldata_gp
+
+    @calldata_gp.setter
+    def calldata_gp(self, x: np.ndarray):
+        """
+        Update `calldata_gp`.
+        """
+        self.__calldata_gp = x
+
+    @property
     def ancestry_map(self) -> Optional[Dict[str, str]]:
         """
         Retrieve `ancestry_map`.
@@ -470,6 +497,8 @@ class SNPObject:
             return len(self.__samples)
         elif self.__genotypes is not None:
             return self.__genotypes.shape[1]
+        elif self.__calldata_gp is not None:
+            return self.__calldata_gp.shape[1]
         elif self.__calldata_lai is not None:
             if self.__calldata_lai.ndim == 2:
                 return self.__calldata_lai.shape[1] // 2
@@ -498,7 +527,8 @@ class SNPObject:
             self.__variants_pos,
             self.__variants_qual,
             self.__variants_info,
-            self.__calldata_lai
+            self.__calldata_lai,
+            self.__calldata_gp
         ]
 
         # Check each attribute for its first dimension, which corresponds to `n_snps`
@@ -542,12 +572,16 @@ class SNPObject:
 
         Returns:
             tuple: The shape of `genotypes` when present, otherwise the shape
-            of `calldata_lai`. If only metadata is available, returns
+            of `calldata_gp` or `calldata_lai`. If only metadata is available, returns
             `(n_snps, n_samples)` with unknown dimensions represented as None.
         """
         gt_shape = array_shape(self.__genotypes)
         if gt_shape is not None:
             return gt_shape
+
+        gp_shape = array_shape(self.__calldata_gp)
+        if gp_shape is not None:
+            return gp_shape
 
         lai_shape = array_shape(self.__calldata_lai)
         if lai_shape is not None:
@@ -609,6 +643,127 @@ class SNPObject:
                 for easier reference to public attributes in the instance.
         """
         return [attr.replace('_SNPObject__', '') for attr in vars(self)]
+
+    def dosage(self, allele: Union[str, int] = "ALT") -> np.ndarray:
+        """
+        Return expected allele dosages as a 2D ``(n_snps, n_samples)`` array.
+
+        If ``calldata_gp`` is present, this converts BGEN-style genotype
+        probabilities to expected alternate-allele dosage. For now this supports
+        biallelic variants, which are the common GWAS case. If genotype calls are
+        present instead, 3D calls are summed across strands and 2D calls are
+        returned as floating-point dosages.
+
+        Args:
+            allele: Allele to dosage. Currently only ``"ALT"`` or ``1`` is
+                supported for BGEN probability data.
+
+        Returns:
+            A float32 dosage matrix.
+        """
+        if self.calldata_gp is not None:
+            return self._bgen_alt_dosage(allele=allele)
+
+        if self.genotypes is None:
+            raise ValueError("SNPObject requires either `calldata_gp` or `genotypes` to compute dosage.")
+
+        gt = np.asarray(self.genotypes)
+        if gt.ndim == 2:
+            return gt.astype(np.float32, copy=True)
+        if gt.ndim == 3:
+            return gt.sum(axis=2, dtype=np.float32)
+        raise ValueError("`genotypes` must be a 2D dosage array or 3D allele-call array.")
+
+    def to_dosage(self, inplace: bool = False) -> Optional['SNPObject']:
+        """
+        Store expected dosages in ``genotypes``.
+
+        This is useful for dosage-based analyses, such as GWAS, after reading a
+        BGEN file where probabilities are stored in ``calldata_gp``. The original
+        probability array is preserved.
+
+        Args:
+            inplace: If True, modifies ``self`` and returns None. If False,
+                returns a copy with ``genotypes`` set to dosages.
+        """
+        dosage = self.dosage()
+        if inplace:
+            self.genotypes = dosage
+            return None
+
+        snpobj = self.copy()
+        snpobj.genotypes = dosage
+        return snpobj
+
+    def _bgen_alt_dosage(self, allele: Union[str, int] = "ALT") -> np.ndarray:
+        if isinstance(allele, str):
+            if allele.upper() != "ALT":
+                raise NotImplementedError("Only ALT allele dosage is currently supported for BGEN probabilities.")
+        elif int(allele) != 1:
+            raise NotImplementedError("Only allele index 1 (ALT) dosage is currently supported for BGEN probabilities.")
+
+        if self.calldata_gp is None:
+            raise ValueError("Genotype probability data `calldata_gp` is None.")
+
+        if self.variants_alt is not None:
+            alt = np.asarray(self.variants_alt, dtype=object).astype(str)
+            multiallelic = np.char.find(alt, ",") >= 0
+            if np.any(multiallelic):
+                first = int(np.flatnonzero(multiallelic)[0])
+                raise ValueError(
+                    "BGEN dosage conversion currently supports only biallelic variants; "
+                    f"variant {first} has ALT={alt[first]!r}."
+                )
+
+        gp = np.asarray(self.calldata_gp, dtype=np.float32)
+        if gp.ndim != 3:
+            raise ValueError("`calldata_gp` must have shape (n_snps, n_samples, n_probabilities).")
+
+        dosage = np.full(gp.shape[:2], np.nan, dtype=np.float32)
+        for variant_idx, probabilities in enumerate(gp):
+            finite = np.isfinite(probabilities)
+            widths = finite.sum(axis=1)
+            for sample_idx, width in enumerate(widths):
+                if width == 0:
+                    continue
+                if finite[sample_idx, :width].all() and not finite[sample_idx, width:].any():
+                    continue
+                raise ValueError(
+                    "BGEN probability rows may only contain NaN values as all-missing rows "
+                    "or as trailing padding for lower-ploidy samples."
+                )
+
+            phased = self._bgen_biallelic_rows_look_phased(probabilities, widths)
+            for sample_idx, width in enumerate(widths):
+                width = int(width)
+                if width == 0:
+                    continue
+                sample_probs = probabilities[sample_idx, :width]
+                if phased:
+                    if width % 2 != 0:
+                        raise ValueError(
+                            f"Cannot compute phased BGEN dosage for variant {variant_idx}, sample {sample_idx}: "
+                            f"expected an even probability width, got {width}."
+                        )
+                    dosage[variant_idx, sample_idx] = np.nansum(sample_probs[1::2])
+                else:
+                    dosage[variant_idx, sample_idx] = np.dot(sample_probs, np.arange(width, dtype=np.float32))
+        return dosage
+
+    @staticmethod
+    def _bgen_biallelic_rows_look_phased(probabilities: np.ndarray, widths: np.ndarray) -> bool:
+        observed_widths = [int(width) for width in widths if int(width) > 0]
+        if not observed_widths or any(width % 2 != 0 for width in observed_widths):
+            return False
+
+        for sample_probs, width in zip(probabilities, widths):
+            width = int(width)
+            if width == 0:
+                continue
+            haplotypes = sample_probs[:width].reshape(width // 2, 2)
+            if not np.allclose(haplotypes.sum(axis=1), 1.0, atol=1e-4, rtol=0):
+                return False
+        return True
 
     def allele_freq(
         self,
@@ -870,7 +1025,7 @@ class SNPObject:
         # Define keys to filter
         keys = [
             'genotypes', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
-            'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai'
+            'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai', 'calldata_gp'
         ]
 
         # Apply filtering based on inplace parameter
@@ -1119,7 +1274,7 @@ class SNPObject:
         )
         data_updates = {
             key: subset_sample_axis(key, self[key])
-            for key in ['genotypes', 'calldata_lai']
+            for key in ['genotypes', 'calldata_lai', 'calldata_gp']
             if self[key] is not None
         }
 
@@ -1661,9 +1816,31 @@ class SNPObject:
         else:
             calldata_lai = None
 
+        if self.calldata_gp is not None and snpobj.calldata_gp is not None:
+            if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in `calldata_gp` dimensions.\n"
+                    f"`self.calldata_gp` has {self.calldata_gp.ndim} dimensions, "
+                    f"while `snpobj.calldata_gp` has {snpobj.calldata_gp.ndim} dimensions."
+                )
+            if self.calldata_gp.shape[0] != snpobj.calldata_gp.shape[0]:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: Mismatch in the number of SNPs in `calldata_gp`.\n"
+                    f"`self.calldata_gp` has {self.calldata_gp.shape[0]} SNPs, "
+                    f"while `snpobj.calldata_gp` has {snpobj.calldata_gp.shape[0]} SNPs."
+                )
+            if self.calldata_gp.shape[2:] != snpobj.calldata_gp.shape[2:]:
+                raise ValueError(
+                    "Cannot merge SNPObjects: genotype probability columns differ."
+                )
+            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=1)
+        else:
+            calldata_gp = None
+
         if inplace:
             self.genotypes = genotypes
             self.calldata_lai = calldata_lai
+            self.calldata_gp = calldata_gp
             self.sample_fid = None
             self.sample_sex = None
             self.samples = samples
@@ -1687,6 +1864,7 @@ class SNPObject:
             variants_qual=self.variants_qual,
             variants_info=self.variants_info,
             calldata_lai=calldata_lai,
+            calldata_gp=calldata_gp,
             ancestry_map=self.ancestry_map
         )
     
@@ -1785,10 +1963,26 @@ class SNPObject:
             calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=0)
         else:
             calldata_lai = None
+
+        if self.calldata_gp is not None and snpobj.calldata_gp is not None:
+            if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
+                raise ValueError(
+                    f"Cannot concatenate SNPObjects: Mismatch in `calldata_gp` dimensions.\n"
+                    f"`self.calldata_gp` has {self.calldata_gp.ndim} dimensions, "
+                    f"while `snpobj.calldata_gp` has {snpobj.calldata_gp.ndim} dimensions."
+                )
+            if self.calldata_gp.shape[1:] != snpobj.calldata_gp.shape[1:]:
+                raise ValueError(
+                    "Cannot concatenate SNPObjects: genotype probability sample/probability dimensions differ."
+                )
+            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=0)
+        else:
+            calldata_gp = None
         
         if inplace:
             self.genotypes = genotypes
             self.calldata_lai = calldata_lai
+            self.calldata_gp = calldata_gp
             self.sample_sex = merged_sample_sex
             for attr in attributes:
                 self[attr] = merged_attrs[attr]
@@ -1798,6 +1992,7 @@ class SNPObject:
         return SNPObject(
             genotypes=genotypes,
             calldata_lai=calldata_lai,
+            calldata_gp=calldata_gp,
             samples=self.samples,
             sample_fid=self.sample_fid,
             sample_sex=merged_sample_sex,
@@ -2066,8 +2261,8 @@ class SNPObject:
         if inplace:
             for key in self.keys():
                 if self[key] is not None:
-                    if key == 'genotypes':
-                        # `genotypes`` has a different shape, so it's shuffled along axis 0
+                    if key in ('genotypes', 'calldata_lai', 'calldata_gp'):
+                        # Genotype-like arrays are shuffled along the SNP axis.
                         self[key] = self[key][shuffle_index, ...]
                     elif 'variant' in key:
                         # snpobj attributes are 1D arrays
@@ -2077,7 +2272,7 @@ class SNPObject:
             shuffled_snpobj = self.copy()
             for key in shuffled_snpobj.keys():
                 if shuffled_snpobj[key] is not None:
-                    if key == 'genotypes':
+                    if key in ('genotypes', 'calldata_lai', 'calldata_gp'):
                         shuffled_snpobj[key] = shuffled_snpobj[key][shuffle_index, ...]
                     elif 'variant' in key:
                         shuffled_snpobj[key] = np.asarray(shuffled_snpobj[key])[shuffle_index]
@@ -2281,6 +2476,7 @@ class SNPObject:
         Supported formats:
         
         - `.bed`: Binary PED (Plink) format.
+        - `.bgen`: BGEN genotype probability format.
         - `.pgen`: Plink2 binary genotype format.
         - `.vcf`: Variant Call Format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
@@ -2288,11 +2484,13 @@ class SNPObject:
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
-                Supported extensions: `.bed`, `.pgen`, `.vcf`, `.pkl`.
+                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.pkl`.
         """
         ext = Path(file).suffix.lower()
         if ext == '.bed':
             self.save_bed(file)
+        elif ext == '.bgen':
+            self.save_bgen(file)
         elif ext == '.pgen':
             self.save_pgen(file)
         elif ext == '.vcf':
@@ -2346,6 +2544,19 @@ class SNPObject:
         """
         from snputils.snp.io.write.pgen import PGENWriter
         writer = PGENWriter(snpobj=self, filename=file)
+        writer.write()
+
+    def save_bgen(self, file: Union[str, Path]) -> None:
+        """
+        Save the data stored in `self` to a `.bgen` file.
+
+        Args:
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.bgen`.
+                If the provided path does not have this extension, it will be appended.
+        """
+        from snputils.snp.io.write.bgen import BGENWriter
+        writer = BGENWriter(snpobj=self, filename=file)
         writer.write()
 
     def save_vcf(self, file: Union[str, Path]) -> None:

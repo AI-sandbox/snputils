@@ -11,20 +11,27 @@ snpobj = su.read_snp("cohort.vcf.gz")
 ## SNP Formats
 
 ```python
-from snputils import read_bed, read_pgen, read_vcf
+from snputils import read_bed, read_bgen, read_pgen, read_vcf
 
 bed = read_bed("cohort.bed")
+bgen = read_bgen("cohort.bgen")
 pgen = read_pgen("cohort.pgen")
 vcf = read_vcf("cohort.vcf.gz")
 ```
 
+BGEN genotype probabilities are stored on `SNPObject.calldata_gp`; they are not converted to hard-call genotypes during reads.
+When a BGEN file mixes probability widths, shorter records are padded with `NaN` columns so the object remains a single array.
+
 Use the explicit reader classes when you need constructor options, streaming, or staged reads:
 
 ```python
-from snputils import PGENReader
+from snputils import BGENReader, PGENReader
 
 reader = PGENReader("cohort.pgen")
 snpobj = reader.read()
+
+bgen_reader = BGENReader("cohort.bgen")
+bgen_snpobj = bgen_reader.read()
 ```
 
 ## Ancestry and IBD Formats

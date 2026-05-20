@@ -1,9 +1,10 @@
 from .vcf import VCFWriter
 from .bed import BEDWriter
+from .bgen import BGENWriter
 from .pgen import PGENWriter
 from .grg_from_vcf import vcf_to_grg, vcf_to_igd
 
-__all__ = ["VCFWriter", "BEDWriter", "PGENWriter", "GRGWriter", "vcf_to_grg", "vcf_to_igd"]
+__all__ = ["VCFWriter", "BEDWriter", "BGENWriter", "PGENWriter", "GRGWriter", "vcf_to_grg", "vcf_to_igd"]
 
 
 def __getattr__(name):

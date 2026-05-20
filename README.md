@@ -70,6 +70,7 @@ Working with ancestry files, performing processing operations, and creating visu
 ### File Format Support
 **snputils** aims to provide the fastest available readers and writers for various genomic data formats:
 - **VCF**: Support for `.vcf` and `.vcf.gz` files
+- **BGEN**: Support for `.bgen` files
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets
 - **Local Ancestry**: Handle `.msp` local ancestry format

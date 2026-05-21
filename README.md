@@ -133,7 +133,7 @@ Optional extras:
   - Q–Q plots
 
 <p align="center">
-    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/assets/lai_dataset_level.png" width="800">
+    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/assets/snputils_composite.png" width="800">
 </p>
 
 
@@ -209,5 +209,3 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
 ## Acknowledgments
 
 We would like to thank the open-source packages that make **snputils** possible.
-
-

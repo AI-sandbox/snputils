@@ -29,10 +29,16 @@ Compute cohort and ancestry-aware allele frequencies.
 Render local ancestry outputs at sample and dataset levels.
 :::
 
-:::{grid-item-card} mdPCA and maasMDS
-:link: mdpca-maasmds
+:::{grid-item-card} mdPCA
+:link: mdpca
 :link-type: doc
-Use missing-data PCA and ancestry-specific MDS.
+Recover population structure under high genotype missingness.
+:::
+
+:::{grid-item-card} maasMDS
+:link: maasmds
+:link-type: doc
+Calibrate distances across multiple genotyping arrays.
 :::
 
 :::{grid-item-card} Admixture Mapping
@@ -63,7 +69,8 @@ snp-object
 pca
 snp-allele-frequency
 local-ancestry-visualization
-mdpca-maasmds
+mdpca
+maasmds
 admixture-mapping
 phenotype-object
 grg

@@ -343,3 +343,11 @@ class GRGObject:
     def to_grg(self, filename: str, 
                      allow_simplify: bool = True):
         pyg.save_grg(self.__genotypes, filename, allow_simplify)
+
+    def save(self, filename: str, allow_simplify: bool = True):
+        """Write the GRG to disk.
+
+        This is the object-style alias for :meth:`to_grg`, matching the save
+        method exposed by other snputils containers.
+        """
+        self.to_grg(filename, allow_simplify=allow_simplify)

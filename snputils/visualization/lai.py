@@ -1,10 +1,11 @@
 import numpy as np
-from typing import Optional, Tuple, Dict, cast
+from typing import Optional, Tuple, Dict, List, cast
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.patches as patches
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.visualization.constants import CHROM_SIZES
 
 
 def _custom_cmap(colors: Dict, padding: float = 1.05):
@@ -26,6 +27,46 @@ def _custom_cmap(colors: Dict, padding: float = 1.05):
 
     cmap, _ = mcolors.from_levels_and_colors(levels, clrs)
     return cmap
+
+
+def _normalize_chromosome_label(label: str) -> str:
+    normalized = str(label)
+    if normalized.lower().startswith("chr"):
+        normalized = normalized[3:]
+    return normalized
+
+
+def _infer_chromosome_size_build(
+    chromosome_labels: np.ndarray,
+    physical_pos: Optional[np.ndarray],
+) -> str:
+    if physical_pos is None or len(physical_pos) != len(chromosome_labels):
+        return "hg38"
+
+    observed_max = {}
+    for chrom, stop in zip(chromosome_labels, physical_pos[:, 1]):
+        chrom_str = _normalize_chromosome_label(str(chrom))
+        observed_max[chrom_str] = max(observed_max.get(chrom_str, 0), int(stop))
+
+    best_build = "hg38"
+    best_score = float("inf")
+    for build, chrom_sizes in CHROM_SIZES.items():
+        shared = [chrom for chrom in observed_max if chrom in chrom_sizes]
+        if not shared:
+            continue
+        rel_errors = [
+            abs(observed_max[chrom] - chrom_sizes[chrom]) / chrom_sizes[chrom]
+            for chrom in shared
+            if chrom_sizes[chrom] > 0
+        ]
+        if not rel_errors:
+            continue
+        score = float(np.mean(rel_errors))
+        if score < best_score:
+            best_score = score
+            best_build = build
+
+    return best_build
 
 
 def plot_lai(
@@ -67,6 +108,7 @@ def plot_lai(
     # Obtain number of samples and windows
     n_samples = int(lai_T.shape[0]/2)
     n_windows = lai_T.shape[1]
+    sample_ids = laiobj.samples if laiobj.samples is not None else None
     
     if fontsize is None:
         fontsize = {
@@ -152,21 +194,90 @@ def plot_lai(
     
     # Configure custom map from matrix values to colors
     cmap = _custom_cmap(colors_map)
+
+    plot_matrix = lai_T_repeat
+    chromosome_tick_positions: Optional[List[float]] = None
+    chromosome_tick_labels: Optional[List[str]] = None
+    chromosome_boundaries: List[float] = []
+    use_chromosome_axis = False
+
+    # If chromosome metadata is present, visually separate chromosome blocks
+    # along the x-axis instead of displaying one concatenated strip.
+    x_edges: Optional[np.ndarray] = None
+    if laiobj.chromosomes is not None and len(laiobj.chromosomes) == n_windows:
+        chromosome_labels = np.asarray(
+            [_normalize_chromosome_label(ch) for ch in np.asarray(laiobj.chromosomes, dtype=str)],
+            dtype=object,
+        )
+        boundaries = np.where(chromosome_labels[1:] != chromosome_labels[:-1])[0] + 1
+        starts = np.concatenate(([0], boundaries))
+        stops = np.concatenate((boundaries, [n_windows]))
+        labels = [chromosome_labels[start] for start in starts]
+
+        inferred_build = _infer_chromosome_size_build(chromosome_labels, laiobj.physical_pos)
+        chrom_sizes = CHROM_SIZES[inferred_build]
+
+        chromosome_tick_positions = []
+        chromosome_tick_labels = []
+        x_edge_values: List[float] = [0.0]
+        cursor = 0.0
+        for idx, (start, stop, label) in enumerate(zip(starts, stops, labels)):
+            width = int(stop - start)
+            chrom_key = str(label)
+            chrom_len = float(chrom_sizes.get(chrom_key, width))
+            per_window_width = chrom_len / max(width, 1)
+            block_start = cursor
+            for _ in range(width):
+                cursor += per_window_width
+                x_edge_values.append(cursor)
+            chromosome_tick_positions.append((block_start + cursor) / 2.0)
+            label_text = str(label)
+            chromosome_tick_labels.append(
+                label_text if label_text.lower().startswith("chr") else f"chr{label_text}"
+            )
+            if idx < len(starts) - 1:
+                chromosome_boundaries.append(cursor)
+
+        x_edges = np.asarray(x_edge_values, dtype=float)
+        use_chromosome_axis = True
     
     # Plot LAI output
     if figsize is None:
         plt.figure(figsize=(25, 25))
     else:
         plt.figure(figsize=figsize)
-    plt.imshow(lai_T_repeat, cmap=cmap)
+    if use_chromosome_axis and x_edges is not None:
+        y_edges = np.arange(plot_matrix.shape[0] + 1, dtype=float)
+        ax = plt.gca()
+        ax.pcolormesh(
+            x_edges,
+            y_edges,
+            plot_matrix,
+            cmap=cmap,
+            shading="flat",
+        )
+        ax.set_xlim(x_edges[0], x_edges[-1])
+        ax.set_ylim(y_edges[0], y_edges[-1])
+        ax.invert_yaxis()
+    else:
+        plt.imshow(plot_matrix, cmap=cmap, aspect="auto", interpolation="nearest")
     
     # Display sample IDs in y-axis
     yticks_positions = np.arange(scale, lai_T_repeat.shape[0]+1, scale*(2+1))
-    plt.xticks(fontsize=fontsize['xticks'])
     plt.yticks(yticks_positions, sample_ids, fontsize=fontsize['yticks'])
     
     ax = plt.gca()
-    ax.set_xlabel('Window', fontsize=fontsize['xlabel'], labelpad=8)
+    if use_chromosome_axis and chromosome_tick_positions is not None and chromosome_tick_labels is not None:
+        xtick_fontsize = min(fontsize['xticks'], 12) if len(chromosome_tick_labels) > 12 else fontsize['xticks']
+        ax.set_xticks(chromosome_tick_positions)
+        ax.set_xticklabels(chromosome_tick_labels, fontsize=xtick_fontsize)
+        ax.set_xlabel('Chromosome', fontsize=fontsize['xlabel'], labelpad=8)
+        for boundary in chromosome_boundaries:
+            ax.axvline(boundary, color="#D0D0D0", linewidth=1.2, zorder=3)
+    else:
+        ax.tick_params(axis='x', labelsize=fontsize['xticks'])
+        ax.set_xlabel('Window', fontsize=fontsize['xlabel'], labelpad=8)
+
     ax.set_ylabel('Sample', fontsize=fontsize['ylabel'])
     ax.spines['top'].set_linewidth(2)
     ax.spines['right'].set_linewidth(2)

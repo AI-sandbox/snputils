@@ -682,8 +682,8 @@ def process_labels_weights(
       7. Update and optionally save the processed mask, haplotypes, labels, and weights.
 
     Args:
-        labels_file (str, optional): 
-            Path to a `.tsv` file with metadata on individuals, including population labels, optional weights, and groupings. 
+        labels_file (str or pandas.DataFrame, optional): 
+            Path to a `.tsv` file or in-memory table with metadata on individuals, including population labels, optional weights, and groupings. 
                 The `indID` column must contain unique individual identifiers matching those in `laiobj` and `snpobj` for proper alignment. 
                 The `label` column assigns population groups. If `is_weighted=True`, a `weight` column must be provided, assigning a weight to 
                 each individual, where those with a weight of zero are removed. Optional columns include `combination` and `combination_weight` 

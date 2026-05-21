@@ -1,5 +1,6 @@
 import pathlib
 import numpy as np
+import pandas as pd
 import copy
 from typing import Dict, Optional, List, Sequence, Union
 
@@ -55,6 +56,7 @@ class maasMDS:
             n_components: int = 2,
             rsid_or_chrompos: int = 2,
             embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
+            labels: Optional[Union[pd.DataFrame, str]] = None,
         ):
         """
         Args:
@@ -66,6 +68,9 @@ class maasMDS:
                 Path to a TSV with at least columns ``indID`` and ``label``. If ``is_weighted`` is
                 True, a ``weight`` column is required. Optional ``combination`` and
                 ``combination_weight`` columns define merged groups.
+            labels (pandas.DataFrame or str, optional):
+                In-memory labels table with the same columns as ``labels_file``, or a path. Pass only one
+                of ``labels`` and ``labels_file``.
             ancestry (int or str, optional):
                 Target ancestry index or name. Indices start at ``0``. Accepts an ``int``, a
                 numeric string (e.g. ``\"0\"``), or a string equal to a value in the LAI ancestry map.
@@ -105,6 +110,11 @@ class maasMDS:
                 If set, :meth:`fit_transform` writes ``X_new_`` with row metadata to this TSV/CSV path
                 (see :mod:`snputils.processing.dimred_tabular`).
         """
+        if labels is not None:
+            if labels_file is not None:
+                raise ValueError("Pass only one of labels and labels_file.")
+            labels_file = labels
+
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
@@ -736,7 +746,7 @@ class maasMDS:
         if not self.is_masked and len(laiobjs) == 0:
             laiobjs = [None] * len(snpobjs)
         if labels_file is None:
-            raise ValueError("`labels_file` is required unless `load_masks=True`.")
+            raise ValueError("`labels_file` or `labels` is required unless `load_masks=True`.")
         groups_to_remove = self._normalize_groups_to_remove(
             self.groups_to_remove,
             len(snpobjs),
@@ -793,9 +803,11 @@ class maasMDS:
             self,
             snpobj: Optional[Union['SNPObject', Sequence['SNPObject']]] = None, 
             laiobj: Optional[Union['LocalAncestryObject', Sequence['LocalAncestryObject']]] = None,
-            labels_file: Optional[str] = None,
+            labels_file: Optional[Union[str, pd.DataFrame]] = None,
             ancestry: Optional[Union[int, str]] = None,
-            average_strands: Optional[bool] = None
+            average_strands: Optional[bool] = None,
+            *,
+            labels: Optional[Union[pd.DataFrame, str]] = None,
         ) -> np.ndarray:
         """
         Estimate the MDS embedding and store it on the instance.
@@ -807,8 +819,11 @@ class maasMDS:
                 Input genotype container(s).
             laiobj (LocalAncestryObject or sequence of LocalAncestryObject, optional):
                 Matching LAI object(s) when masking is enabled.
-            labels_file (str, optional):
-                TSV path with ``indID`` / ``label`` (and optional weight / combination columns).
+            labels_file (str or pandas.DataFrame, optional):
+                TSV path or in-memory DataFrame with ``indID`` / ``label`` (and optional weight /
+                combination columns).
+            labels (pandas.DataFrame or str, optional):
+                Alias for ``labels_file``. Pass only one of ``labels`` and ``labels_file``.
             ancestry (int or str, optional):
                 Same conventions as in ``__init__``.
             average_strands (bool, optional):
@@ -821,6 +836,10 @@ class maasMDS:
                 Also assigned to ``X_new_``; row-wise array indices are in ``array_labels_`` when
                 multiple arrays are combined.
         """
+        if labels is not None:
+            if labels_file is not None:
+                raise ValueError("Pass only one of labels and labels_file.")
+            labels_file = labels
         if snpobj is None:
             snpobj = self.snpobj
         if laiobj is None:

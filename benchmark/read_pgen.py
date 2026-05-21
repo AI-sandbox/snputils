@@ -6,7 +6,7 @@ from .utils import create_benchmark_test
 def read_pgen_snputils(path, sum_strands=True):
     """Read PGEN file using snputils"""
     import snputils
-    return snputils.read_pgen(path, sum_strands=sum_strands, fields=["GT"]).calldata_gt
+    return snputils.read_pgen(path, sum_strands=sum_strands, fields=["GT"]).genotypes
 
 
 def read_pgen_pgenlib(path, sum_strands=True):

@@ -43,10 +43,10 @@ class PGENWriter:
             vzs (bool, optional): 
                 If True, compresses the .pvar file using zstd and saves it as .pvar.zst. Defaults to False.
             rename_missing_values (bool, optional):
-                If True, renames potential missing values in `snpobj.calldata_gt` before writing. 
+                If True, renames potential missing values in `snpobj.genotypes` before writing. 
                 Defaults to True.
             before (int, float, or str, default=-1): 
-                The current representation of missing values in `calldata_gt`. Common values might be -1, '.', or NaN.
+                The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'): 
                 The value that will replace `before`. Default is '.'.
@@ -161,11 +161,11 @@ class PGENWriter:
         Writes the genotype data to a .pgen file.
         """
         log.info(f"Writing to {self.__filename}.pgen")
-        summed_strands = False if self.__snpobj.calldata_gt.ndim == 3 else True
+        summed_strands = False if self.__snpobj.genotypes.ndim == 3 else True
         if not summed_strands:
-            num_variants, num_samples, num_alleles = self.__snpobj.calldata_gt.shape
+            num_variants, num_samples, num_alleles = self.__snpobj.genotypes.shape
             flat_genotypes = phased_to_flat_alleles(
-                self.__snpobj.calldata_gt,
+                self.__snpobj.genotypes,
                 rename_missing_values=self.__rename_missing_values,
                 before=self.__missing_before,
                 after=self.__missing_after,
@@ -182,7 +182,7 @@ class PGENWriter:
                     )
         else:
             genotypes = phased_to_hardcalls(
-                self.__snpobj.calldata_gt,
+                self.__snpobj.genotypes,
                 rename_missing_values=self.__rename_missing_values,
                 before=self.__missing_before,
                 after=self.__missing_after,

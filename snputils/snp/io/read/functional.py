@@ -36,6 +36,19 @@ def read_bed(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
     return BEDReader(filename).read(**kwargs)
 
 
+def read_bgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
+    """
+    Read a BGEN file into a SNPObject.
+
+    Args:
+        filename: Filename of the BGEN file to read.
+        **kwargs: Additional arguments passed to the reader method. See :class:`snputils.snp.io.read.bgen.BGENReader` for possible parameters.
+    """
+    from snputils.snp.io.read.bgen import BGENReader
+
+    return BGENReader(filename).read(**kwargs)
+
+
 def read_pgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
     """
     Read a PGEN fileset into a SNPObject.

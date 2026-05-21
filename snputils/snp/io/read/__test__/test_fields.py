@@ -38,14 +38,14 @@ def test_pgen_only_variants(data_path, snpobj_pgen):
 # TODO: Fails with KeyError: 'samples' (samples=vcf_dict["samples"],)
 # def test_vcf_only_gt(data_path, snpobj_vcf):
 #     snpobj_vcf_only_gt = VCFReader(data_path + "/subset.vcf").read(fields=["GT"])
-#     assert np.array_equal(snpobj_vcf_only_gt.calldata_gt, snpobj_vcf.calldata_gt)
+#     assert np.array_equal(snpobj_vcf_only_gt.genotypes, snpobj_vcf.genotypes)
 
 
 def test_bed_only_gt(data_path, snpobj_bed):
     snpobj_bed_only_gt = BEDReader(data_path + "/bed/subset").read(fields=["GT"])
-    assert np.array_equal(snpobj_bed_only_gt.calldata_gt, snpobj_bed.calldata_gt)
+    assert np.array_equal(snpobj_bed_only_gt.genotypes, snpobj_bed.genotypes)
 
 
 def test_pgen_only_gt(data_path, snpobj_pgen):
     snpobj_pgen_only_gt = PGENReader(data_path + "/pgen/subset").read(fields=["GT"])
-    assert np.array_equal(snpobj_pgen_only_gt.calldata_gt, snpobj_pgen.calldata_gt)
+    assert np.array_equal(snpobj_pgen_only_gt.genotypes, snpobj_pgen.genotypes)

@@ -44,7 +44,7 @@ def make_small_dataset(
     chromosomes = ((np.arange(n_windows) % 22) + 1).astype(np.int64)
     starts = (np.arange(n_windows) * 1000 + 1).astype(np.int64)
     ends = starts + 999
-    ancestry_map = {0: "AFR", 1: "EUR", 2: "NAT"}
+    ancestry_map = {0: "AFR", 1: "EUR", 2: "AMR"}
     lai = rng.integers(0, 3, size=(n_windows, n_samples * 2), dtype=np.uint8)
     return sample_ids, lai, chromosomes, starts, ends, ancestry_map
 
@@ -65,7 +65,7 @@ def make_synthetic_dataset(
     starts = (np.arange(n_windows) * 5000 + 1).astype(np.int64)
     ends = starts + 999
 
-    ancestry_map = {0: "AFR", 1: "EUR", 2: "NAT"}
+    ancestry_map = {0: "AFR", 1: "EUR", 2: "AMR"}
     lai = np.empty((n_windows, n_samples * 2), dtype=np.uint8)
 
     for w in range(n_windows):
@@ -106,7 +106,7 @@ def make_synthetic_quantitative_dataset(
     starts = (np.arange(n_windows) * 5000 + 1).astype(np.int64)
     ends = starts + 999
 
-    ancestry_map = {0: "AFR", 1: "EUR", 2: "NAT"}
+    ancestry_map = {0: "AFR", 1: "EUR", 2: "AMR"}
     lai = rng.integers(0, 3, size=(n_windows, n_samples * 2), dtype=np.uint8)
 
     # Identify effect windows and compute mean dosage for ancestry 0 (AFR).
@@ -163,7 +163,7 @@ def make_synthetic_dataset_with_covariates(
     starts = (np.arange(n_windows) * 5000 + 1).astype(np.int64)
     ends = starts + 999
 
-    ancestry_map = {0: "AFR", 1: "EUR", 2: "NAT"}
+    ancestry_map = {0: "AFR", 1: "EUR", 2: "AMR"}
     lai = rng.integers(0, 3, size=(n_windows, n_samples * 2), dtype=np.uint8)
 
     effect_windows = [w for w in range(n_windows) if (w % 11) == 0]

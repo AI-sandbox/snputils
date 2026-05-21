@@ -9,13 +9,13 @@ from .utils import create_benchmark_test
 def read_vcf_snputils(path, sum_strands=True):
     """Read VCF file using snputils"""
     import snputils
-    return snputils.read_vcf(path, sum_strands=sum_strands).calldata_gt
+    return snputils.read_vcf(path, sum_strands=sum_strands).genotypes
 
 
 def read_vcf_snputils_polars(path, sum_strands=True):
     """Read VCF file using snputils and polars"""
     from snputils.snp.io.read.vcf import VCFReaderPolars
-    return VCFReaderPolars(path).read(fields=[], sum_strands=sum_strands).calldata_gt
+    return VCFReaderPolars(path).read(fields=[], sum_strands=sum_strands).genotypes
 
 
 def read_vcf_scikit_allel(path, sum_strands=True):

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import colorsys
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from typing import Callable, Mapping, Optional, Union
+from matplotlib.font_manager import FontProperties
+from typing import Callable, Mapping, Optional, Sequence, Union
 
 from adjustText import adjust_text
 
 from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
+from .constants import snputils_palette
 
 PUBLICATION_RC = {
     "font.family": "sans-serif",
@@ -49,26 +48,181 @@ def _resolve_label_color(
     return cmap_fn(int(idx))
 
 
-def _generate_distinct_colors(n: int) -> list:
-    """Generate *n* visually distinct RGBA colours.
+def _generate_distinct_colors(n: int) -> list[str]:
+    """Generate *n* colors using the snputils palette, then random fallback colors."""
+    if n <= 0:
+        return []
+    if n <= len(snputils_palette):
+        return list(snputils_palette[:n])
 
-    Uses tab10 / tab20 for small palettes, then evenly-spaced HSV hues with
-    alternating saturation / value so neighbouring colours stay distinguishable.
-    """
-    if n <= 10:
-        base = cm.get_cmap("tab10", 10)
-        return [base(i) for i in range(n)]
-    if n <= 20:
-        base = cm.get_cmap("tab20", 20)
-        return [base(i) for i in range(n)]
-    colors: list = []
-    for i in range(n):
-        hue = i / n
-        sat = 0.55 + 0.35 * ((i % 3) / 2.0)
-        val = 0.50 + 0.40 * (((i + 1) % 3) / 2.0)
-        r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
-        colors.append((r, g, b, 1.0))
+    colors: list[str] = list(snputils_palette)
+    rng = np.random.default_rng(0)
+    for _ in range(n - len(snputils_palette)):
+        rgb = rng.integers(0, 256, size=3)
+        colors.append(f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
     return colors
+
+
+def plot_embedding(
+    embedding: pd.DataFrame,
+    *,
+    x: str = "PC1",
+    y: str = "PC2",
+    hue: Optional[str] = None,
+    title: Optional[str] = None,
+    ax: Optional[plt.Axes] = None,
+    figsize: tuple[float, float] = (9.0, 7.0),
+    point_size: float = 34.0,
+    point_alpha: float = 0.6,
+    markers: Sequence[str] = ("o", "v", "^", "<", ">", "s", "P", "X", "D"),
+    label_colors: Optional[Mapping[str, str]] = None,
+    category_order: Optional[Sequence[str]] = None,
+    legend: bool = True,
+    legend_title: Optional[str] = "",
+    legend_fontsize: float = 14.0,
+    legend_outside: bool = True,
+    grid: bool = False,
+    zero_lines: bool = False,
+    despine: bool = True,
+    axis_style: str = "standard",
+    save_path: Optional[str] = None,
+    show: bool = False,
+    savefig_kwargs: Optional[dict] = None,
+) -> plt.Axes:
+    """
+    Plot a two-dimensional embedding table, optionally colored by metadata.
+
+    Args:
+        embedding: DataFrame containing coordinate columns such as ``PC1`` and
+            ``PC2``. Tables produced by
+            :func:`snputils.processing.embedding_dataframe_from_model` work
+            directly.
+        x, y: Coordinate columns to plot.
+        hue: Optional metadata column used to color points.
+        title: Optional axes title.
+        ax: Existing matplotlib axes. If omitted, a new figure and axes are created.
+        figsize: Figure size used when ``ax`` is omitted.
+        point_size: Matplotlib marker area for points.
+        point_alpha: Point opacity.
+        markers: Marker cycle used across hue categories.
+        label_colors: Optional mapping from hue values to matplotlib colors.
+        category_order: Optional order for hue categories. Missing categories are ignored.
+        legend: Whether to draw a legend when ``hue`` is set.
+        legend_title: Legend title. Empty string removes the title by default.
+        legend_fontsize: Legend label font size.
+        legend_outside: If True, place the legend outside the right side of the axes.
+        grid: Whether to draw a grid.
+        zero_lines: Draw horizontal and vertical lines at zero.
+        despine: Hide top and right axes spines.
+        axis_style: Axis spine style. ``"separated"`` offsets left/bottom spines
+            so they do not touch and adds end ticks; ``"standard"`` keeps the
+            default matplotlib spine behavior.
+        save_path: Optional path for the figure.
+        show: If True, call ``plt.show()`` before returning.
+        savefig_kwargs: Extra keyword arguments for ``Figure.savefig``.
+
+    Returns:
+        The matplotlib axes containing the plot.
+    """
+    if x not in embedding.columns:
+        raise ValueError(f"embedding does not contain x column {x!r}")
+    if y not in embedding.columns:
+        raise ValueError(f"embedding does not contain y column {y!r}")
+    if hue is not None and hue not in embedding.columns:
+        raise ValueError(f"embedding does not contain hue column {hue!r}")
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    if len(markers) == 0:
+        raise ValueError("markers must contain at least one marker style")
+
+    if hue is None:
+        ax.scatter(
+            embedding[x],
+            embedding[y],
+            s=point_size,
+            alpha=point_alpha,
+            marker=markers[0],
+            linewidths=0,
+            rasterized=scatter_rasterized_for_path(save_path),
+        )
+    else:
+        labels = embedding[hue].fillna("Unknown").astype(str)
+        if category_order is None:
+            categories = sorted(labels.unique())
+        else:
+            order = [str(c) for c in category_order]
+            categories = [c for c in order if c in set(labels)]
+            categories.extend(c for c in sorted(labels.unique()) if c not in set(categories))
+        colors = _generate_distinct_colors(len(categories))
+
+        for idx, category in enumerate(categories):
+            mask = labels == category
+            color = _resolve_label_color(
+                category,
+                idx,
+                label_colors,
+                lambda i: colors[int(i) % len(colors)],
+            )
+            ax.scatter(
+                embedding.loc[mask, x],
+                embedding.loc[mask, y],
+                label=category,
+                s=point_size,
+                alpha=point_alpha,
+                linewidths=0,
+                color=color,
+                marker=markers[idx % len(markers)],
+                rasterized=scatter_rasterized_for_path(save_path),
+            )
+
+    if zero_lines:
+        ax.axhline(0, color="0.85", linewidth=0.8, zorder=0)
+        ax.axvline(0, color="0.85", linewidth=0.8, zorder=0)
+    if title is not None:
+        ax.set_title(title)
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    ax.grid(grid)
+    ax.xaxis.label.set_size(ax.xaxis.label.get_size() * 1.5)
+    ax.yaxis.label.set_size(ax.yaxis.label.get_size() * 1.5)
+    ax.title.set_size(ax.title.get_size() * 1.5)
+    tick_size = FontProperties(size=plt.rcParams["xtick.labelsize"]).get_size_in_points()
+    ax.tick_params(axis="both", which="both", labelsize=tick_size * 1.5)
+    if axis_style not in {"separated", "standard"}:
+        raise ValueError("axis_style must be one of {'separated', 'standard'}")
+    if axis_style == "separated":
+        ax.spines["left"].set_position(("outward", 12))
+        ax.spines["bottom"].set_position(("outward", 12))
+        ax.tick_params(axis="x", direction="out", length=10, width=0.9, pad=10)
+        ax.tick_params(axis="y", direction="out", length=10, width=0.9, pad=10)
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        xticks = np.asarray(ax.get_xticks(), dtype=float)
+        yticks = np.asarray(ax.get_yticks(), dtype=float)
+        xticks = xticks[(xticks >= xlim[0]) & (xticks <= xlim[1])]
+        yticks = yticks[(yticks >= ylim[0]) & (yticks <= ylim[1])]
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
+        ax.spines["bottom"].set_bounds(xticks[0], xticks[-1])
+        ax.spines["left"].set_bounds(yticks[0], yticks[-1])
+    if despine:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    if hue is not None and legend:
+        legend_kw = {"title": legend_title, "frameon": False, "fontsize": legend_fontsize}
+        if legend_outside:
+            legend_kw.update({"bbox_to_anchor": (1.02, 1), "loc": "upper left", "borderaxespad": 0})
+        ax.legend(**legend_kw)
+    ax.figure.tight_layout()
+
+    if save_path is not None:
+        kw = dict(default_savefig_kwargs(str(save_path)))
+        kw.update(savefig_kwargs or {})
+        ax.figure.savefig(save_path, **kw)
+    if show:
+        plt.show()
+    return ax
 
 
 def scatter(

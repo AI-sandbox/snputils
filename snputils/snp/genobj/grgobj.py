@@ -20,18 +20,18 @@ class GRGObject:
     """
     def __init__(
         self,
-        calldata_gt: Optional[GRGType] = None,
+        genotypes: Optional[GRGType] = None,
         filename: Optional[str] = None,
         mutable: Optional[bool] = None
     ) -> None:
         """
         Args:
-            calldata_gt (GRG | MutableGRG, optional): 
+            genotypes (GRG | MutableGRG, optional): 
                 A Genotype Representation Graph containing genotype data for each sample. 
             filename (str, optional)
                 File storing the GRG.
         """
-        self.__calldata_gt = calldata_gt
+        self.__genotypes = genotypes
         self.__filename = filename
         self.__mutable = mutable
         self.__latest   = False
@@ -65,16 +65,16 @@ class GRGObject:
             n_samples=self._n_samples_or_none(),
             filename=self.__filename,
             mutable=self.__mutable,
-            loaded=self.__calldata_gt is not None,
+            loaded=self.__genotypes is not None,
         )
 
     def __str__(self) -> str:
         return self.__repr__()
 
     def _grg_count(self, attr: str) -> Optional[int]:
-        if self.__calldata_gt is None:
+        if self.__genotypes is None:
             return None
-        value = getattr(self.__calldata_gt, attr, None)
+        value = getattr(self.__genotypes, attr, None)
         if value is None:
             return None
         return int(value)
@@ -86,22 +86,22 @@ class GRGObject:
             return None
 
     @property
-    def calldata_gt(self) -> Optional[GRGType]:
+    def genotypes(self) -> Optional[GRGType]:
         """
-        Retrieve `calldata_gt`.
+        Retrieve `genotypes`.
 
         Returns:
             GRG | MutableGRG: 
                 An GRG containing genotype data for all samples.
         """
-        return self.__calldata_gt
+        return self.__genotypes
 
-    @calldata_gt.setter
-    def calldata_gt(self, x: GRGType):
+    @genotypes.setter
+    def genotypes(self, x: GRGType):
         """
-        Update `calldata_gt`.
+        Update `genotypes`.
         """
-        self.__calldata_gt = x
+        self.__genotypes = x
 
 
     @property
@@ -135,11 +135,11 @@ class GRGObject:
 
     def allele_freq(self) -> np.ndarray:
         # allele frequency array
-        al_freq = np.ones(self.calldata_gt.num_samples) / self.calldata_gt.num_samples
-        return pyg.dot_product(self.calldata_gt, al_freq, pyg.TraversalDirection.UP)
+        al_freq = np.ones(self.genotypes.num_samples) / self.genotypes.num_samples
+        return pyg.dot_product(self.genotypes, al_freq, pyg.TraversalDirection.UP)
 
     def dot_product(self, array: np.ndarray, traversal_direction: pyg.TraversalDirection):
-        return pyg.dot_product(self.calldata_gt, array, traversal_direction)
+        return pyg.dot_product(self.genotypes, array, traversal_direction)
     
     # TODO: consider moving this elsewhere.
     def allele_freq_from_file(self, filename: Optional[str] = None) -> pd.DataFrame:
@@ -172,37 +172,37 @@ class GRGObject:
             return pd.read_csv(fp.name, sep="\t")
     
     def merge(self, combine_nodes: bool = False, *args) -> None:
-        # assert self.__mutable and isinstance(self.calldata_gt, pyg.MutableGRG), "GRG must be mutable"
+        # assert self.__mutable and isinstance(self.genotypes, pyg.MutableGRG), "GRG must be mutable"
         for arg in args:
             if not isinstance(arg, str):
                 raise TypeError("All merge inputs must be strings.")
         # list of files, and combine_nodes
-        self.__calldata_gt.merge(list(args), combine_nodes)
+        self.__genotypes.merge(list(args), combine_nodes)
         #pep8 be damned
-        # if inplace: self.__calldata_gt = merged_data
+        # if inplace: self.__genotypes = merged_data
         # else      : return merged_data
 
     def n_samples(self, ploidy = 2) -> int:
         """
         Get number of samples from GRG. Diploid by default. 
         """
-        return int(self.__calldata_gt.num_samples / ploidy)
+        return int(self.__genotypes.num_samples / ploidy)
     
     def n_snps(self) -> int:
-        return self.__calldata_gt.num_mutations
+        return self.__genotypes.num_mutations
 
     def _sample_ids(self, n_samples: int, sample_prefix: str) -> np.ndarray:
         default_ids = [f"{sample_prefix}_{idx}" for idx in range(n_samples)]
-        if self.__calldata_gt is None:
+        if self.__genotypes is None:
             return np.asarray(default_ids, dtype=object)
 
-        has_individual_ids = bool(getattr(self.__calldata_gt, "has_individual_ids", False))
-        num_individuals = int(getattr(self.__calldata_gt, "num_individuals", 0))
+        has_individual_ids = bool(getattr(self.__genotypes, "has_individual_ids", False))
+        num_individuals = int(getattr(self.__genotypes, "num_individuals", 0))
         if has_individual_ids and n_samples == num_individuals:
             ids = []
             for idx in range(n_samples):
                 try:
-                    sample_id = str(self.__calldata_gt.get_individual_id(idx))
+                    sample_id = str(self.__genotypes.get_individual_id(idx))
                 except RuntimeError:
                     sample_id = ""
                 ids.append(sample_id if sample_id else default_ids[idx])
@@ -238,10 +238,10 @@ class GRGObject:
         """
         from snputils.snp.genobj.snpobj import SNPObject
 
-        if self.__calldata_gt is None:
-            raise ValueError("Cannot convert to SNPObject: `calldata_gt` is None.")
+        if self.__genotypes is None:
+            raise ValueError("Cannot convert to SNPObject: `genotypes` is None.")
 
-        grg = self.__calldata_gt
+        grg = self.__genotypes
         n_mutations = int(grg.num_mutations)
         n_haplotypes = int(grg.num_samples)
         ploidy = int(getattr(grg, "ploidy", 2))
@@ -261,17 +261,17 @@ class GRGObject:
 
         if sum_strands:
             if n_mutations == 0:
-                calldata_gt = _empty((0, n_individuals))
+                genotypes = _empty((0, n_individuals))
             elif ploidy == 1:
                 mutation_eye = np.eye(n_mutations, dtype=np.float64)
                 hap_matrix = pyg.matmul(grg, mutation_eye, pyg.TraversalDirection.DOWN)
-                calldata_gt = np.rint(hap_matrix).astype(np.int8, copy=False)
+                genotypes = np.rint(hap_matrix).astype(np.int8, copy=False)
             else:
                 mutation_eye = np.eye(n_mutations, dtype=np.float64)
                 diploid_matrix = pyg.matmul(
                     grg, mutation_eye, pyg.TraversalDirection.DOWN, by_individual=True
                 )
-                calldata_gt = np.rint(diploid_matrix).astype(np.int8, copy=False)
+                genotypes = np.rint(diploid_matrix).astype(np.int8, copy=False)
             sample_ids = self._sample_ids(n_individuals, sample_prefix)
         else:
             if ploidy != 2:
@@ -280,12 +280,12 @@ class GRGObject:
                     "Use `sum_strands=True` for non-diploid data."
                 )
             if n_mutations == 0:
-                calldata_gt = _empty((0, n_individuals, ploidy))
+                genotypes = _empty((0, n_individuals, ploidy))
             else:
                 mutation_eye = np.eye(n_mutations, dtype=np.float64)
                 hap_matrix = pyg.matmul(grg, mutation_eye, pyg.TraversalDirection.DOWN)
                 hap_matrix = np.rint(hap_matrix).astype(np.int8, copy=False)
-                calldata_gt = hap_matrix.reshape(n_mutations, n_individuals, ploidy)
+                genotypes = hap_matrix.reshape(n_mutations, n_individuals, ploidy)
             sample_ids = self._sample_ids(n_individuals, sample_prefix)
 
         variants_ref = np.empty(n_mutations, dtype=object)
@@ -308,7 +308,7 @@ class GRGObject:
         variants_qual = np.full(n_mutations, np.nan, dtype=np.float32)
 
         return SNPObject(
-            calldata_gt=calldata_gt,
+            genotypes=genotypes,
             samples=sample_ids,
             variants_ref=variants_ref,
             variants_alt=variants_alt,
@@ -342,4 +342,12 @@ class GRGObject:
 
     def to_grg(self, filename: str, 
                      allow_simplify: bool = True):
-        pyg.save_grg(self.__calldata_gt, filename, allow_simplify)
+        pyg.save_grg(self.__genotypes, filename, allow_simplify)
+
+    def save(self, filename: str, allow_simplify: bool = True):
+        """Write the GRG to disk.
+
+        This is the object-style alias for :meth:`to_grg`, matching the save
+        method exposed by other snputils containers.
+        """
+        self.to_grg(filename, allow_simplify=allow_simplify)

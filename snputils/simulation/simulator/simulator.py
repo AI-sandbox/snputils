@@ -363,7 +363,7 @@ class OnlineSimulator:
         meta_idxs = [samp2idx[s] for s in isamples]
         self.meta = self.meta.iloc[meta_idxs].copy().reset_index(drop=True)
         
-        snps = np.asarray(self.snp_data.calldata_gt).transpose(1, 2, 0)[iidx, ...]
+        snps = np.asarray(self.snp_data.genotypes).transpose(1, 2, 0)[iidx, ...]
         n_samples, ploidy, n_snps = snps.shape
         
         if self.make_haploid:

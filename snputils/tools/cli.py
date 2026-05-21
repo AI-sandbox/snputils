@@ -294,11 +294,11 @@ def _add_admixture_map_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to phenotype file.",
     )
     parser.add_argument(
-        "--msp-path",
-        dest="msp_path",
+        "--lai-path",
+        dest="lai_path",
         required=True,
         type=str,
-        help="Path to MSP file.",
+        help="Path to local ancestry file (.msp/.msp.tsv or FLARE .anc.vcf.gz).",
     )
     parser.add_argument(
         "--results-path",
@@ -538,7 +538,7 @@ def _add_gwas_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_dimred_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--snp-path", required=True, help="Path to SNP input. For maasmds, pass comma-separated paths for multiple arrays.")
-    parser.add_argument("--lai-path", required=True, help="Path to MSP/local ancestry input. For maasmds, pass comma-separated paths matching --snp-path.")
+    parser.add_argument("--lai-path", required=True, help="Path to local ancestry input. For maasmds, pass comma-separated paths matching --snp-path.")
     parser.add_argument("--labels-file", required=True, help="TSV labels file with indID and label columns.")
     parser.add_argument("--ancestry", required=True, help="Ancestry index or ancestry-map label to analyze.")
     parser.add_argument("--coords", required=True, help="Output TSV/CSV path for coordinates and row metadata.")

@@ -1,7 +1,6 @@
 import logging
 from typing import Iterator, List, Optional
 import os
-import csv
 
 import numpy as np
 import polars as pl
@@ -22,6 +21,12 @@ def _open_textfile(filename):
         import zstandard as zstd
         return zstd.open(filename, "rt")
     return open(filename, "rt")
+
+
+def _detect_pvar_separator(line: str) -> str:
+    if "\t" in line:
+        return "\t"
+    return " "
 
 
 @SNPBaseReader.register
@@ -108,7 +113,7 @@ class PGENReader(SNPBaseReader):
                         continue
                     else:
                         if separator is None:
-                            separator = csv.Sniffer().sniff(file.readline()).delimiter
+                            separator = _detect_pvar_separator(line)
                         if line.startswith("#CHROM"):  # Header
                             pvar_header_line_num = line_num
                             header = line.strip().split()
@@ -173,15 +178,19 @@ class PGENReader(SNPBaseReader):
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
                 pvar = pvar.collect()
             else:
+                requested_variant_idxs = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+                if np.any(requested_variant_idxs >= file_num_variants):
+                    raise ValueError("One or more variant indexes are out of bounds.")
+                selector = pl.DataFrame({"index": requested_variant_idxs}).with_row_index("_selector_order")
                 pvar = (
-                    pvar.with_row_index()
-                    .filter(pl.col("index").is_in(np.asarray(variant_idxs, dtype=np.uint32).ravel()))
+                    selector.lazy()
+                    .join(pvar.with_row_index(), on="index", how="left")
+                    .sort("_selector_order")
                     .collect()
                 )
-                variant_idxs = pvar.select("index").to_series().to_numpy()
-                variant_idxs = np.asarray(variant_idxs, dtype=np.uint32)
+                variant_idxs = requested_variant_idxs
                 num_variants = np.size(variant_idxs)
-                pvar = pvar.drop("index")
+                pvar = pvar.drop(["_selector_order", "index"])
 
             log.info(f"Reading {filename_noext}.psam")
 
@@ -272,7 +281,7 @@ class PGENReader(SNPBaseReader):
             sex_col = psam.get_column("SEX").fill_null("NA").cast(pl.String).to_numpy()
 
         snpobj = SNPObject(
-            calldata_gt=genotypes if "GT" in fields else None,
+            genotypes=genotypes if "GT" in fields else None,
             samples=psam.get_column("IID").to_numpy() if "IID" in fields and "IID" in psam.columns else None,
             sample_fid=fid_col,
             sample_sex=sex_col,
@@ -317,7 +326,7 @@ class PGENReader(SNPBaseReader):
                 if line.startswith("##"):
                     continue
                 if local_separator is None:
-                    local_separator = csv.Sniffer().sniff(file.readline()).delimiter
+                    local_separator = _detect_pvar_separator(line)
                 if line.startswith("#CHROM"):
                     pvar_header_line_num = line_num
                     header = line.strip().split()
@@ -376,13 +385,9 @@ class PGENReader(SNPBaseReader):
 
         if variant_idxs is not None:
             requested = np.asarray(variant_idxs, dtype=np.uint32).ravel()
-            resolved = (
-                variant_meta.filter(pl.col("index").is_in(requested))
-                .select("index")
-                .to_series()
-                .to_numpy()
-            )
-            return np.asarray(resolved, dtype=np.uint32)
+            if np.any(requested >= variant_meta.height):
+                raise ValueError("One or more variant indexes are out of bounds.")
+            return requested
 
         return np.arange(variant_meta.height, dtype=np.uint32)
 

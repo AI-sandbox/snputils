@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from snputils.processing._utils.gen_tools import process_calldata_gt, process_labels_weights
+from snputils.processing._utils.gen_tools import process_genotypes, process_labels_weights
 from snputils.processing._utils.mds_distance import (
     binary_intersection,
     conversion_metrics,
@@ -25,7 +25,7 @@ def _make_snpobj(
     variants_alt=None,
 ):
     sample_genotypes = np.asarray(sample_genotypes, dtype=np.int8)
-    calldata_gt = np.repeat(sample_genotypes[:, :, None], 2, axis=2)
+    genotypes = np.repeat(sample_genotypes[:, :, None], 2, axis=2)
     variants_pos = np.arange(pos_start, pos_start + sample_genotypes.shape[0], dtype=np.int64)
     variants_chrom = np.full(sample_genotypes.shape[0], chrom)
     if variants_ref is None:
@@ -33,7 +33,7 @@ def _make_snpobj(
     if variants_alt is None:
         variants_alt = np.full(sample_genotypes.shape[0], "G")
     return SNPObject(
-        calldata_gt=calldata_gt,
+        genotypes=genotypes,
         samples=np.asarray(samples),
         variants_id=np.asarray(variant_ids),
         variants_pos=variants_pos,
@@ -144,7 +144,7 @@ def _manual_multi_array_run(
 
     variants_ref_map = {}
     for array_index, (snpobj, laiobj) in enumerate(zip(snpobjs, laiobjs)):
-        mask, variants_id, haplotypes, variants_ref_map = process_calldata_gt(
+        mask, variants_id, haplotypes, variants_ref_map = process_genotypes(
             snpobj,
             laiobj,
             ancestry,
@@ -325,7 +325,7 @@ def test_maasmds_save_and_load_masks_round_trip(tmp_path):
     np.testing.assert_array_equal(loaded.array_labels_, saved.array_labels_)
 
 
-def test_process_calldata_gt_harmonizes_flipped_reference_alleles_across_arrays():
+def test_process_genotypes_harmonizes_flipped_reference_alleles_across_arrays():
     array1 = _make_snpobj(
         samples=["A1", "A2"],
         variant_ids=["rs1", "rs2", "rs3"],
@@ -361,7 +361,7 @@ def test_process_calldata_gt_harmonizes_flipped_reference_alleles_across_arrays(
     )
     laiobjs = [_make_laiobj(["A1", "A2"]), _make_laiobj(["B1", "B2"])]
     variants_ref_map = {}
-    _, _, _, variants_ref_map = process_calldata_gt(
+    _, _, _, variants_ref_map = process_genotypes(
         array1,
         laiobjs[0],
         0,
@@ -371,7 +371,7 @@ def test_process_calldata_gt_harmonizes_flipped_reference_alleles_across_arrays(
         rsid_or_chrompos=1,
         variants_ref_map=variants_ref_map,
     )
-    flipped_mask, flipped_variants, flipped_haplotypes, variants_ref_map = process_calldata_gt(
+    flipped_mask, flipped_variants, flipped_haplotypes, variants_ref_map = process_genotypes(
         array2_flipped,
         laiobjs[1],
         0,
@@ -381,7 +381,7 @@ def test_process_calldata_gt_harmonizes_flipped_reference_alleles_across_arrays(
         rsid_or_chrompos=1,
         variants_ref_map=variants_ref_map,
     )
-    expected_mask, expected_variants, expected_haplotypes, _ = process_calldata_gt(
+    expected_mask, expected_variants, expected_haplotypes, _ = process_genotypes(
         array2_expected,
         laiobjs[1],
         0,

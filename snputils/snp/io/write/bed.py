@@ -36,10 +36,10 @@ class BEDWriter:
 
         Args:
             rename_missing_values (bool, optional):
-                If True, renames potential missing values in `snpobj.calldata_gt` before writing. 
+                If True, renames potential missing values in `snpobj.genotypes` before writing. 
                 Defaults to True.
             before (int, float, or str, default=-1): 
-                The current representation of missing values in `calldata_gt`. Common values might be -1, '.', or NaN.
+                The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'): 
                 The value that will replace `before`. Default is '.'.
@@ -54,7 +54,7 @@ class BEDWriter:
 
         # pgenlib expects a numeric hardcall matrix in (samples, variants) order.
         hardcalls = phased_to_hardcalls(
-            self.__snpobj.calldata_gt,
+            self.__snpobj.genotypes,
             rename_missing_values=rename_missing_values,
             before=before,
             after=after,

@@ -283,7 +283,7 @@ def _weighted_jackknife_ratio_from_block_sums(
 
 
 def _aggregate_to_pop_allele_freq(
-    calldata_gt: np.ndarray,
+    genotypes: np.ndarray,
     sample_labels: Sequence[str],
     *,
     ancestry: Optional[Union[str, int]] = None,
@@ -312,7 +312,7 @@ def _aggregate_to_pop_allele_freq(
             )
 
     afs, counts, pops = aggregate_pop_allele_freq(
-        calldata_gt=calldata_gt,
+        genotypes=genotypes,
         sample_labels=sample_labels,
         ancestry=ancestry,
         calldata_lai=calldata_lai,
@@ -364,7 +364,7 @@ def _prepare_inputs(
         if sample_labels is None:
             sample_labels = _default_sample_labels_from_snpobj(snpobj)
         afs, counts, pops = _aggregate_to_pop_allele_freq(
-            snpobj.calldata_gt,
+            snpobj.genotypes,
             sample_labels,
             ancestry=ancestry,
             snpobj=snpobj,
@@ -1280,29 +1280,32 @@ def fst(
     Pairwise F_ST with delete-one block jackknife SE.
 
     Methods:
-        `hudson`:
+        - ``hudson``:
             Ratio-of-averages following Hudson 1992 / Bhatia 2013. Uses
-            `num = d_xy - 0.5*(pi_x + pi_y)` and `den = d_xy`, where
-            `d_xy = p_x*(1-p_y) + p_y*(1-p_x)` and `pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)`.
-        `weir_cockerham`:
+            ``num = d_xy - 0.5*(pi_x + pi_y)`` and ``den = d_xy``, where
+            ``d_xy = p_x*(1-p_y) + p_y*(1-p_x)`` and
+            ``pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)``.
+        - ``weir_cockerham``:
             Weir and Cockerham's theta for two populations. Computes per-SNP
-            variance components `a`, `b`, and `c`, then uses a ratio-of-sums
-            jackknife with `num = a` and `den = a + b + c`.
-        `tsallis`:
+            variance components ``a``, ``b``, and ``c``, then uses a ratio-of-sums
+            jackknife with ``num = a`` and ``den = a + b + c``.
+        - ``tsallis``:
             Tsallis q-entropy F-statistic. For two populations, computes
             per-SNP total entropy S_q(Bern(p_bar)) and within entropy
             w1*S_q(Bern(p1)) + w2*S_q(Bern(p2)), then returns the
-            genome-wide micro-average:
+            genome-wide micro-average::
+
                 sum_l [S_total(l) - S_within(l)] / sum_l S_total(l)
 
             With q=2, this equals the classical heterozygosity-based F_ST:
+
                 (H_T - H_S) / H_T
 
             With q=1, this is the Shannon entropy / normalized mutual
             information analogue.
 
-            `tsallis_weights="equal"` uses w1=w2=0.5, for OVR equal-group weighting.
-            `tsallis_weights="sample_size"` uses per-SNP haplotype count weights.
+            ``tsallis_weights="equal"`` uses w1=w2=0.5, for OVR equal-group weighting.
+            ``tsallis_weights="sample_size"`` uses per-SNP haplotype count weights.
 
     Notes:
       * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).

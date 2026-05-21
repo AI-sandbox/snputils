@@ -9,6 +9,15 @@ from .base import WideBaseReader
 from snputils.ancestry.genobj.wide import GlobalAncestryObject
 
 
+def _append_admixture_suffix(path: Path, suffix: str) -> Path:
+    return Path(f"{path}{suffix}")
+
+
+def _strip_admixture_suffix(path: Path, suffix: str) -> Path:
+    path_str = str(path)
+    return Path(path_str[:-len(suffix)])
+
+
 class AdmixtureReader(WideBaseReader):
     """
     A reader class for parsing ADMIXTURE files and constructing a `snputils.ancestry.genobj.GlobalAncestryObject`.
@@ -44,8 +53,19 @@ class AdmixtureReader(WideBaseReader):
                 It should end with .map or .txt.
                 If None, ancestries are not loaded.
         """
-        self.__Q_file = Path(Q_file)
-        self.__P_file = Path(P_file) if P_file is not None else None
+        q_path = Path(Q_file)
+        p_path = Path(P_file) if P_file is not None else None
+        if not q_path.exists() and q_path.suffix != ".Q":
+            q_candidate = _append_admixture_suffix(q_path, ".Q")
+            if q_candidate.exists():
+                q_path = q_candidate
+                if p_path is None:
+                    p_candidate = _append_admixture_suffix(_strip_admixture_suffix(q_path, ".Q"), ".P")
+                    if p_candidate.exists():
+                        p_path = p_candidate
+
+        self.__Q_file = q_path
+        self.__P_file = p_path
         self.__sample_file = Path(sample_file) if sample_file is not None else None
         self.__snp_file = Path(snp_file) if snp_file is not None else None
         self.__ancestry_file = Path(ancestry_file) if ancestry_file is not None else None

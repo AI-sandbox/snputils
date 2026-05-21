@@ -53,10 +53,10 @@ class VCFWriter:
                 If True, individual VCF files are generated for each chromosome.
                 If False, a single VCF file containing data for all chromosomes is created. Defaults to False.
             rename_missing_values (bool, optional):
-                If True, renames potential missing values in `snpobj.calldata_gt` before writing.
+                If True, renames potential missing values in `snpobj.genotypes` before writing.
                 Defaults to True.
             before (int, float, or str, default=-1):
-                The current representation of missing values in `calldata_gt`. Common values might be -1, '.', or NaN.
+                The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'):
                 The value that will replace `before`. Default is '.'.
@@ -73,7 +73,7 @@ class VCFWriter:
         else:
             self.__file_extension = ".vcf"
 
-        # Optionally rename potential missing values in `snpobj.calldata_gt` before writing
+        # Optionally rename potential missing values in `snpobj.genotypes` before writing
         if rename_missing_values:
             self.__snpobj.rename_missings(before=before, after=after, inplace=True)
 
@@ -105,7 +105,7 @@ class VCFWriter:
             data_chrom: The SNPObject instance containing the data for the chromosome.
             variants_info: Optional per-variant INFO strings; length must match variant count.
         """
-        npy3 = data_chrom.calldata_gt
+        npy3 = data_chrom.genotypes
         n_windows, n_samples, _ = npy3.shape
 
         if chrom == "All":

@@ -82,8 +82,8 @@ def test_bed_pgen_variants_pos(snpobj_bed, snpobj_pgen):
 # VCF - PGEN
 
 
-def test_vcf_pgen_calldata_gt(snpobj_vcf, snpobj_pgen):
-    assert np.array_equal(snpobj_vcf.calldata_gt, snpobj_pgen.calldata_gt)
+def test_vcf_pgen_genotypes(snpobj_vcf, snpobj_pgen):
+    assert np.array_equal(snpobj_vcf.genotypes, snpobj_pgen.genotypes)
 
 
 def test_vcf_pgen_samples(snpobj_vcf, snpobj_pgen):
@@ -134,7 +134,7 @@ def test_vcf_gz(data_path):
 # PGEN with compressed pvar
 def test_pgen_pvar_zst(data_path, snpobj_pgen):
     snpobj = PGENReader(data_path + "/pgen_zst/subset").read(sum_strands=False)
-    assert np.array_equal(snpobj_pgen.calldata_gt, snpobj.calldata_gt)
+    assert np.array_equal(snpobj_pgen.genotypes, snpobj.genotypes)
     assert np.array_equal(snpobj_pgen.variants_ref, snpobj.variants_ref)
     assert np.array_equal(snpobj_pgen.variants_alt, snpobj.variants_alt)
     assert np.array_equal(snpobj_pgen.variants_chrom, snpobj.variants_chrom)

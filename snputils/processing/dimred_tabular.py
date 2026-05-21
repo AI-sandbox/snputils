@@ -3,7 +3,7 @@
 Supports :class:`~snputils.processing.pca.PCA`,
 :class:`~snputils.processing.mdpca.mdPCA`, and
 :class:`~snputils.processing.maasmds.maasMDS` via
-:func:`save_embedding_table_from_model` and the low-level
+:func:`embedding_dataframe_from_model`, :func:`save_embedding_table_from_model`, and the low-level
 :func:`save_embedding_table` / :func:`build_embedding_dataframe`.
 """
 
@@ -73,7 +73,7 @@ def pca_row_haplotype_ids(
     elif samples_subset is not None:
         s = s[np.asarray(samples_subset, dtype=int)]
 
-    gt = snpobj.calldata_gt
+    gt = snpobj.genotypes
     if gt.ndim == 2:
         return [str(x) for x in s.tolist()]
     if gt.ndim == 3:
@@ -91,7 +91,7 @@ def pca_row_haplotype_ids(
             i, _, k = np.unravel_index(lin, (n_samples, n_snps, 2))
             out.append(f"{s[int(i)]}|{int(k)}")
         return out
-    raise ValueError(f"calldata_gt must be 2D or 3D, got {gt.ndim}D")
+    raise ValueError(f"genotypes must be 2D or 3D, got {gt.ndim}D")
 
 
 def pca_row_individual_ids(haplotype_row_ids: Sequence[str]) -> List[str]:
@@ -215,6 +215,112 @@ def _samples_and_haplotypes_from_dimred(obj: Any) -> tuple[List[str], Optional[L
         arr = np.asarray(arr)
 
     return ind_ids, hap_list, arr
+
+
+def embedding_dataframe_from_model(
+    obj: Any,
+    *,
+    metadata: Optional[pd.DataFrame] = None,
+    metadata_id_col: str = "sample",
+    metadata_join_col: str = "indID",
+    require_metadata_match: bool = False,
+) -> pd.DataFrame:
+    """
+    Build a coordinate table from a fitted dimensionality-reduction model.
+
+    This is the in-memory counterpart to :func:`save_embedding_table_from_model`.
+    It reads ``obj.X_new_`` and row identifiers from fitted ``PCA``, ``mdPCA``,
+    and ``maasMDS`` objects, creates component columns such as ``PC1``/``PC2``,
+    and can join sample-level metadata for plotting or downstream analysis.
+
+    Args:
+        obj: Fitted dimensionality-reduction model with ``X_new_`` and row identifiers.
+        metadata: Optional sample metadata table to join to the coordinates.
+        metadata_id_col: Column in ``metadata`` containing sample IDs.
+        metadata_join_col: Coordinate-table column to join against. Use ``"indID"``
+            for sample-level metadata; use ``"haplotype_id"`` only for metadata
+            keyed by expanded haplotype rows.
+        require_metadata_match: If True, raise when any coordinate row lacks
+            matching metadata.
+
+    Returns:
+        DataFrame containing identifiers, method, component coordinates, and
+        optional metadata columns.
+    """
+    x = getattr(obj, "X_new_", None)
+    if x is None:
+        raise ValueError("Nothing to tabulate: X_new_ is None (call fit_transform or transform first).")
+
+    cls_name = obj.__class__.__name__
+    if cls_name == "PCA":
+        style: ComponentStyle = "PC"
+        method = "pca"
+    elif cls_name == "mdPCA":
+        style = "PC"
+        method = "mdpca"
+    elif cls_name == "maasMDS":
+        style = "MDS"
+        method = "maasmds"
+    else:
+        warnings.warn(
+            f"Unknown class {cls_name!r}; using component prefix PC and method name {cls_name!r}.",
+            UserWarning,
+            stacklevel=2,
+        )
+        style = "PC"
+        method = cls_name.lower()
+
+    ind_ids, hap_list, arr = _samples_and_haplotypes_from_dimred(obj)
+    x_arr = _to_numpy2d(x)
+    if len(ind_ids) == 0:
+        ind_ids = [f"row{i}" for i in range(x_arr.shape[0])]
+        warnings.warn(
+            "No sample/haplotype IDs on the model; using placeholder indID row0, row1, ...",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    hap_arg: Optional[List[str]] = None
+    if hap_list is not None and len(hap_list) == x_arr.shape[0]:
+        if not all(str(a) == str(b) for a, b in zip(hap_list, ind_ids)):
+            hap_arg = [str(h) for h in hap_list]
+
+    arr_arg = arr.tolist() if arr is not None and len(arr) == x_arr.shape[0] else None
+    df = build_embedding_dataframe(
+        x_arr,
+        ind_ids=ind_ids,
+        haplotype_ids=hap_arg,
+        array_index=arr_arg,
+        method=method,
+        component_style=style,
+    )
+
+    if metadata is None:
+        return df
+
+    if metadata_id_col not in metadata.columns:
+        raise ValueError(f"metadata does not contain metadata_id_col={metadata_id_col!r}")
+    if metadata_join_col not in df.columns:
+        raise ValueError(f"embedding table does not contain metadata_join_col={metadata_join_col!r}")
+
+    meta = metadata.copy()
+    meta[metadata_id_col] = meta[metadata_id_col].astype(str)
+    out = df.copy()
+    out[metadata_join_col] = out[metadata_join_col].astype(str)
+    out = out.merge(
+        meta,
+        left_on=metadata_join_col,
+        right_on=metadata_id_col,
+        how="left",
+        validate="many_to_one",
+    )
+    if metadata_id_col != metadata_join_col and metadata_id_col in out.columns:
+        out = out.drop(columns=[metadata_id_col])
+    if require_metadata_match:
+        metadata_cols = [c for c in meta.columns if c != metadata_id_col]
+        if metadata_cols and out[metadata_cols].isna().all(axis=1).any():
+            raise ValueError("metadata is missing rows for one or more embedding coordinates")
+    return out
 
 
 def save_embedding_table_from_model(

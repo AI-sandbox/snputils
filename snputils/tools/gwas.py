@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from snputils.phenotype.io.read import PhenotypeReader
-from snputils.phenotype.genobj import PhenotypeObject
+from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj import SNPObject
 from snputils.snp.io.read import BEDReader, PGENReader, SNPReader, VCFReader
 from snputils.snp.io.read.vcf import VCFReaderPolars
@@ -20,6 +20,7 @@ from ._association import (
     _compute_linear_ci_beta,
     _compute_logistic_ci_or,
     _compute_multiple_testing_adjustments,
+    _coerce_covar_source,
     _confidence_interval_label,
     _enforce_memory_budget,
     _fit_linear_batch,
@@ -31,7 +32,6 @@ from ._association import (
     _odds_ratio_batch,
     _open_tsv_for_write,
     _prepare_fwl,
-    _read_covar,
     _read_sample_list,
     _resolve_output_path,
 )
@@ -363,22 +363,22 @@ def _iter_snp_chunks(
     aligned_samples: Sequence[str],
 ) -> Iterator[Dict[str, Optional[np.ndarray]]]:
     if isinstance(snp_reader, SNPObject):
-        if snp_reader.calldata_gt is None:
+        if snp_reader.genotypes is None:
             return
-        gt = np.asarray(snp_reader.calldata_gt)
+        gt = np.asarray(snp_reader.genotypes)
         if gt.ndim not in (2, 3):
-            raise ValueError("GWAS expects SNPObject.calldata_gt with shape (variants, samples[, strands]).")
+            raise ValueError("GWAS expects SNPObject.genotypes with shape (variants, samples[, strands]).")
 
         sample_indices = np.asarray(sample_indices, dtype=np.int64)
         n_variants = int(gt.shape[0])
         for start in range(0, n_variants, int(chunk_size)):
             stop = min(start + int(chunk_size), n_variants)
             if gt.ndim == 2:
-                calldata_gt = gt[start:stop, :][:, sample_indices]
+                genotypes = gt[start:stop, :][:, sample_indices]
             else:
-                calldata_gt = gt[start:stop, :, :][:, sample_indices, :]
+                genotypes = gt[start:stop, :, :][:, sample_indices, :]
             yield {
-                "calldata_gt": calldata_gt,
+                "genotypes": genotypes,
                 "variants_chrom": None if snp_reader.variants_chrom is None else snp_reader.variants_chrom[start:stop],
                 "variants_pos": None if snp_reader.variants_pos is None else snp_reader.variants_pos[start:stop],
                 "variants_id": None if snp_reader.variants_id is None else snp_reader.variants_id[start:stop],
@@ -395,7 +395,7 @@ def _iter_snp_chunks(
             chunk_size=chunk_size,
         ):
             yield {
-                "calldata_gt": chunk.calldata_gt,
+                "genotypes": chunk.genotypes,
                 "variants_chrom": chunk.variants_chrom,
                 "variants_pos": chunk.variants_pos,
                 "variants_id": chunk.variants_id,
@@ -412,7 +412,7 @@ def _iter_snp_chunks(
             chunk_size=chunk_size,
         ):
             yield {
-                "calldata_gt": chunk.calldata_gt,
+                "genotypes": chunk.genotypes,
                 "variants_chrom": chunk.variants_chrom,
                 "variants_pos": chunk.variants_pos,
                 "variants_id": chunk.variants_id,
@@ -434,13 +434,13 @@ def _iter_snp_chunks(
             samples=list(aligned_samples),
             sum_strands=True,
         )
-        if full.calldata_gt is None:
+        if full.genotypes is None:
             return
-        n_variants = int(full.calldata_gt.shape[0])
+        n_variants = int(full.genotypes.shape[0])
         for start in range(0, n_variants, int(chunk_size)):
             stop = min(start + int(chunk_size), n_variants)
             yield {
-                "calldata_gt": full.calldata_gt[start:stop],
+                "genotypes": full.genotypes[start:stop],
                 "variants_chrom": None if full.variants_chrom is None else full.variants_chrom[start:stop],
                 "variants_pos": None if full.variants_pos is None else full.variants_pos[start:stop],
                 "variants_id": None if full.variants_id is None else full.variants_id[start:stop],
@@ -549,7 +549,7 @@ def _extract_chunk_arrays(
     chunk: Dict[str, Optional[np.ndarray]],
     variant_offset: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    gt = chunk.get("calldata_gt")
+    gt = chunk.get("genotypes")
     if gt is None:
         raise ValueError("Missing genotype calls in GWAS chunk.")
 
@@ -646,6 +646,7 @@ def run_gwas(
     return_results: bool = True,
     quantitative: Optional[bool] = None,
     verbose: bool = False,
+    covar: Optional[Union[str, Path, CovariateObject]] = None,
     covar_path: Optional[Union[str, Path]] = None,
     covar_col_nums: Optional[str] = None,
     covar_variance_standardize: bool = False,
@@ -660,10 +661,16 @@ def run_gwas(
 
     ``phe_path`` may be a phenotype file path or an in-memory
     :class:`PhenotypeObject`. ``snp_path`` may be a genotype file path, reader,
-    or in-memory :class:`SNPObject`. ``phe_id`` is required only when the
-    phenotype input is a file path. Results are written to ``results_path``
-    (default: gwas.tsv.gz).
+    or in-memory :class:`SNPObject`. ``covar`` may be a covariate file path or
+    an in-memory :class:`CovariateObject`; ``covar_path`` is retained as a
+    backward-compatible alias. ``phe_id`` is required only when the phenotype
+    input is a file path. Results are written to ``results_path`` (default:
+    gwas.tsv.gz).
     """
+    if covar is not None and covar_path is not None:
+        raise TypeError("Pass only one of `covar` or `covar_path`.")
+    covar_source = covar if covar is not None else covar_path
+
     if memory is not None and int(memory) < 2:
         raise MemoryError("--memory must be >= 2 MiB for internal GWAS processing.")
     if ci is not None and (ci <= 0.0 or ci >= 1.0):
@@ -682,14 +689,11 @@ def run_gwas(
     remove_ids = _read_sample_list(remove_path) if remove_path is not None else None
     exclude_variants = _read_variant_list(exclude_path) if exclude_path is not None else None
 
-    covar_samples: Optional[List[str]] = None
-    covar_matrix: Optional[np.ndarray] = None
-    if covar_path is not None:
-        covar_samples, _covar_names, covar_matrix = _read_covar(
-            covar_path,
-            col_nums=covar_col_nums,
-            variance_standardize=covar_variance_standardize,
-        )
+    covar_samples, _covar_names, covar_matrix = _coerce_covar_source(
+        covar_source,
+        col_nums=covar_col_nums,
+        variance_standardize=covar_variance_standardize,
+    )
 
     snp_reader = _coerce_snp_source(snp_path, vcf_backend=vcf_backend)
     snp_samples = _read_snp_samples(snp_reader)

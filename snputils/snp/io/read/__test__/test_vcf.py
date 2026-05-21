@@ -13,7 +13,7 @@ def test_vcf_reader_matches_polars_for_core_fields(data_path):
     default = VCFReader(path).read()
     polars = VCFReaderPolars(path).read(fields=fields)
 
-    np.testing.assert_array_equal(default.calldata_gt, polars.calldata_gt)
+    np.testing.assert_array_equal(default.genotypes, polars.genotypes)
     np.testing.assert_array_equal(default.samples, polars.samples)
     np.testing.assert_array_equal(default.variants_pos, polars.variants_pos)
     np.testing.assert_array_equal(default.variants_id.astype(str), polars.variants_id.astype(str))
@@ -34,7 +34,7 @@ def test_vcf_reader_reads_info_when_requested(data_path):
     default = VCFReader(path).read(fields="*")
     polars = VCFReaderPolars(path).read(fields="*")
 
-    np.testing.assert_array_equal(default.calldata_gt, polars.calldata_gt)
+    np.testing.assert_array_equal(default.genotypes, polars.genotypes)
     np.testing.assert_array_equal(default.variants_info.astype(str), polars.variants_info.astype(str))
 
 
@@ -56,7 +56,7 @@ def test_vcf_reader_falls_back_for_format_subfields(tmp_path: Path):
         ],
         dtype=np.int8,
     )
-    np.testing.assert_array_equal(snpobj.calldata_gt, expected)
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
     np.testing.assert_array_equal(snpobj.variants_info.astype(str), np.array(["AF=0.5", "AF=0.25"]))
 
 
@@ -80,7 +80,7 @@ def test_vcf_reader_reads_gt_when_format_field_is_not_first(tmp_path: Path):
         ],
         dtype=np.int8,
     )
-    np.testing.assert_array_equal(snpobj.calldata_gt, expected)
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
 
 
 def test_vcf_reader_normalizes_qual_and_filter_pass_like_vcf_reader(tmp_path: Path):
@@ -119,7 +119,7 @@ def test_vcf_reader_falls_back_when_later_record_has_format_subfields(tmp_path: 
         ],
         dtype=np.int8,
     )
-    np.testing.assert_array_equal(snpobj.calldata_gt, expected)
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
 
 
 def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
@@ -141,7 +141,7 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
         ],
         dtype=np.int8,
     )
-    np.testing.assert_array_equal(snpobj.calldata_gt, expected)
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
     np.testing.assert_array_equal(snpobj.samples, np.array(["HG00096", "HG00097"]))
 
 
@@ -159,7 +159,7 @@ def test_vcf_reader_read_supports_region(tmp_path: Path):
 
     np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs2"]))
     np.testing.assert_array_equal(snpobj.variants_pos, np.array([200]))
-    np.testing.assert_array_equal(snpobj.calldata_gt, np.array([[[1, 1], [0, 0]]], dtype=np.int8))
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[[1, 1], [0, 0]]], dtype=np.int8))
 
 
 def test_vcf_reader_region_does_not_require_returning_chrom_or_pos(tmp_path: Path):
@@ -190,7 +190,7 @@ def test_vcf_reader_uses_pandas_fallback_for_non_tab_separator(tmp_path: Path):
     snpobj = VCFReader(vcf_path).read(separator=",", region="1:100-100")
 
     np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs1"]))
-    np.testing.assert_array_equal(snpobj.calldata_gt, np.array([[[0, 1], [1, 0]]], dtype=np.int8))
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[[0, 1], [1, 0]]], dtype=np.int8))
 
 
 def test_vcf_reader_iter_read_yields_sampleless_metadata_only_chunks(tmp_path: Path):
@@ -211,4 +211,4 @@ def test_vcf_reader_iter_read_yields_sampleless_metadata_only_chunks(tmp_path: P
         np.concatenate([chunk.variants_ref.astype(str) for chunk in chunks]),
         np.array(["A", "C", "G"]),
     )
-    assert all(chunk.calldata_gt.size == 0 for chunk in chunks)
+    assert all(chunk.genotypes.size == 0 for chunk in chunks)

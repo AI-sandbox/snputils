@@ -122,9 +122,16 @@ class BEDReader(SNPBaseReader):
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
             else:
                 requested_variant_idxs = np.asarray(variant_idxs, dtype=np.uint32).ravel()
-                bim = bim.filter(pl.col("index").is_in(requested_variant_idxs))
-                variant_idxs = bim.select("index").to_series().to_numpy()
-                variant_idxs = np.asarray(variant_idxs, dtype=np.uint32)
+                if np.any(requested_variant_idxs >= file_num_variants):
+                    raise ValueError("One or more variant indexes are out of bounds.")
+                selector = pl.DataFrame({"index": requested_variant_idxs}).with_row_index("_selector_order")
+                bim = (
+                    selector
+                    .join(bim, on="index", how="left")
+                    .sort("_selector_order")
+                    .drop("_selector_order")
+                )
+                variant_idxs = requested_variant_idxs
                 num_variants = np.size(variant_idxs)
 
             log.info(f"Reading {filename_noext}.fam")
@@ -204,7 +211,7 @@ class BEDReader(SNPBaseReader):
             sex_col = fam.get_column("Sex code").to_numpy()
 
         snpobj = SNPObject(
-            calldata_gt=genotypes if "GT" in fields else None,
+            genotypes=genotypes if "GT" in fields else None,
             samples=fam.get_column("IID").to_numpy() if "IID" in fields and "IID" in fam.columns else None,
             sample_fid=fid_col,
             sample_sex=sex_col,
@@ -268,13 +275,9 @@ class BEDReader(SNPBaseReader):
 
         if variant_idxs is not None:
             requested = np.asarray(variant_idxs, dtype=np.uint32).ravel()
-            resolved = (
-                bim.filter(pl.col("index").is_in(requested))
-                .select("index")
-                .to_series()
-                .to_numpy()
-            )
-            return np.asarray(resolved, dtype=np.uint32)
+            if np.any(requested >= bim.height):
+                raise ValueError("One or more variant indexes are out of bounds.")
+            return requested
 
         return np.arange(bim.height, dtype=np.uint32)
 

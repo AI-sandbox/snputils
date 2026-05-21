@@ -8,7 +8,7 @@ from scipy import stats
 from scipy.optimize import minimize
 from scipy.special import expit
 
-from snputils.phenotype.genobj import PhenotypeObject
+from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj import SNPObject
 from snputils.tools.gwas import run_gwas
 
@@ -118,7 +118,7 @@ def _make_snpobj_from_dosage(
     gt = np.stack([maternal, paternal], axis=2).astype(np.int8, copy=False)
     n_variants = int(dosage.shape[0])
     return SNPObject(
-        calldata_gt=gt,
+        genotypes=gt,
         samples=np.asarray(sample_ids, dtype=str),
         variants_ref=np.asarray(refs, dtype=str),
         variants_alt=np.asarray(alts, dtype=str),
@@ -414,6 +414,61 @@ def test_gwas_quantitative_covariates_matches_reference(tmp_path: Path):
     np.testing.assert_allclose(merged["BETA"].to_numpy(), merged["BETA_ref"].to_numpy(), rtol=2e-3, atol=2e-4)
     np.testing.assert_allclose(merged["T_STAT"].to_numpy(), merged["T_ref"].to_numpy(), rtol=2e-3, atol=2e-4)
     np.testing.assert_allclose(merged["P"].to_numpy(), merged["P_ref"].to_numpy(), rtol=3e-2, atol=1e-8)
+
+
+def test_gwas_accepts_in_memory_covariate_object(tmp_path: Path):
+    sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts = _build_synthetic_gwas(
+        n_samples=90,
+        n_variants=16,
+        seed=353,
+    )
+    rng = np.random.default_rng(354)
+    covar_names = ["PC1", "PC2", "AGE"]
+    covar_matrix = rng.normal(size=(len(sample_ids), len(covar_names))).astype(np.float64)
+    y = (
+        2.0
+        + 0.50 * dosage[3].astype(np.float64)
+        + 0.35 * covar_matrix[:, 0]
+        - 0.20 * covar_matrix[:, 2]
+        + rng.normal(0.0, 0.8, size=len(sample_ids))
+    )
+    snpobj = _make_snpobj_from_dosage(sample_ids, dosage, chromosomes, positions, variant_ids, refs, alts)
+    phenotype = PhenotypeObject(sample_ids, y, phenotype_name="PHENO", quantitative=True)
+    covariates = CovariateObject(sample_ids, covar_matrix, covariate_names=covar_names)
+
+    covar_path = tmp_path / "toy.covar"
+    _write_covar(covar_path, sample_ids, covar_names, covar_matrix)
+
+    from_path = run_gwas(
+        phe_path=phenotype,
+        snp_path=snpobj,
+        results_path=tmp_path / "path.tsv.gz",
+        quantitative=True,
+        covar_path=covar_path,
+        covar_col_nums="1,3",
+        covar_variance_standardize=True,
+        return_results=True,
+    ).sort_values("ID").reset_index(drop=True)
+    from_object = run_gwas(
+        phe_path=phenotype,
+        snp_path=snpobj,
+        results_path=tmp_path / "object.tsv.gz",
+        quantitative=True,
+        covar=covariates,
+        covar_col_nums="1,3",
+        covar_variance_standardize=True,
+        return_results=True,
+    ).sort_values("ID").reset_index(drop=True)
+
+    numeric_cols = ["BETA", "SE", "T_STAT", "P"]
+    np.testing.assert_allclose(
+        from_object[numeric_cols].to_numpy(),
+        from_path[numeric_cols].to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+    assert from_object["ERRCODE"].tolist() == from_path["ERRCODE"].tolist()
 
 
 @pytest.mark.parametrize("ext", ["bed", "pgen"])

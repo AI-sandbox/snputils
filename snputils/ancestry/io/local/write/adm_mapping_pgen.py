@@ -129,7 +129,7 @@ class AdmixtureMappingPGENWriter:
             match = (self.laiobj.lai == ancestry).view(np.int8)
             n_windows = self.laiobj.lai.shape[0]
             n_haplotypes = self.laiobj.lai.shape[1]
-            calldata_gt = match.reshape(n_windows, n_haplotypes // 2, 2).astype(
+            genotypes = match.reshape(n_windows, n_haplotypes // 2, 2).astype(
                 np.int8, copy=False
             )
 
@@ -144,7 +144,7 @@ class AdmixtureMappingPGENWriter:
             variants_alt = np.full(n_windows, "T", dtype="U1")
 
             snpobj = SNPObject(
-                calldata_gt=calldata_gt,
+                genotypes=genotypes,
                 samples=sid,
                 sample_fid=sid,
                 variants_chrom=variants_chrom,
@@ -155,7 +155,7 @@ class AdmixtureMappingPGENWriter:
                 variants_info=info_array,
             )
 
-            del match, calldata_gt
+            del match, genotypes
             gc.collect()
 
             log.info(

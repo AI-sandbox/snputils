@@ -4,7 +4,7 @@ snputils centers work around lightweight objects that hold data arrays plus the 
 
 ## Core Objects
 
-- {class}`snputils.SNPObject` stores genotype calls and variant metadata.
+- {class}`snputils.SNPObject` stores genotype calls, optional genotype probabilities, and variant metadata.
 - {class}`snputils.LocalAncestryObject` stores ancestry calls along chromosomes.
 - {class}`snputils.GlobalAncestryObject` stores ADMIXTURE-style ancestry proportions.
 - {class}`snputils.PhenotypeObject` and {class}`snputils.MultiPhenotypeObject` store trait data.

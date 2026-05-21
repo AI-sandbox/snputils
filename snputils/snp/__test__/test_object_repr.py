@@ -12,7 +12,7 @@ from snputils.snp.genobj.snpobj import SNPObject
 
 def test_snpobject_repr_and_shape_are_informative():
     snp = SNPObject(
-        calldata_gt=np.zeros((3, 2, 2), dtype=np.int8),
+        genotypes=np.zeros((3, 2, 2), dtype=np.int8),
         samples=np.array(["S0", "S1"]),
         variants_chrom=np.array(["1", "1", "2"]),
         variants_pos=np.array([10, 20, 30]),
@@ -23,7 +23,7 @@ def test_snpobject_repr_and_shape_are_informative():
     assert "SNPObject" in repr(snp)
     assert "n_snps=3" in repr(snp)
     assert "n_samples=2" in repr(snp)
-    assert "calldata_gt_shape=(3, 2, 2)" in repr(snp)
+    assert "genotypes_shape=(3, 2, 2)" in repr(snp)
 
 
 def test_snpobject_metadata_only_shape_uses_available_dimensions():

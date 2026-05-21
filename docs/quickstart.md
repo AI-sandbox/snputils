@@ -5,14 +5,14 @@ The top-level package exposes the most common readers, data containers, and anal
 ```python
 import snputils as su
 
-snp = su.read_snp("cohort.vcf.gz")                   # Read VCF, BED, PGEN,...
+snp = su.read_snp("cohort.vcf.gz")                   # Read VCF, BGEN, BED, PGEN,...
 snp = snp.filter_biallelic_variants()                # filter to biallelic
 snp.save("cohort.pgen")                              # convert VCF -> PLINK2
 
 af = snp.allele_freq()                               # per-SNP allele frequencies (AF)
 pcs = su.PCA().fit_transform(snp)                    # PCA and project data
 
-lai = su.read_msp("local_ancestry.msp")              # local ancestry  (LAI)
+lai = su.read_lai("local_ancestry.msp")              # local ancestry  (LAI; MSP or FLARE)
 adm = su.read_admixture("admixture")                 # global ancestry (ADMIXTURE)
 labels = su.read_labels("labels.tsv")                # sample metadata
 afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
@@ -34,7 +34,8 @@ su.viz.manhattan_plot(admix)                         # admixture mapping manhatt
 `read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.
 
 ```python
-bed = su.read_bed("cohort.bed")
+bed = su.read_bed("cohort.bed")  
+bgen = su.read_bgen("cohort.bgen")                 # probabilities in calldata_gp
 pgen = su.read_pgen("cohort.pgen")
 vcf = su.read_vcf("cohort.vcf.gz")
 ```
@@ -42,7 +43,7 @@ vcf = su.read_vcf("cohort.vcf.gz")
 ## Local and Global Ancestry
 
 ```python
-lai = su.read_msp("local_ancestry.msp")
+lai = su.read_lai("local_ancestry.msp")
 adm = su.read_admixture("global_ancestry")
 ```
 

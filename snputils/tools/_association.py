@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from snputils.phenotype.genobj import CovariateObject
+
 try:
     import psutil
 except ImportError:  # pragma: no cover
@@ -140,6 +142,40 @@ def _read_covar(
         covar_matrix = (covar_matrix - means[None, :]) / stds[None, :]
 
     return sample_ids, covar_names, covar_matrix
+
+
+def _coerce_covar_source(
+    covar_source: Optional[Union[str, Path, CovariateObject]],
+    *,
+    col_nums: Optional[str],
+    variance_standardize: bool,
+) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[np.ndarray]]:
+    if covar_source is None:
+        return None, None, None
+
+    if isinstance(covar_source, CovariateObject):
+        selected_rel = _parse_covar_col_nums(col_nums, covar_source.n_covariates)
+        covar_names = [covar_source.covariate_names[idx] for idx in selected_rel]
+        covar_matrix = covar_source.values[:, selected_rel].astype(np.float64, copy=True)
+
+        if variance_standardize:
+            means = np.mean(covar_matrix, axis=0)
+            stds = np.std(covar_matrix, axis=0, ddof=0)
+            if np.any(stds <= 0.0):
+                zero_var_names = [covar_names[i] for i in np.where(stds <= 0.0)[0]]
+                raise ValueError(
+                    "Cannot variance-standardize covariates with zero variance: "
+                    f"{zero_var_names}"
+                )
+            covar_matrix = (covar_matrix - means[None, :]) / stds[None, :]
+
+        return list(covar_source.samples), covar_names, covar_matrix
+
+    return _read_covar(
+        covar_source,
+        col_nums=col_nums,
+        variance_standardize=variance_standardize,
+    )
 
 
 def _read_sample_list(path: Union[str, Path]) -> Set[str]:

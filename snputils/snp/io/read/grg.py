@@ -20,11 +20,11 @@ class GRGReader(SNPBaseReader):
         binmuts = binary_mutations if binary_mutations is not None else False
 
         if extension == ".trees":
-            return GRGObject(calldata_gt=pyg.grg_from_trees(file, binmuts), filename=file, mutable=True)
+            return GRGObject(genotypes=pyg.grg_from_trees(file, binmuts), filename=file, mutable=True)
         if mutable:
-            return GRGObject(calldata_gt=pyg.load_mutable_grg(file), filename=file, mutable=True)
+            return GRGObject(genotypes=pyg.load_mutable_grg(file), filename=file, mutable=True)
 
-        return GRGObject(calldata_gt=pyg.load_immutable_grg(file, edges), filename=file, mutable=False)
+        return GRGObject(genotypes=pyg.load_immutable_grg(file, edges), filename=file, mutable=False)
      
                     
          

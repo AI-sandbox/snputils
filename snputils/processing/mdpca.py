@@ -6,13 +6,14 @@ import logging
 import logging.config
 import warnings
 import numpy as np
+import pandas as pd
 import copy
 from typing import Optional, Dict, List, Union
 from sklearn.decomposition import TruncatedSVD
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from ._utils.gen_tools import process_calldata_gt, process_labels_weights
+from ._utils.gen_tools import process_genotypes, process_labels_weights
 from ._utils.iterative_svd import IterativeSVD
 
 
@@ -35,6 +36,7 @@ class mdPCA:
         laiobj: Optional['LocalAncestryObject'] = None,
         labels_file: Optional[str] = None,
         *,
+        labels: Optional[Union[pd.DataFrame, str]] = None,
         ancestry: Optional[Union[int, str]] = None,
         method: str = 'weighted_cov_pca',
         is_masked: bool = True,
@@ -90,6 +92,9 @@ class mdPCA:
                 must share the same `label` and `combination_weight`. If `combination_weight` column is not provided, the combinations are 
                 assigned a default weight of `1`. Individuals excluded via `groups_to_remove` or those falling below `min_percent_snps` are removed 
                 from the analysis.
+            labels (pandas.DataFrame or str, optional):
+                In-memory labels table with the same columns as ``labels_file``, or a path. Pass only one
+                of ``labels`` and ``labels_file``.
             ancestry (int or str, optional): 
                 Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`. The ancestry input can be:
 
@@ -139,6 +144,10 @@ class mdPCA:
                 Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
                 `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
         """
+        if labels is not None:
+            if labels_file is not None:
+                raise ValueError("Pass only one of labels and labels_file.")
+            labels_file = labels
         if (embedding_table_path is not None) and (output_file is not None):
             raise ValueError("Pass only one of embedding_table_path and output_file.")
         if output_file is not None:
@@ -1040,9 +1049,10 @@ class mdPCA:
             self,
             snpobj: Optional['SNPObject'] = None,
             laiobj: Optional['LocalAncestryObject'] = None,
-            labels_file: Optional[str] = None,
+            labels_file: Optional[Union[str, pd.DataFrame]] = None,
             ancestry: Optional[Union[int, str]] = None,
             *,
+            labels: Optional[Union[pd.DataFrame, str]] = None,
             average_strands: Optional[bool] = None,
         ) -> np.ndarray:
         """
@@ -1058,11 +1068,13 @@ class mdPCA:
                 A SNPObject instance.
             laiobj (LAIObject, optional): 
                 A LAIObject instance.
-            labels_file (str, optional): 
-                Path to the labels file in .tsv format. The first column, `indID`, contains the individual identifiers, and the second 
+            labels_file (str or pandas.DataFrame, optional): 
+                Path to the labels file in .tsv format, or an in-memory labels DataFrame. The first column, `indID`, contains the individual identifiers, and the second 
                 column, `label`, specifies the groups for all individuals. If `is_weighted=True`, a `weight` column with individual 
                 weights is required. Optionally, `combination` and `combination_weight` columns can specify sets of individuals to be 
                 combined into groups, with respective weights.
+            labels (pandas.DataFrame or str, optional):
+                Alias for ``labels_file``. Pass only one of ``labels`` and ``labels_file``.
             ancestry (str, optional): 
                 Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
             average_strands (bool, optional): 
@@ -1073,6 +1085,10 @@ class mdPCA:
             array: 
                 The transformed SNP data projected onto the `n_components` principal components, stored in `self.X_new_`.
         """
+        if labels is not None:
+            if labels_file is not None:
+                raise ValueError("Pass only one of labels and labels_file.")
+            labels_file = labels
         if snpobj is None:
             snpobj = self.snpobj
         if laiobj is None:
@@ -1089,7 +1105,7 @@ class mdPCA:
             mask, variants_id, haplotypes, _, weights = self._load_mask_file()
         else:
             # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
-            mask, variants_id, haplotypes, _ = process_calldata_gt(
+            mask, variants_id, haplotypes, _ = process_genotypes(
                 self.snpobj,
                 self.laiobj,
                 self.ancestry,

@@ -21,13 +21,14 @@ class LocalAncestryObject(AncestryObject):
     def __init__(
         self,
         haplotypes: List[str], 
-        lai: np.ndarray,
+        lai: Optional[np.ndarray] = None,
         samples: Optional[List[str]] = None, 
         ancestry_map: Optional[Dict[str, str]] = None, 
         window_sizes: Optional[np.ndarray] = None,
         centimorgan_pos: Optional[np.ndarray] = None,
         chromosomes: Optional[np.ndarray] = None,
-        physical_pos: Optional[np.ndarray] = None
+        physical_pos: Optional[np.ndarray] = None,
+        calldata_lai: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
@@ -48,7 +49,17 @@ class LocalAncestryObject(AncestryObject):
                 An array with chromosome numbers corresponding to each genomic window.
             physical_pos (array of shape (n_windows, 2), optional): 
                 A 2D array containing the start and end physical positions for each window.
+            calldata_lai (array of shape (n_windows, n_haplotypes), optional):
+                Backward-compatible alias for `lai`.
         """
+        if lai is not None and calldata_lai is not None:
+            raise ValueError("Specify only one of `lai` or `calldata_lai`, not both.")
+        if lai is None and calldata_lai is not None:
+            lai = calldata_lai
+
+        if lai is None:
+            raise ValueError("Either `lai` or its alias `calldata_lai` must be provided.")
+
         if lai.ndim != 2:
             raise ValueError("`lai` must be a 2D array with shape (n_windows, n_haplotypes).")
         
@@ -147,6 +158,20 @@ class LocalAncestryObject(AncestryObject):
     def lai(self, x):
         """
         Update `lai`.
+        """
+        self.__lai = x
+
+    @property
+    def calldata_lai(self) -> np.ndarray:
+        """
+        Retrieve `lai` via legacy alias.
+        """
+        return self.__lai
+
+    @calldata_lai.setter
+    def calldata_lai(self, x):
+        """
+        Update `lai` via legacy alias.
         """
         self.__lai = x
 
@@ -793,6 +818,9 @@ class LocalAncestryObject(AncestryObject):
         - `.msp.tsv`: Text-based MSP format with TSV extension.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
+        FLARE `.anc.vcf` / `.anc.vcf.gz` output requires genotype data and
+        should be written with :meth:`save_flare`.
+
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
@@ -803,12 +831,18 @@ class LocalAncestryObject(AncestryObject):
 
         if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
             self.save_msp(file)
+        elif suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
+            raise ValueError(
+                "FLARE output requires genotype data. Use "
+                "`save_flare(file, snpobj=...)` or `save_flare(file, genotype_file=...)`."
+            )
         elif suffixes[-1] == '.pkl':
             self.save_pickle(file)
         else:
             raise ValueError(
                 f"Unsupported file extension: {suffixes[-1]}"
-                "Supported extensions are: .msp, .msp.tsv, .pkl."
+                "Supported extensions are: .msp, .msp.tsv, .pkl. "
+                "Use save_flare(...) for .anc.vcf/.anc.vcf.gz output."
             )
 
     def save_msp(self, file: Union[str, Path]) -> None:
@@ -824,6 +858,23 @@ class LocalAncestryObject(AncestryObject):
         from snputils.ancestry.io.local.write import MSPWriter
 
         MSPWriter(self, file).write()
+
+    def save_flare(
+        self,
+        file: Union[str, Path],
+        *,
+        snpobj: Optional['SNPObject'] = None,
+        genotype_file: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """
+        Save the data stored in `self` to a FLARE-style `.anc.vcf` or `.anc.vcf.gz` file.
+
+        FLARE output VCFs include phased input genotypes and variant metadata,
+        so pass either ``snpobj`` or ``genotype_file``.
+        """
+        from snputils.ancestry.io.local.write import FLAREWriter
+
+        FLAREWriter(self, file, snpobj=snpobj, genotype_file=genotype_file).write()
 
     def save_pickle(self, file: Union[str, Path]) -> None:
         """

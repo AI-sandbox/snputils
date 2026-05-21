@@ -10,8 +10,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "BSD 3-Clause License"}
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3.9",
@@ -28,6 +29,7 @@ dependencies = [
     "pandas-stubs",
     "scikit-learn",
     "Pgenlib",
+    "bgen>=1.9.9",
     "matplotlib",
     "joblib",
     "tqdm",
@@ -43,7 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = ["torch"]
-demos = ["jupyterlab", "seaborn"]
+demos = ["notebook"]
 tests = ["tox", "pytest", "pytest-cov"]
 docs = [
     "sphinx>=7.2",

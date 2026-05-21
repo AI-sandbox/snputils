@@ -9,6 +9,10 @@ from snputils.ancestry.genobj.wide import GlobalAncestryObject
 log = logging.getLogger(__name__)
 
 
+def _append_admixture_suffix(path: Path, suffix: str) -> Path:
+    return Path(f"{path}{suffix}")
+
+
 class AdmixtureWriter(WideBaseWriter):
     """
     A writer class for exporting global ancestry data from a 
@@ -29,12 +33,25 @@ class AdmixtureWriter(WideBaseWriter):
                 suffixes appended as described above (e.g., `file_prefix.n_ancestries.Q` for the Q matrix file).
         """
         super(AdmixtureWriter, self).__init__(wideobj, file_prefix)
-        self.__Q_file = self.file_prefix.with_suffix(f".{self.wideobj.n_ancestries}.Q")
-        self.__P_file = self.file_prefix.with_suffix(f".{self.wideobj.n_ancestries}.P")
+        self.__Q_file = _append_admixture_suffix(
+            self.file_prefix, f".{self.wideobj.n_ancestries}.Q"
+        )
+        self.__P_file = _append_admixture_suffix(
+            self.file_prefix, f".{self.wideobj.n_ancestries}.P"
+        )
 
-        self.__sample_file = self.file_prefix.with_suffix(".sample_ids.txt") if self.wideobj.samples is not None else None
-        self.__snp_file = self.file_prefix.with_suffix(".snp_ids.txt") if self.wideobj.snps is not None else None
-        self.__ancestry_file = self.file_prefix.with_suffix(".map") if self.wideobj.ancestries is not None else None
+        self.__sample_file = (
+            _append_admixture_suffix(self.file_prefix, ".sample_ids.txt")
+            if self.wideobj.samples is not None else None
+        )
+        self.__snp_file = (
+            _append_admixture_suffix(self.file_prefix, ".snp_ids.txt")
+            if self.wideobj.snps is not None else None
+        )
+        self.__ancestry_file = (
+            _append_admixture_suffix(self.file_prefix, ".map")
+            if self.wideobj.ancestries is not None else None
+        )
 
     @property
     def wideobj(self) -> GlobalAncestryObject:
@@ -44,7 +61,7 @@ class AdmixtureWriter(WideBaseWriter):
         Returns:
             GlobalAncestryObject: A GlobalAncestryObject instance.
         """
-        return self.__wideobj
+        return super().wideobj
 
     @property
     def file_prefix(self) -> Path:
@@ -57,7 +74,7 @@ class AdmixtureWriter(WideBaseWriter):
                 The prefix is used to generate specific file names for each output, with file-specific 
                 suffixes appended as described above (e.g., `file_prefix.n_ancestries.Q` for the Q matrix file).
         """
-        return self.__file_prefix
+        return super().file_prefix
 
     @property
     def Q_file(self) -> Path:

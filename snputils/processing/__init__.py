@@ -22,6 +22,7 @@ __all__ = [
     "save_embedding_table_from_model",
     "try_save_embedding_table",
     "build_embedding_dataframe",
+    "embedding_dataframe_from_model",
     "embedding_column_names",
     "pca_row_haplotype_ids",
 ]
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from .pca import PCA, TorchPCA
     from .dimred_tabular import (
         build_embedding_dataframe,
+        embedding_dataframe_from_model,
         embedding_column_names,
         pca_row_haplotype_ids,
         save_embedding_table,
@@ -53,6 +55,7 @@ def __getattr__(name):
         return getattr(module, name)
     if name in {
         "build_embedding_dataframe",
+        "embedding_dataframe_from_model",
         "embedding_column_names",
         "pca_row_haplotype_ids",
         "save_embedding_table",

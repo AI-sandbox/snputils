@@ -149,19 +149,19 @@ class AdmixtureMappingVCFWriter:
 
 
             # Set up VCF-related data
-            calldata_gt = match
+            genotypes = match
             del match
             gc.collect()
             samples = np.array(self.laiobj.samples)
             variants_chrom = self.laiobj.chromosomes
             variants_list = [str(i+1) for i in range(len(self.laiobj.lai))]
             variants_id = np.array(variants_list)
-            variants_ref = np.full(calldata_gt.shape[0], 'A', dtype='U5')
-            variants_alt = np.full(calldata_gt.shape[0], 'T', dtype='U1')
+            variants_ref = np.full(genotypes.shape[0], 'A', dtype='U5')
+            variants_alt = np.full(genotypes.shape[0], 'T', dtype='U1')
 
             # Create the SNPObject
             variant_data_obj = SNPObject(
-                calldata_gt=calldata_gt,
+                genotypes=genotypes,
                 samples=samples,
                 variants_chrom=variants_chrom,
                 variants_id=variants_id,

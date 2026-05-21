@@ -45,5 +45,9 @@ class SNPReader:
             from snputils.snp.io.read.pgen import PGENReader
 
             return PGENReader(filename)
+        elif extension == ".bgen":
+            from snputils.snp.io.read.bgen import BGENReader
+
+            return BGENReader(filename)
         else:
             raise ValueError(f"File format not supported: {filename}")

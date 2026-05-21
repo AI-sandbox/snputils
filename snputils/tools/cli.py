@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
 from snputils import __version__
+from snputils.visualization.constants import get_palette_color
 
 DOCS_URL = "https://docs.snputils.org"
 SOURCE_URL = "https://github.com/AI-sandbox/snputils"
@@ -112,7 +113,7 @@ def _run_mdpca(args: argparse.Namespace) -> int:
             raise ValueError("Could not find coordinate columns in the mdPCA output table for plotting.")
 
         plt.figure(figsize=(10, 8))
-        _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5}
+        _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5, "color": get_palette_color(0)}
         if scatter_rasterized_for_path(str(args.plot)):
             _scatter_kw["rasterized"] = True
         plt.scatter(x, y, **_scatter_kw)

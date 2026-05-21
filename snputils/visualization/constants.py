@@ -95,3 +95,22 @@ snputils_palette = [
     "#7D7F7F", # Nebula Gray
     "#1B263B", # Deep Space Blue
 ]
+
+
+def get_palette_color(index: int) -> str:
+    """Return the palette color at *index*, cycling when needed."""
+    if not snputils_palette:
+        raise ValueError("snputils_palette must not be empty.")
+    return snputils_palette[int(index) % len(snputils_palette)]
+
+
+def get_palette_colors(n: int) -> list[str]:
+    """Return *n* colors from the snputils palette, cycling when needed."""
+    if n <= 0:
+        return []
+    return [get_palette_color(i) for i in range(int(n))]
+
+
+def build_palette_mapping(labels) -> dict:
+    """Assign labels colors from the snputils palette in encounter order."""
+    return {label: get_palette_color(i) for i, label in enumerate(labels)}

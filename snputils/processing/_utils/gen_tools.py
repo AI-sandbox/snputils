@@ -440,18 +440,18 @@ def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=Fal
     # Reshape the matrix to group pairs of adjacent columns (each individual has 2 haplotypes)
     reshaped_matrix = masked_ancestry_matrix.reshape(rows, cols // 2, 2)
 
+    finite_mask = ~np.isnan(reshaped_matrix)
+    count = np.sum(finite_mask, axis=2)
+    total = np.sum(np.where(finite_mask, reshaped_matrix, 0), axis=2, dtype=np.float16)
+    avg_matrix = np.divide(
+        total,
+        count,
+        out=np.full(count.shape, np.nan, dtype=np.float16),
+        where=count > 0,
+    )
+
     if force_nan_incomplete_strands:
-        # Identify pairs where at least one strand is NaN
-        nan_mask = np.any(np.isnan(reshaped_matrix), axis=2)
-
-        # Compute mean while ignoring NaNs
-        avg_matrix = np.nanmean(reshaped_matrix, axis=2, dtype=np.float16)
-
-        # Apply NaN mask: Set to NaN if either haplotype was NaN
-        avg_matrix[nan_mask] = np.nan
-    else:
-        # Compute mean, allowing np.nanmean to handle missing values
-        avg_matrix = np.nanmean(reshaped_matrix, axis=2, dtype=np.float16)
+        avg_matrix[np.any(~finite_mask, axis=2)] = np.nan
 
     return avg_matrix
 

@@ -7,7 +7,7 @@ from typing import Union
 
 class LAIReader:
     def __new__(
-        cls,
+        _cls,
         file: Union[str, Path]
     ) -> object:
         """

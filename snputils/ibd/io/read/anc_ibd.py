@@ -1,5 +1,4 @@
 import logging
-from io import StringIO
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -115,5 +114,4 @@ class AncIBDReader(IBDBaseReader):
 
         log.info(f"Finished reading ancIBD from {p}")
         return ibdobj
-
 

@@ -5,7 +5,6 @@ import time
 import warnings
 import logging
 import datetime
-from os import path
 warnings.simplefilter("ignore", category=RuntimeWarning)
 
 

@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 import copy
-from typing import Any, Union, Tuple, List, Sequence, Dict, Optional
+from typing import Any, Union, Tuple, List, Optional
 import pygrgl as pyg
 import subprocess
 log = logging.getLogger(__name__)

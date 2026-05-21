@@ -1,5 +1,4 @@
 import logging
-import joblib
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -32,9 +31,10 @@ class VCFWriter:
                 If True, genotype data is written in "maternal|paternal" format.  
                 If False, genotype data is written in "maternal/paternal" format.
         """
+        del n_jobs
+
         self.__snpobj = snpobj
         self.__filename = Path(filename)
-        self.__n_jobs = n_jobs
         self.__phased = phased
 
     def write(
@@ -142,28 +142,3 @@ class VCFWriter:
             ])
             out.write(line + "\n")
         out.close()
-
-
-def process_genotype(npy, i, n_snps, phased):
-    """
-    Process the genotype data for a particular individual in "maternal|paternal" 
-    format for each SNP.
-
-    Args:
-        npy: Array containing genotype data for multiple individuals.
-        i: Index of the individual to process.
-        n_snps: Number of SNPs.
-
-    Returns:
-        **genotype**: List with "maternal|paternal" for each SNP.
-    """
-    # Get the genotype data for the specified individual's maternal and paternal SNPs
-    maternal = npy[i*2, :].astype(str)     # maternal strand is the even row
-    paternal = npy[i*2 + 1, :].astype(str)  # paternal strand is the odd row
-
-    # Create a list with "maternal|paternal" format for each SNP
-    sep = "|" if phased else "/"
-    lst = [maternal, [sep] * n_snps, paternal]
-    genotype = list(map(''.join, zip(*lst)))
-
-    return genotype

@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pandas as pd
 
@@ -48,8 +46,8 @@ def write_msp(msp_prefix, meta_data, pred_labels, populations, query_samples):
         f.write("# " +"\t".join(meta_data.columns) + "\t")
         f.write("\t".join([str(s) for s in np.concatenate([[ s +".0" , s +".1"] for s in query_samples])] ) +"\n")
         # rest of the lines (data)
-        for l in range(msp_data.shape[0]):
-            f.write("\t".join(msp_data[l ,:]))
+        for row_idx in range(msp_data.shape[0]):
+            f.write("\t".join(msp_data[row_idx ,:]))
             f.write("\n")
 
 

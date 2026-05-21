@@ -6,7 +6,7 @@ from typing import Union
 
 class IBDReader:
     def __new__(
-        cls,
+        _cls,
         file: Union[str, Path]
     ) -> object:
         """
@@ -44,4 +44,3 @@ class IBDReader:
         # Default to HapIBDReader (most tools use .ibd[.gz])
         from snputils.ibd.io.read.hap_ibd import HapIBDReader
         return HapIBDReader(file)
-

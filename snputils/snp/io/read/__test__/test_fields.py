@@ -1,6 +1,6 @@
 import numpy as np
 
-from snputils import VCFReader, BEDReader, PGENReader
+from snputils import BEDReader, PGENReader
 
 
 # TODO: Fails with KeyError: 'calldata/GT' (genotypes = vcf_dict["calldata/GT"].astype(np.int8))

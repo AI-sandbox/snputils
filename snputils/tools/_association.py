@@ -771,7 +771,6 @@ def _fit_linear_batch(
     if fit_idx.size == 0:
         return beta_out, se_out, t_out, p_out, errcode_out
 
-    n_f = n_batch[fit_idx]
     sy_f = sum_y_batch[fit_idx]
     sy2_f = sum_y2_batch[fit_idx]
     nt_f = n_total[fit_idx]
@@ -891,59 +890,6 @@ def _expit(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x_clip))
 
 
-def _fit_standard_logistic_grouped(
-    n: np.ndarray, c: np.ndarray, max_iter: int = 50, tol: float = 1e-8
-) -> Optional[_RegressionResult]:
-    x = np.array([0.0, 1.0, 2.0], dtype=np.float64)
-    n_total = float(np.sum(n))
-    case_rate = float(np.sum(c) / n_total)
-    beta = np.array([_logit(case_rate), 0.0], dtype=np.float64)
-
-    converged = False
-    for _ in range(max_iter):
-        eta = beta[0] + beta[1] * x
-        mu = _expit(eta)
-        score0 = float(np.sum(c - n * mu))
-        score1 = float(np.sum((c - n * mu) * x))
-        info = _fisher_info_inverse(n, mu, x)
-        if info is None:
-            return None
-        inv_i, _ = info
-        delta = inv_i @ np.array([score0, score1], dtype=np.float64)
-        beta = beta + delta
-        if float(np.max(np.abs(delta))) < tol:
-            converged = True
-            break
-
-    if not converged or not np.all(np.isfinite(beta)):
-        return None
-
-    eta = beta[0] + beta[1] * x
-    mu = _expit(eta)
-    info = _fisher_info_inverse(n, mu, x)
-    if info is None:
-        return None
-    inv_i, _ = info
-    se2 = float(inv_i[1, 1])
-    if (not np.isfinite(se2)) or se2 <= 0.0:
-        return None
-
-    se = math.sqrt(se2)
-    z = float(beta[1] / se)
-    p = float(2.0 * stats.norm.sf(abs(z)))
-    if not np.isfinite(p):
-        p = float("nan")
-
-    return _RegressionResult(
-        beta=float(beta[1]),
-        se=se,
-        z=z,
-        p=p,
-        test="ADD",
-        errcode=".",
-    )
-
-
 def _penalized_loglik(beta: np.ndarray, n: np.ndarray, c: np.ndarray, x: np.ndarray) -> float:
     eta = beta[0] + beta[1] * x
     mu = np.clip(_expit(eta), 1e-12, 1.0 - 1e-12)
@@ -1025,32 +971,6 @@ def _fit_firth_logistic_grouped(
         test="FIRTH",
         errcode=".",
     )
-
-
-def _fit_logistic_hybrid_grouped(n: np.ndarray, c: np.ndarray) -> _RegressionResult:
-    obs_ct = int(np.sum(n))
-    n_cases = int(np.sum(c))
-    n_controls = obs_ct - n_cases
-    if obs_ct <= 0:
-        return _RegressionResult(np.nan, np.nan, np.nan, np.nan, "ADD", "NO_OBS")
-    if n_cases <= 0 or n_controls <= 0:
-        return _RegressionResult(np.nan, np.nan, np.nan, np.nan, "ADD", "NO_CASE_CTRL")
-
-    x = np.array([0.0, 1.0, 2.0], dtype=np.float64)
-    g_mean = float(np.sum(n * x) / obs_ct)
-    g_var = float(np.sum(n * (x - g_mean) ** 2))
-    if g_var <= 0.0:
-        return _RegressionResult(np.nan, np.nan, np.nan, np.nan, "ADD", "NO_VARIATION")
-
-    fit = _fit_standard_logistic_grouped(n, c)
-    if fit is not None:
-        return fit
-
-    firth = _fit_firth_logistic_grouped(n, c)
-    if firth is not None:
-        return firth
-
-    return _RegressionResult(np.nan, np.nan, np.nan, np.nan, "FIRTH", "NONCONVERGENCE")
 
 
 def _confidence_interval_label(ci: float) -> str:

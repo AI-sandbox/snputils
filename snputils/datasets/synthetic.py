@@ -219,7 +219,6 @@ def build_synthetic_mdpca_dataset(
         raise ValueError("n_snps must be positive.")
 
     ancestry_map = dict(DEFAULT_SYNTHETIC_ANCESTRY_MAP if ancestry_map is None else ancestry_map)
-    n_ancestries = len(ancestry_map)
     labels_cycle = ["AFR_ref", "EUR_ref", "EAS_ref", "ADMIXED_AFR_EUR", "ADMIXED_EUR_EAS"]
     labels = _balanced_labels(n_samples, labels_cycle)
     samples = np.asarray([f"M{i + 1:04d}" for i in range(n_samples)], dtype=object)

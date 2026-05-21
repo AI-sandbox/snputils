@@ -9,7 +9,7 @@ from typing import Callable, Mapping, Optional, Sequence, Union
 from adjustText import adjust_text
 
 from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
-from .constants import get_palette_colors, snputils_palette
+from .constants import get_palette_colors
 
 PUBLICATION_RC = {
     "font.family": "sans-serif",

@@ -2009,7 +2009,7 @@ class SNPObject:
         )
 
     @classmethod
-    def concat_variants(cls, snpobjs: Sequence['SNPObject']) -> 'SNPObject':
+    def concat_variants(_cls, snpobjs: Sequence['SNPObject']) -> 'SNPObject':
         """
         Concatenate multiple SNPObjects along the SNP axis.
 

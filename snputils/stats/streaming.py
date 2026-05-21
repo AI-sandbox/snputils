@@ -78,8 +78,6 @@ class _IterWindowsLAIMapper:
         self._window_pos: Optional[np.ndarray] = None
         self._window_lai: Optional[np.ndarray] = None
         self._row_idx = 0
-        self._exhausted = False
-
         self._active_window_chrom: Optional[str] = None
         self._completed_window_chroms: Set[str] = set()
         self._seen_snp_chroms: Set[str] = set()
@@ -95,7 +93,6 @@ class _IterWindowsLAIMapper:
             try:
                 chunk = next(self._window_iter)
             except StopIteration:
-                self._exhausted = True
                 self._window_chrom = None
                 self._window_pos = None
                 self._window_lai = None

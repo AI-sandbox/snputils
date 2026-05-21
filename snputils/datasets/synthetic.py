@@ -399,7 +399,12 @@ def build_synthetic_chromosome_painting_dataset(
     ancestry_map: dict[str, str] | None = None,
     male_samples: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    """Build autosome-only LAI data for chromosome painting examples."""
+    """Build synthetic LAI data for chromosome painting examples.
+
+    By default this simulates diploid local ancestry across chromosomes ``1``-``22``
+    and ``X``. The default sample metadata marks every sample as female so the
+    reported sex is consistent with the diploid-X simulation used for painting.
+    """
     if n_samples <= 0:
         raise ValueError("n_samples must be positive.")
     if windows_per_chromosome <= 0:
@@ -408,17 +413,17 @@ def build_synthetic_chromosome_painting_dataset(
         raise ValueError(f"Unknown build {build!r}. Available builds: {sorted(CHROM_SIZES)}")
 
     ancestry_map = dict(DEFAULT_SYNTHETIC_ANCESTRY_MAP if ancestry_map is None else ancestry_map)
-    autosomes = {str(chrom) for chrom in range(1, 23)}
-    requested_chroms = [str(c) for c in (chromosomes or [*range(1, 23)])]
-    chroms = [chrom for chrom in requested_chroms if chrom in autosomes]
+    supported_chroms = {str(chrom) for chrom in range(1, 23)} | {"X"}
+    requested_chroms = [str(c) for c in (chromosomes or [*range(1, 23), "X"])]
+    chroms = [chrom for chrom in requested_chroms if chrom in supported_chroms]
     if not chroms:
         raise ValueError(
-            "No autosomes selected. Pass chromosomes from '1' to '22'."
+            "No supported chromosomes selected. Pass chromosomes from '1' to '22' and/or 'X'."
         )
     rng = np.random.default_rng(seed)
     samples = [f"sample{i}" for i in range(n_samples)]
     if male_samples is None:
-        male_samples = [samples[-1]] if samples else []
+        male_samples = []
     male_samples = set(map(str, male_samples))
 
     n_windows = len(chroms) * windows_per_chromosome

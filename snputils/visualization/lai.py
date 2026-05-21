@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Tuple, Dict, List, cast
+from typing import Any, Optional, Tuple, Dict, List, cast
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.patches as patches
@@ -75,6 +75,7 @@ def plot_lai(
     sort: Optional[bool]=True,
     figsize: Optional[Tuple[float, float]]=None,
     legend: Optional[bool]=False,
+    legend_kwargs: Optional[Dict[str, Any]]=None,
     title: Optional[str]=None,
     fontsize: Optional[Dict[str, float]]=None,
     scale: int=2,
@@ -95,6 +96,8 @@ def plot_lai(
             (25, 25). Defaults to None.
         legend: If True, display a legend. If ``sort==True``, ancestries in the 
             legend are sorted based on their total frequency in descending order. Defaults to False.
+        legend_kwargs: Optional keyword arguments passed through to ``Axes.legend``.
+            Defaults keep the legend centered below the x-axis label.
         title: Title for the plot. If None, no title is displayed. Defaults to None.
         fontsize: Font sizes for various plot elements. If None, default font sizes are used. 
             Defaults to None.
@@ -298,14 +301,19 @@ def plot_lai(
             # Add patches for each color to represent the legend squares
             legend_patches = [patches.Patch(color=color, label=label) 
                               for color, label in zip(colors.values(), colors.keys())]
+
+        resolved_legend_kwargs = {
+            'loc': 'lower center',
+            'bbox_to_anchor': (0.5, -0.25),
+            'borderaxespad': 0.0,
+            'ncol': n_ancestries,
+            'fontsize': fontsize['legend'],
+        }
+        if legend_kwargs is not None:
+            resolved_legend_kwargs.update(legend_kwargs)
+
+        ax.legend(handles=legend_patches, **resolved_legend_kwargs)
     
-        ax.legend(
-            handles=legend_patches, 
-            loc='lower center', 
-            borderaxespad=-5,
-            ncol=n_ancestries,
-            fontsize=fontsize['legend']
-        )
-    
+   
     if title:
         plt.title(title)

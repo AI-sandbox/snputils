@@ -614,8 +614,8 @@ class SNPObject:
         Returns:
             bool: 
                 True if the maternal and paternal strands have been summed together, which is indicated by 
-                `genotypes` having shape `(n_samples, n_snps)`. False if the strands are stored separately, 
-                indicated by `genotypes` having shape `(n_samples, n_snps, 2)`.
+                `genotypes` having shape `(n_snps, n_samples)`. False if the strands are stored separately, 
+                indicated by `genotypes` having shape `(n_snps, n_samples, 2)`.
         """
         if self.genotypes is None:
             warnings.warn("Genotype data `genotypes` is None.")
@@ -1245,13 +1245,17 @@ class SNPObject:
         def subset_sample_axis(key: str, value: np.ndarray) -> np.ndarray:
             arr = np.asarray(value)
             if ordered_indices is not None:
-                if key == 'calldata_lai' and arr.ndim == 2:
-                    # Haplotype-aware reordering for 2D LAI (n_snps, n_samples*2)
-                    hap_idx = np.concatenate([2*ordered_indices, 2*ordered_indices + 1])
-                    return arr[:, hap_idx]
-                if arr.ndim > 1:
-                    return arr[:, ordered_indices, ...]
-                return arr[ordered_indices]
+                if key == "calldata_lai" and arr.ndim == 2:
+                    if ordered_indices is not None:
+                        hap_idx = np.ravel(
+                            np.column_stack([2 * ordered_indices, 2 * ordered_indices + 1])
+                        )
+                        return arr[:, hap_idx]
+
+                    hap_mask = np.ravel(
+                        np.column_stack([mask_combined, mask_combined])
+                    )
+                    return arr[:, hap_mask]
 
             if arr.ndim > 1:
                 return arr[:, mask_combined, ...]
@@ -2237,7 +2241,7 @@ class SNPObject:
 
         # Filter out mismatching variants
         log.debug(f'Removing {total_mismatches} mismatching variants...')
-        return self.filter_variants(indexes=mismatch_idx, include=True, inplace=inplace)
+        return self.filter_variants(indexes=mismatch_idx, include=False, inplace=inplace)
 
     def shuffle_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """

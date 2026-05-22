@@ -6,8 +6,10 @@ from snputils.datasets import (
     build_synthetic_grg,
     build_synthetic_maasmds_dataset,
     build_synthetic_mdpca_dataset,
+    build_synthetic_phenotype_dataset,
     build_synthetic_snp_dataset,
 )
+from snputils.phenotype.genobj import CovariateObject, MultiPhenotypeObject, PhenotypeObject
 from snputils.processing import mdPCA, maasMDS
 from snputils.snp.genobj.grgobj import GRGObject
 from snputils.snp.genobj.snpobj import SNPObject
@@ -30,6 +32,32 @@ def test_build_synthetic_snp_dataset_can_return_summed_dosages():
 
     assert snp.genotypes.shape == (5, 4)
     assert np.all((snp.genotypes >= 0) & (snp.genotypes <= 2))
+
+
+def test_build_synthetic_phenotype_dataset_returns_aligned_objects():
+    dataset = build_synthetic_phenotype_dataset(n_samples=10, n_snps=30, seed=7)
+
+    assert isinstance(dataset["snpobj"], SNPObject)
+    assert isinstance(dataset["multi_phenotype"], MultiPhenotypeObject)
+    assert isinstance(dataset["quantitative"], PhenotypeObject)
+    assert isinstance(dataset["binary"], PhenotypeObject)
+    assert isinstance(dataset["covariates"], CovariateObject)
+    assert dataset["phen_df"].columns.tolist() == [
+        "IID",
+        "trait_quantitative",
+        "trait_binary_01",
+        "trait_binary_12",
+        "age",
+        "batch",
+        "sex",
+    ]
+    assert dataset["binary"].is_quantitative is False
+    assert set(np.unique(dataset["binary"].values).tolist()) == {0, 1}
+    assert dataset["quantitative"].is_quantitative is True
+    assert dataset["covariates"].covariate_names == ["age", "batch", "sex"]
+    assert dataset["quantitative"].samples == dataset["covariates"].samples
+    assert dataset["shuffled_phen_df"]["IID"].tolist() != dataset["phen_df"]["IID"].tolist()
+    assert len(dataset["effect_variant_ids"]) == 3
 
 
 def test_build_synthetic_mdpca_dataset_works_with_in_memory_labels():

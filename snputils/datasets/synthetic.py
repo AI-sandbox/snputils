@@ -7,6 +7,11 @@ import pandas as pd
 import pygrgl as pyg
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
+from snputils.phenotype.genobj import (
+    CovariateObject,
+    MultiPhenotypeObject,
+    PhenotypeObject,
+)
 from snputils.snp.genobj.grgobj import GRGObject
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.visualization.constants import CHROM_SIZES
@@ -36,6 +41,15 @@ def _sample_latent_coordinates(labels: np.ndarray, rng: np.random.Generator) -> 
     coords = np.vstack([_POPULATION_COORDS[str(label)] for label in labels.astype(str)])
     coords = coords + rng.normal(0.0, 0.08, size=coords.shape)
     return coords.astype(np.float64, copy=False)
+
+
+def _standardize(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    centered = values - float(np.mean(values))
+    sd = float(np.std(centered, ddof=0))
+    if sd <= 0.0 or not np.isfinite(sd):
+        return centered
+    return centered / sd
 
 
 def _allele_probabilities_from_coordinates(
@@ -122,6 +136,148 @@ def build_synthetic_snp_dataset(
         variants_id=variants_id,
         variants_pos=variants_pos,
     )
+
+
+def build_synthetic_phenotype_dataset(
+    n_samples: int = 24,
+    n_snps: int = 200,
+    seed: int | None = 0,
+    *,
+    snpobj: SNPObject | None = None,
+    missing_rate: float = 0.0,
+) -> dict[str, object]:
+    """Build a sample-aligned SNP/phenotype/covariate cohort for tutorials.
+
+    The returned objects are intentionally small and self-contained so docs and
+    tests can demonstrate phenotype handling, file readers, and association
+    workflows without downloading external data.
+    """
+    rng = np.random.default_rng(seed)
+    if snpobj is None:
+        snpobj = build_synthetic_snp_dataset(
+            n_samples=n_samples,
+            n_snps=n_snps,
+            seed=seed,
+            missing_rate=missing_rate,
+            phased=True,
+        )
+    elif not isinstance(snpobj, SNPObject):
+        raise TypeError("snpobj must be a SNPObject.")
+
+    sample_ids = np.asarray(snpobj.samples, dtype=object).astype(str)
+    if sample_ids.size == 0:
+        raise ValueError("snpobj must contain at least one sample.")
+
+    genotypes = np.asarray(snpobj.genotypes)
+    if genotypes.ndim == 3:
+        dosages = genotypes.sum(axis=2, dtype=np.int16).astype(np.float64)
+        dosages[np.any(genotypes < 0, axis=2)] = np.nan
+    elif genotypes.ndim == 2:
+        dosages = genotypes.astype(np.float64, copy=False)
+        dosages[dosages < 0] = np.nan
+    else:
+        raise ValueError("Synthetic phenotype generation expects 2D or 3D genotypes.")
+
+    n_snps_actual, n_samples_actual = dosages.shape
+    if n_snps_actual == 0:
+        raise ValueError("snpobj must contain at least one variant.")
+
+    effect_count = min(3, n_snps_actual)
+    effect_indexes = np.linspace(0, n_snps_actual - 1, num=effect_count, dtype=np.int64)
+    effect_weights = np.array([0.95, -0.70, 0.45], dtype=np.float64)[:effect_count]
+
+    dosage_matrix = dosages[effect_indexes].T.copy()
+    col_means = np.nanmean(dosage_matrix, axis=0)
+    col_means = np.where(np.isfinite(col_means), col_means, 1.0)
+    missing = np.isnan(dosage_matrix)
+    if np.any(missing):
+        dosage_matrix[missing] = np.take(col_means, np.where(missing)[1])
+    dosage_signal = _standardize(dosage_matrix @ effect_weights)
+
+    age = rng.integers(24, 71, size=n_samples_actual, endpoint=False).astype(np.int16)
+    batch = ((np.arange(n_samples_actual) % 2) + 1).astype(np.int8)
+    sex = np.asarray(getattr(snpobj, "sample_sex", ((np.arange(n_samples_actual) % 2) + 1)), dtype=np.int8)
+
+    sample_fid = getattr(snpobj, "sample_fid", None)
+    if sample_fid is None:
+        ancestry_shift = np.zeros(n_samples_actual, dtype=np.float64)
+    else:
+        labels = np.asarray(sample_fid, dtype=object).astype(str)
+        unique_labels = sorted(set(labels.tolist()))
+        shift_map = {
+            label: offset
+            for label, offset in zip(
+                unique_labels,
+                np.linspace(-0.4, 0.4, num=len(unique_labels), dtype=np.float64),
+            )
+        }
+        ancestry_shift = np.asarray([shift_map[label] for label in labels], dtype=np.float64)
+
+    quantitative_values = (
+        0.05 * (age.astype(np.float64) - float(np.mean(age)))
+        + 0.30 * (batch == 2).astype(np.float64)
+        - 0.22 * (sex == 2).astype(np.float64)
+        + 0.85 * dosage_signal
+        + ancestry_shift
+        + rng.normal(0.0, 0.55, size=n_samples_actual)
+    )
+    quantitative_values = _standardize(quantitative_values)
+
+    liability = (
+        0.70 * dosage_signal
+        + 0.35 * _standardize(age)
+        + 0.25 * (batch == 2).astype(np.float64)
+        - 0.20 * (sex == 2).astype(np.float64)
+        + 0.35 * ancestry_shift
+        + rng.normal(0.0, 0.65, size=n_samples_actual)
+    )
+    binary_01 = (liability > np.median(liability)).astype(np.int8)
+    if binary_01.sum() == 0 or binary_01.sum() == binary_01.size:
+        order = np.argsort(liability)
+        binary_01 = np.zeros(n_samples_actual, dtype=np.int8)
+        binary_01[order[n_samples_actual // 2 :]] = 1
+    binary_12 = (binary_01 + 1).astype(np.int8)
+
+    phenotype_table = pd.DataFrame(
+        {
+            "IID": sample_ids,
+            "trait_quantitative": np.round(quantitative_values, 4),
+            "trait_binary_01": binary_01,
+            "trait_binary_12": binary_12,
+            "age": age.astype(np.int64),
+            "batch": batch.astype(np.int64),
+            "sex": sex.astype(np.int64),
+        }
+    )
+
+    quantitative = PhenotypeObject(
+        samples=sample_ids,
+        values=phenotype_table["trait_quantitative"].to_numpy(),
+        phenotype_name="TRAIT_Q",
+        quantitative=True,
+    )
+    binary = PhenotypeObject(
+        samples=sample_ids,
+        values=phenotype_table["trait_binary_12"].to_numpy(),
+        phenotype_name="TRAIT_BIN",
+        quantitative=None,
+    )
+    covariates = CovariateObject(
+        samples=sample_ids,
+        values=phenotype_table[["age", "batch", "sex"]].to_numpy(),
+        covariate_names=["age", "batch", "sex"],
+    )
+
+    return {
+        "snpobj": snpobj,
+        "phen_df": phenotype_table,
+        "multi_phenotype": MultiPhenotypeObject(phenotype_table.copy(), sample_column="IID"),
+        "quantitative": quantitative,
+        "binary": binary,
+        "covariates": covariates,
+        "effect_variant_ids": np.asarray(snpobj.variants_id, dtype=object)[effect_indexes].astype(str).tolist(),
+        "shuffled_phen_df": phenotype_table.sample(frac=1.0, random_state=seed).reset_index(drop=True),
+    }
 
 
 def _make_structured_snpobject(

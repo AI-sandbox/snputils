@@ -65,6 +65,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "build_synthetic_grg": (".datasets", "build_synthetic_grg"),
     "build_synthetic_maasmds_dataset": (".datasets", "build_synthetic_maasmds_dataset"),
     "build_synthetic_mdpca_dataset": (".datasets", "build_synthetic_mdpca_dataset"),
+    "build_synthetic_phenotype_dataset": (".datasets", "build_synthetic_phenotype_dataset"),
     "build_synthetic_snp_dataset": (".datasets", "build_synthetic_snp_dataset"),
     "run_admixture_mapping": (".tools", "run_admixture_mapping"),
     "run_gwas": (".tools", "run_gwas"),

@@ -28,6 +28,20 @@ _POPULATION_COORDS = {
     "ADMIXED_EUR_EAS": np.array([-0.5, 0.0], dtype=np.float64),
 }
 
+_LABEL_ANCESTRY_SOURCE_WEIGHTS = {
+    "AFR_ref": {"AFR": np.asarray([0.75, 0.20, 0.05], dtype=np.float64)},
+    "EUR_ref": {"EUR": np.asarray([0.70, 0.20, 0.10], dtype=np.float64)},
+    "EAS_ref": {"EAS": np.asarray([0.72, 0.18, 0.10], dtype=np.float64)},
+    "ADMIXED_AFR_EUR": {
+        "AFR": np.asarray([0.20, 0.65, 0.15], dtype=np.float64),
+        "EUR": np.asarray([0.12, 0.58, 0.30], dtype=np.float64),
+    },
+    "ADMIXED_EUR_EAS": {
+        "EUR": np.asarray([0.18, 0.52, 0.30], dtype=np.float64),
+        "EAS": np.asarray([0.15, 0.62, 0.23], dtype=np.float64),
+    },
+}
+
 
 def _balanced_labels(n_samples: int, labels: Sequence[str]) -> np.ndarray:
     if n_samples <= 0:
@@ -324,6 +338,8 @@ def _build_lai_for_snpobject(
     labels: np.ndarray,
     ancestry_map: dict[str, str],
     seed: int | None,
+    *,
+    lai: np.ndarray | None = None,
 ) -> LocalAncestryObject:
     rng = np.random.default_rng(seed)
     n_snps = snpobj.n_snps
@@ -336,15 +352,24 @@ def _build_lai_for_snpobject(
         "EAS_ref": ancestry_names.index("EAS") if "EAS" in ancestry_names else min(2, n_ancestries - 1),
     }
 
-    lai = np.empty((n_snps, n_samples * 2), dtype=np.int8)
-    for sample_idx, label in enumerate(labels.astype(str).tolist()):
-        if label in label_to_ancestry:
-            state = label_to_ancestry[label]
-            lai[:, 2 * sample_idx : 2 * sample_idx + 2] = state
-        else:
-            props = rng.dirichlet(np.ones(n_ancestries))
-            states = rng.choice(n_ancestries, size=(n_snps, 2), p=props)
-            lai[:, 2 * sample_idx : 2 * sample_idx + 2] = states
+    if lai is None:
+        lai = np.empty((n_snps, n_samples * 2), dtype=np.int8)
+        for sample_idx, label in enumerate(labels.astype(str).tolist()):
+            if label in label_to_ancestry:
+                state = label_to_ancestry[label]
+                lai[:, 2 * sample_idx : 2 * sample_idx + 2] = state
+            else:
+                props = rng.dirichlet(np.ones(n_ancestries))
+                states = rng.choice(n_ancestries, size=(n_snps, 2), p=props)
+                lai[:, 2 * sample_idx : 2 * sample_idx + 2] = states
+    else:
+        lai = np.asarray(lai, dtype=np.int8, order="C")
+        if lai.shape != (n_snps, n_samples * 2):
+            raise ValueError(
+                f"Provided lai has shape {lai.shape}, expected {(n_snps, n_samples * 2)}."
+            )
+        if np.any((lai < 0) | (lai >= n_ancestries)):
+            raise ValueError("Provided lai contains ancestry codes outside ancestry_map.")
 
     physical_pos = np.column_stack([snpobj.variants_pos, snpobj.variants_pos + 999])
     laiobj = LocalAncestryObject(
@@ -361,6 +386,57 @@ def _build_lai_for_snpobject(
     return laiobj
 
 
+def _sample_lai_matrix_for_labels(
+    labels: np.ndarray,
+    n_snps: int,
+    ancestry_map: dict[str, str],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    ancestry_names = list(ancestry_map.values())
+    n_ancestries = len(ancestry_names)
+    ancestry_index = {name: idx for idx, name in enumerate(ancestry_names)}
+
+    def _one_hot(name: str) -> np.ndarray:
+        weights = np.zeros(n_ancestries, dtype=np.float64)
+        weights[ancestry_index.get(name, 0)] = 1.0
+        return weights
+
+    lai = np.empty((n_snps, labels.size * 2), dtype=np.int8)
+    labels_list = labels.astype(str).tolist()
+    for sample_idx, label in enumerate(labels_list):
+        if label == "AFR_ref":
+            base_props = _one_hot("AFR")
+        elif label == "EUR_ref":
+            base_props = _one_hot("EUR")
+        elif label == "EAS_ref":
+            base_props = _one_hot("EAS")
+        elif label == "ADMIXED_AFR_EUR":
+            afr = ancestry_index.get("AFR", 0)
+            eur = ancestry_index.get("EUR", 0)
+            p_afr = float(rng.beta(2.2, 2.2))
+            base_props = np.zeros(n_ancestries, dtype=np.float64)
+            base_props[afr] = p_afr
+            base_props[eur] = 1.0 - p_afr
+        elif label == "ADMIXED_EUR_EAS":
+            eur = ancestry_index.get("EUR", 0)
+            eas = ancestry_index.get("EAS", 0)
+            p_eur = float(rng.beta(2.2, 2.2))
+            base_props = np.zeros(n_ancestries, dtype=np.float64)
+            base_props[eur] = p_eur
+            base_props[eas] = 1.0 - p_eur
+        else:
+            base_props = rng.dirichlet(np.ones(n_ancestries, dtype=np.float64))
+
+        for hap in range(2):
+            col = 2 * sample_idx + hap
+            current = int(rng.choice(n_ancestries, p=base_props))
+            for snp_idx in range(n_snps):
+                lai[snp_idx, col] = current
+                if rng.random() < (1.0 / 35.0):
+                    current = int(rng.choice(n_ancestries, p=base_props))
+    return lai
+
+
 def build_synthetic_mdpca_dataset(
     n_samples: int = 200,
     n_snps: int = 1_000,
@@ -368,7 +444,17 @@ def build_synthetic_mdpca_dataset(
     *,
     ancestry_map: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Build one-array SNP, LAI, and labels inputs for mdPCA examples."""
+    """Build one-array SNP, LAI, and labels inputs for mdPCA examples.
+
+    Notes:
+    - This generator is intended for missing-data mdPCA tutorials.
+    - Genotypes are generated from sample-level label structure, while LAI is
+      generated separately. In admixed labels, haplotype ancestry states are
+      not used to drive ancestry-specific allele frequencies.
+    - For ancestry-specific masking demos, prefer
+      :func:`build_synthetic_maasmds_dataset`, which couples haplotype
+      genotypes to local ancestry states.
+    """
     if n_samples < 4:
         raise ValueError("n_samples must be at least 4 for mdPCA/maasMDS examples.")
     if n_snps <= 0:
@@ -415,6 +501,10 @@ def build_synthetic_maasmds_dataset(
     250 SNPs shared across all arrays, 200 SNPs shared with each other array,
     and 350 array-specific SNPs. Thus overlap decays from within-array to
     pairwise intersections to the three-way intersection.
+
+    Genotypes are sampled haplotype-by-haplotype from local ancestry states.
+    Within each continental ancestry we simulate multiple latent sources so
+    ancestry-masked analyses still contain population-specific structure.
     """
     if n_arrays != 3:
         raise ValueError("Only n_arrays=3 is currently supported.")
@@ -452,21 +542,70 @@ def build_synthetic_maasmds_dataset(
         + [pos for _, pos in pair_defs.values()]
         + [pos for _, pos in unique_defs]
     )
-    label_coords = np.vstack([_POPULATION_COORDS[label] for label in labels_cycle])
-    af_by_label_matrix = _allele_probabilities_from_coordinates(
-        label_coords,
+    ancestry_names = [str(name) for name in ancestry_map.values()]
+    fallback_centroid = np.mean(
+        np.vstack([_POPULATION_COORDS["AFR_ref"], _POPULATION_COORDS["EUR_ref"], _POPULATION_COORDS["EAS_ref"]]),
+        axis=0,
+    )
+    ancestry_centroids = {
+        "AFR": _POPULATION_COORDS["AFR_ref"],
+        "EUR": _POPULATION_COORDS["EUR_ref"],
+        "EAS": _POPULATION_COORDS["EAS_ref"],
+    }
+    n_sources_per_ancestry = 3
+    source_offsets = np.asarray(
+        [
+            [0.18, 0.00],
+            [-0.14, 0.12],
+            [-0.07, -0.16],
+        ],
+        dtype=np.float64,
+    )
+    source_coord_rows = []
+    source_row_lookup: dict[tuple[str, int], int] = {}
+    for anc in ancestry_names:
+        centroid = np.asarray(ancestry_centroids.get(anc, fallback_centroid), dtype=np.float64)
+        coords = centroid[None, :] + source_offsets
+        for src_idx in range(n_sources_per_ancestry):
+            source_row_lookup[(anc, src_idx)] = len(source_coord_rows)
+            source_coord_rows.append(coords[src_idx])
+
+    af_by_source_matrix = _allele_probabilities_from_coordinates(
+        np.vstack(source_coord_rows),
         len(all_variant_positions),
         rng,
-        load_scale=1.2,
+        load_scale=1.25,
         noise_scale=0.02,
     )
-    af_by_label_and_pos = {
-        label: {
-            int(pos): float(af_by_label_matrix[label_idx, pos_idx])
-            for pos_idx, pos in enumerate(all_variant_positions.tolist())
+    af_by_ancestry_source_and_pos = {
+        anc: {
+            src_idx: {
+                int(pos): float(af_by_source_matrix[source_row_lookup[(anc, src_idx)], pos_idx])
+                for pos_idx, pos in enumerate(all_variant_positions.tolist())
+            }
+            for src_idx in range(n_sources_per_ancestry)
         }
-        for label_idx, label in enumerate(labels_cycle)
+        for anc in ancestry_names
     }
+    source_mean_by_ancestry = {
+        anc: np.mean(
+            np.stack(
+                [
+                    np.asarray(
+                        [af_by_ancestry_source_and_pos[anc][src_idx][int(pos)] for pos in all_variant_positions.tolist()],
+                        dtype=np.float64,
+                    )
+                    for src_idx in range(n_sources_per_ancestry)
+                ],
+                axis=0,
+            ),
+            axis=0,
+        )
+        for anc in ancestry_names
+    }
+    ancestry_mean_stack = np.stack([source_mean_by_ancestry[anc] for anc in ancestry_names], axis=0)
+    global_maf = np.mean(ancestry_mean_stack, axis=0)
+    ancestry_informativeness = np.max(ancestry_mean_stack, axis=0) - np.min(ancestry_mean_stack, axis=0)
     snpobjs = []
     laiobjs = []
     labels_frames = []
@@ -490,16 +629,58 @@ def build_synthetic_maasmds_dataset(
 
         variant_ids = variant_ids[order]
         variant_positions = variant_positions[order]
-        genotypes = np.empty((len(variant_ids), n_samples_per_array, 2), dtype=np.int8)
+        n_array_snps = len(variant_ids)
+        genotypes = np.empty((n_array_snps, n_samples_per_array, 2), dtype=np.int8)
         array_rng = np.random.default_rng(None if seed is None else seed + array_idx + 10)
-        for sample_idx, label in enumerate(labels.astype(str).tolist()):
-            probs = np.asarray(
-                [af_by_label_and_pos[label][int(pos)] for pos in variant_positions.tolist()],
-                dtype=np.float64,
-            )
-            genotypes[:, sample_idx, :] = array_rng.binomial(
-                1, probs[:, None], size=(len(variant_ids), 2)
-            )
+        lai = _sample_lai_matrix_for_labels(labels, n_array_snps, ancestry_map, array_rng)
+        anc_name_by_code = {idx: str(name) for idx, name in enumerate(ancestry_map.values())}
+        pos_to_global_index = {int(pos): idx for idx, pos in enumerate(all_variant_positions.tolist())}
+        snp_global_index = np.asarray([pos_to_global_index[int(pos)] for pos in variant_positions.tolist()], dtype=np.int64)
+        array_maf = global_maf[snp_global_index]
+        array_aim = ancestry_informativeness[snp_global_index]
+        if array_idx == 0:
+            ascertainment_delta = -0.55 * (array_maf - np.mean(array_maf))
+        elif array_idx == 1:
+            ascertainment_delta = 0.55 * (array_maf - np.mean(array_maf))
+        else:
+            ascertainment_delta = 0.95 * (array_aim - np.mean(array_aim))
+
+        probs_by_ancestry_source = {
+            anc_name: {
+                src_idx: np.asarray(
+                    [af_by_ancestry_source_and_pos[anc_name][src_idx][int(pos)] for pos in variant_positions.tolist()],
+                    dtype=np.float64,
+                )
+                for src_idx in range(n_sources_per_ancestry)
+            }
+            for anc_name in ancestry_names
+        }
+
+        def _source_weights_for_label_ancestry(label: str, ancestry: str) -> np.ndarray:
+            label_map = _LABEL_ANCESTRY_SOURCE_WEIGHTS.get(label, {})
+            if ancestry in label_map:
+                base = np.asarray(label_map[ancestry], dtype=np.float64)
+            else:
+                base = np.full(n_sources_per_ancestry, 1.0 / n_sources_per_ancestry, dtype=np.float64)
+            draw = array_rng.dirichlet(24.0 * base + 0.3)
+            return draw / np.sum(draw)
+
+        for sample_idx in range(n_samples_per_array):
+            label = str(labels[sample_idx])
+            source_by_ancestry: dict[str, int] = {}
+            for anc_name in ancestry_names:
+                weights = _source_weights_for_label_ancestry(label, anc_name)
+                source_by_ancestry[anc_name] = int(array_rng.choice(n_sources_per_ancestry, p=weights))
+            for hap in range(2):
+                codes = lai[:, 2 * sample_idx + hap]
+                hap_probs = np.empty(n_array_snps, dtype=np.float64)
+                for code, anc_name in anc_name_by_code.items():
+                    mask = codes == code
+                    if np.any(mask):
+                        source_idx = source_by_ancestry[anc_name]
+                        hap_probs[mask] = probs_by_ancestry_source[anc_name][source_idx][mask]
+                adjusted_probs = np.clip(hap_probs + ascertainment_delta, 0.01, 0.99)
+                genotypes[:, sample_idx, hap] = array_rng.binomial(1, adjusted_probs)
         missing = array_rng.random(genotypes.shape) < 0.01
         genotypes[missing] = -1
         refs = np.asarray(["A", "C", "G", "T"], dtype=object)
@@ -520,6 +701,7 @@ def build_synthetic_maasmds_dataset(
             labels,
             ancestry_map,
             None if seed is None else seed + array_idx + 100,
+            lai=lai,
         )
         snpobjs.append(snpobj)
         laiobjs.append(laiobj)

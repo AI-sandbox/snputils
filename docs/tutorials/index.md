@@ -23,6 +23,12 @@ Run PCA workflows on SNP data and inspect components.
 Compute cohort and ancestry-aware allele frequencies.
 :::
 
+:::{grid-item-card} F-statistics
+:link: f-statistics
+:link-type: doc
+Compute f-statistics, D-statistics, f4-ratios, and F_ST.
+:::
+
 :::{grid-item-card} Local Ancestry Visualization
 :link: local-ancestry-visualization
 :link-type: doc
@@ -68,6 +74,7 @@ Work with genotype representation graph data.
 snp-object
 pca
 snp-allele-frequency
+f-statistics
 local-ancestry-visualization
 mdpca
 maasmds

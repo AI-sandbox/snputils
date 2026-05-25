@@ -1,6 +1,6 @@
 # Phenotypes
 
-Phenotype data containers and readers.
+Phenotype data containers and readers for single-trait and multi-trait tables. Phenotype objects align sample IDs with trait values and feed {func}`~snputils.run_gwas`, {func}`~snputils.run_admixture_mapping`, and covariate-aware association workflows.
 
 ## Objects
 

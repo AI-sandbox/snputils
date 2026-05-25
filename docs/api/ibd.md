@@ -1,6 +1,6 @@
 # IBD
 
-Identity-by-descent segment objects and readers.
+Identity-by-descent segment objects and readers for hap-IBD and ancIBD outputs. Segments can be filtered and trimmed to ancestry tracts with {meth}`~snputils.IBDObject.restrict_to_ancestry` when local ancestry is available.
 
 ## Objects
 

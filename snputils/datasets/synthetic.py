@@ -447,13 +447,13 @@ def build_synthetic_mdpca_dataset(
     """Build one-array SNP, LAI, and labels inputs for mdPCA examples.
 
     Notes:
-    - This generator is intended for missing-data mdPCA tutorials.
-    - Genotypes are generated from sample-level label structure, while LAI is
-      generated separately. In admixed labels, haplotype ancestry states are
-      not used to drive ancestry-specific allele frequencies.
-    - For ancestry-specific masking demos, prefer
-      :func:`build_synthetic_maasmds_dataset`, which couples haplotype
-      genotypes to local ancestry states.
+        - This generator is intended for missing-data mdPCA tutorials.
+        - Genotypes are generated from sample-level label structure, while LAI is
+          generated separately. In admixed labels, haplotype ancestry states are
+          not used to drive ancestry-specific allele frequencies.
+        - For ancestry-specific masking demos, prefer
+          :func:`build_synthetic_maasmds_dataset`, which couples haplotype
+          genotypes to local ancestry states.
     """
     if n_samples < 4:
         raise ValueError("n_samples must be at least 4 for mdPCA/maasMDS examples.")

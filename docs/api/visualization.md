@@ -1,6 +1,6 @@
 # Visualization
 
-Plotting utilities exposed by the visualization package.
+Plotting utilities exposed through `snputils.viz` and `snputils.visualization`. Functions accept in-memory results or file paths where noted in each docstring.
 
 ```{eval-rst}
 .. autofunction:: snputils.visualization.scatter

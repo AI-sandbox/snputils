@@ -2,6 +2,24 @@
 
 **snputils** is a Python library for processing genetic variation, ancestry, phenotype, and relatedness data. It focuses on fast file I/O, ergonomic data containers, population-genetic statistics, dimensionality reduction, and visualization workflows for genomic analyses.
 
+Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and collaborators worldwide.
+
+:::{note}
+**snputils** is stable and ready for production workflows. The core API is documented, tested, and suitable for day-to-day genomic analysis. The project is actively maintained: we ship regular releases, welcome contributions, and continue to extend format support, analyses, and performance. See {doc}`changelog` for release history and {doc}`contributing` to get involved.
+:::
+
+## Why snputils?
+
+- One API across genotype, local ancestry, global ancestry, phenotype, and IBD data
+- Fast readers and writers for common population-genetics formats
+- In-memory Python workflows and file-backed CLI workflows in the same package
+- Ancestry-aware analyses including PCA, mdPCA, maasMDS, admixture mapping, and ancestry-specific allele frequencies
+- Built-in plotting for embeddings, local ancestry, admixture, and association results
+
+## Supported formats
+
+High-level dispatchers such as {func}`~snputils.read_snp`, {func}`~snputils.read_lai`, {func}`~snputils.read_admixture`, {func}`~snputils.read_pheno`, and {func}`~snputils.read_ibd` cover VCF/BGEN/PLINK BED and PGEN, MSP and FLARE local ancestry, ADMIXTURE `.Q`/`.P`, phenotype tables, hap-IBD and ancIBD segments, and GRG graphs. See {doc}`user_guide/file-io` for format tables and reader options.
+
 ::::{grid} 1 1 2 2
 :gutter: 2
 
@@ -17,16 +35,28 @@ Set up the package, optional extras, and local documentation build.
 Load SNP, ancestry, phenotype, and IBD files with the high-level API.
 :::
 
-:::{grid-item-card} API Reference
-:link: api/index
+:::{grid-item-card} User Guide
+:link: user_guide/index
 :link-type: doc
-Browse objects, readers, writers, analysis classes, statistics, datasets, and visualization functions by topic.
+Workflow-oriented guides for data objects, I/O, analysis, and visualization.
 :::
 
 :::{grid-item-card} Tutorials
 :link: tutorials/index
 :link-type: doc
 Rendered notebooks for SNP objects, PCA, allele frequency, local ancestry, admixture mapping, and GRG workflows.
+:::
+
+:::{grid-item-card} API Reference
+:link: api/index
+:link-type: doc
+Browse objects, readers, writers, analysis classes, statistics, datasets, and visualization functions by topic.
+:::
+
+:::{grid-item-card} Contributing
+:link: contributing
+:link-type: doc
+Development setup, tests, documentation builds, and pull-request guidelines.
 :::
 
 ::::
@@ -54,6 +84,9 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
 Installation <installation>
 Quickstart <quickstart>
 User guide <user_guide/index>
-API reference <api/index>
 Tutorials <tutorials/index>
+API reference <api/index>
+Contributing <contributing>
+Changelog <changelog>
+License <license>
 ```

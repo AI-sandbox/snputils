@@ -1246,16 +1246,13 @@ class SNPObject:
             arr = np.asarray(value)
             if ordered_indices is not None:
                 if key == "calldata_lai" and arr.ndim == 2:
-                    if ordered_indices is not None:
-                        hap_idx = np.ravel(
-                            np.column_stack([2 * ordered_indices, 2 * ordered_indices + 1])
-                        )
-                        return arr[:, hap_idx]
-
-                    hap_mask = np.ravel(
-                        np.column_stack([mask_combined, mask_combined])
+                    hap_idx = np.ravel(
+                        np.column_stack([2 * ordered_indices, 2 * ordered_indices + 1])
                     )
-                    return arr[:, hap_mask]
+                    return arr[:, hap_idx]
+                if arr.ndim > 1:
+                    return arr[:, ordered_indices, ...]
+                return arr[ordered_indices]
 
             if arr.ndim > 1:
                 return arr[:, mask_combined, ...]

@@ -110,6 +110,18 @@ phen  = su.read_pheno("pheno.tsv")
 mphen = su.MultiPhenReader("multi.tsv").read()
 ```
 
+## Covariate Formats
+
+Covariate files feed {func}`~snputils.run_gwas` and {func}`~snputils.run_admixture_mapping` through the `covar` argument. Use whitespace-separated text with `IID` in the header and numeric columns after it. An optional `#FID` column before `IID` is allowed.
+
+```text
+#FID IID age sex
+sample1 sample1 58 1
+sample2 sample2 49 2
+```
+
+In Python you can pass the same data as a {class}`~snputils.CovariateObject` instead of a path.
+
 ## Datasets
 
 Built-in datasets and synthetic data builders for quick experimentation:

@@ -146,6 +146,28 @@ results = su.run_gwas(phen, snpobj)
 results = su.run_admixture_mapping(phen, laiobj)
 ```
 
+Optional covariates go on the `covar` argument as a file path or {class}`~snputils.CovariateObject`. Covariate files are whitespace-separated tables with an `IID` column and numeric columns after it (for example `age`, `sex`). A column named `SEX` accepts `M`/`F` or `MALE`/`FEMALE` and is coded as 1/2.
+
+For typical GWAS and admixture-mapping models, build covariates from PCs, global ancestry proportions, and clinical variables, then merge:
+
+```python
+pc_covar = su.CovariateObject.from_embedding(pca, n_components=10)
+anc_covar = su.CovariateObject.from_global_ancestry(admobj)
+clinical = su.CovariateObject.from_file("covariates.txt")
+covar = su.CovariateObject.merge(pc_covar, clinical)
+
+results = su.run_gwas(phen, snpobj, covar=covar)
+results = su.run_admixture_mapping(phen, laiobj, covar=covar)
+```
+
+`from_global_ancestry` drops the last ancestry column by default. `from_embedding` requires sample-level coordinates (`average_strands=True` on phased PCA). The same blocks can be composed with {func}`~snputils.phenotype.build_association_covariates`.
+
+File-only or manual construction still works:
+
+```python
+results = su.run_gwas(phen, snpobj, covar="covariates.txt")
+```
+
 Both return a DataFrame with per-variant statistics (p-values, effect sizes) suitable for Manhattan/QQ plotting. See {doc}`../api/tools` for full signatures and {doc}`../api/cli` for file-backed CLI equivalents.
 
 ---

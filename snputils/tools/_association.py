@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from snputils.phenotype.covariates import parse_covar_col_nums, read_covar_file
 from snputils.phenotype.genobj import CovariateObject
 
 try:
@@ -34,45 +35,7 @@ class _RegressionResult:
 
 
 def _parse_covar_col_nums(col_nums: Optional[str], n_covariates: int) -> List[int]:
-    if n_covariates <= 0:
-        return []
-    if col_nums is None or str(col_nums).strip() == "":
-        return list(range(n_covariates))
-
-    selected: List[int] = []
-    seen: Set[int] = set()
-    for token in str(col_nums).split(","):
-        part = token.strip()
-        if not part:
-            continue
-        if "-" in part:
-            start_s, end_s = part.split("-", 1)
-            start = int(start_s)
-            end = int(end_s)
-            if start <= 0 or end <= 0:
-                raise ValueError("--covar-col-nums must be 1-indexed and positive.")
-            if end < start:
-                raise ValueError(f"Invalid covariate range '{part}' in --covar-col-nums.")
-            indices = range(start - 1, end)
-        else:
-            idx = int(part)
-            if idx <= 0:
-                raise ValueError("--covar-col-nums must be 1-indexed and positive.")
-            indices = [idx - 1]
-
-        for idx0 in indices:
-            if idx0 < 0 or idx0 >= n_covariates:
-                raise ValueError(
-                    f"--covar-col-nums selects column {idx0 + 1}, but only "
-                    f"{n_covariates} covariate columns are available."
-                )
-            if idx0 not in seen:
-                seen.add(idx0)
-                selected.append(idx0)
-
-    if not selected:
-        raise ValueError("--covar-col-nums did not select any covariate column.")
-    return selected
+    return parse_covar_col_nums(col_nums, n_covariates)
 
 
 def _read_covar(
@@ -80,68 +43,11 @@ def _read_covar(
     col_nums: Optional[str],
     variance_standardize: bool,
 ) -> Tuple[List[str], List[str], np.ndarray]:
-    covar_df = pd.read_csv(path, sep=r"\s+", dtype=str)
-    if covar_df.empty:
-        raise ValueError("Empty covariate file.")
-
-    columns = list(covar_df.columns)
-    lowered = [str(col).lstrip("#").upper() for col in columns]
-    if "IID" not in lowered:
-        raise ValueError("Covariate file must include an IID column in the header.")
-    iid_col = columns[lowered.index("IID")]
-    iid_series = covar_df[iid_col].astype(str)
-    if iid_series.duplicated().any():
-        raise ValueError("Covariate IID values must be unique.")
-    sample_ids = iid_series.tolist()
-
-    covar_start = lowered.index("IID") + 1
-    if covar_start >= len(columns):
-        raise ValueError("Covariate file header does not contain covariate columns.")
-    all_covar_cols = columns[covar_start:]
-
-    selected_rel = _parse_covar_col_nums(col_nums, len(all_covar_cols))
-    selected_cols = [all_covar_cols[idx] for idx in selected_rel]
-    covar_names = [str(name) for name in selected_cols]
-
-    covar_numeric = covar_df[selected_cols].copy()
-    for col in selected_cols:
-        coldata = covar_numeric[col].astype(str).str.strip()
-        if str(col).upper() == "SEX":
-            coldata = coldata.str.upper().replace(
-                {"MALE": "1", "M": "1", "FEMALE": "2", "F": "2", "UNKNOWN": "", "NA": "", "NAN": ""}
-            )
-        covar_numeric[col] = pd.to_numeric(coldata, errors="coerce")
-    complete = ~covar_numeric.isna().any(axis=1)
-    n_dropped = int((~complete).sum())
-    if n_dropped > 0:
-        log.info(
-            "Dropping %d samples with missing covariate values (listwise deletion).",
-            n_dropped,
-        )
-    covar_numeric = covar_numeric.loc[complete].to_numpy(dtype=np.float64, copy=True)
-    sample_ids = [sid for sid, keep in zip(sample_ids, complete) if keep]
-    if len(sample_ids) == 0:
-        raise ValueError(
-            "No samples remain after dropping rows with missing covariates. "
-            "Check covariate file for non-numeric or missing values."
-        )
-
-    covar_matrix = covar_numeric
-    if covar_matrix.ndim != 2 or covar_matrix.shape[1] == 0:
-        raise ValueError("No covariates selected from covariate file.")
-
-    if variance_standardize:
-        means = np.mean(covar_matrix, axis=0)
-        stds = np.std(covar_matrix, axis=0, ddof=0)
-        if np.any(stds <= 0.0):
-            zero_var_names = [covar_names[i] for i in np.where(stds <= 0.0)[0]]
-            raise ValueError(
-                "Cannot variance-standardize covariates with zero variance: "
-                f"{zero_var_names}"
-            )
-        covar_matrix = (covar_matrix - means[None, :]) / stds[None, :]
-
-    return sample_ids, covar_names, covar_matrix
+    return read_covar_file(
+        path,
+        col_nums=col_nums,
+        variance_standardize=variance_standardize,
+    )
 
 
 def _coerce_covar_source(

@@ -131,6 +131,8 @@ mphen.phenotypes  # (n_samples, n_phenotypes)
 
 Numeric covariates aligned to sample IDs for {func}`~snputils.run_gwas` and {func}`~snputils.run_admixture_mapping`. Values must be finite floating-point numbers with explicit column names.
 
+Factory helpers build blocks from common sources: {meth}`~snputils.CovariateObject.from_file` (clinical tables), {meth}`~snputils.CovariateObject.from_embedding` (fitted PCA, mdPCA, or maasMDS), and {meth}`~snputils.CovariateObject.from_global_ancestry` (ADMIXTURE `Q`, dropping the last ancestry by default). Combine blocks with {meth}`~snputils.CovariateObject.merge` or {func}`~snputils.phenotype.build_association_covariates`.
+
 ```python
 covar = su.CovariateObject(
     samples=["sample1", "sample2"],

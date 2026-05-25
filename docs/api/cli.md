@@ -53,6 +53,7 @@ snputils gwas \
     --phe-id trait \
     --phe-path phenotypes.tsv \
     --snp-path cohort.pgen \
+    --covar-path covariates.txt \
     --results-path gwas.tsv.gz
 ```
 
@@ -63,6 +64,7 @@ snputils admixture-map \
     --phe-id trait \
     --phe-path phenotypes.tsv \
     --lai-path local_ancestry.msp \
+    --covar-path covariates.txt \
     --results-path admixmap.tsv.gz
 ```
 

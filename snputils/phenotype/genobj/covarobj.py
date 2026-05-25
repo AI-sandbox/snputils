@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from pathlib import Path
+from typing import Any, Optional, Sequence, Union
 
 import numpy as np
 
@@ -93,3 +94,51 @@ class CovariateObject:
     @property
     def n_covariates(self) -> int:
         return int(self._values.shape[1])
+
+    @classmethod
+    def from_file(
+        cls,
+        path: Union[str, Path],
+        col_nums: Optional[str] = None,
+    ) -> CovariateObject:
+        from snputils.phenotype.covariates import covariate_object_from_file
+
+        return covariate_object_from_file(path, col_nums=col_nums)
+
+    @classmethod
+    def from_embedding(
+        cls,
+        model: Any,
+        n_components: Optional[int] = None,
+        component_names: Optional[Sequence[str]] = None,
+    ) -> CovariateObject:
+        from snputils.phenotype.covariates import covariate_object_from_embedding
+
+        return covariate_object_from_embedding(
+            model,
+            n_components=n_components,
+            component_names=component_names,
+        )
+
+    @classmethod
+    def from_global_ancestry(
+        cls,
+        admobj: Any,
+        columns: Optional[Sequence[int]] = None,
+        drop_ancestry: int = -1,
+        ancestry_names: Optional[Sequence[str]] = None,
+    ) -> CovariateObject:
+        from snputils.phenotype.covariates import covariate_object_from_global_ancestry
+
+        return covariate_object_from_global_ancestry(
+            admobj,
+            columns=columns,
+            drop_ancestry=drop_ancestry,
+            ancestry_names=ancestry_names,
+        )
+
+    @classmethod
+    def merge(cls, *objs: CovariateObject) -> CovariateObject:
+        from snputils.phenotype.covariates import merge_covariates
+
+        return merge_covariates(*objs)

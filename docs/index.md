@@ -17,16 +17,16 @@ Set up the package, optional extras, and local documentation build.
 Load SNP, ancestry, phenotype, and IBD files with the high-level API.
 :::
 
-:::{grid-item-card} Tutorials
-:link: tutorials/index
-:link-type: doc
-Rendered notebooks for SNP objects, PCA, allele frequency, local ancestry, admixture mapping, and GRG workflows.
-:::
-
 :::{grid-item-card} API Reference
 :link: api/index
 :link-type: doc
 Browse objects, readers, writers, analysis classes, statistics, datasets, and visualization functions by topic.
+:::
+
+:::{grid-item-card} Tutorials
+:link: tutorials/index
+:link-type: doc
+Rendered notebooks for SNP objects, PCA, allele frequency, local ancestry, admixture mapping, and GRG workflows.
 :::
 
 ::::
@@ -54,6 +54,6 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
 Installation <installation>
 Quickstart <quickstart>
 User guide <user_guide/index>
-Tutorials <tutorials/index>
 API reference <api/index>
+Tutorials <tutorials/index>
 ```

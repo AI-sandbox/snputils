@@ -1,6 +1,6 @@
 # Simulation
 
-Haplotype-based simulation of admixed mosaics from phased founder panels. Simulation requires PyTorch (`pip install "snputils[torch]"`).
+Haplotype-based simulation of admixed mosaics from phased founder panels. Requires PyTorch (`pip install "snputils[torch]"`). `OnlineSimulator` draws crossover breakpoints from an optional genetic map and returns batched haplotype labels with SNP matrices on CPU or GPU.
 
 ## OnlineSimulator
 

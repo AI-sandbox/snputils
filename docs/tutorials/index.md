@@ -1,6 +1,6 @@
 # Tutorials
 
-The tutorial notebooks live in `docs/tutorials/` and are committed with saved cell outputs; the documentation renders those outputs without re-executing the notebooks.
+End-to-end notebooks for data objects, population structure, ancestry visualization, association testing, and GRG workflows. Examples use synthetic or bundled datasets unless a notebook states otherwise.
 
 ::::{grid} 1 1 2 2
 :gutter: 2

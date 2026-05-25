@@ -127,6 +127,24 @@ phen.samples      # (n_samples,)
 mphen.phenotypes  # (n_samples, n_phenotypes)
 ```
 
+## CovariateObject
+
+Numeric covariates aligned to sample IDs for {func}`~snputils.run_gwas` and {func}`~snputils.run_admixture_mapping`. Values must be finite floating-point numbers with explicit column names.
+
+```python
+covar = su.CovariateObject(
+    samples=["sample1", "sample2"],
+    values=[[58.0, 1.0], [49.0, 2.0]],
+    covariate_names=["age", "sex"],
+)
+
+covar.samples           # sample IDs
+covar.values            # (n_samples, n_covariates)
+covar.covariate_names   # column names
+covar.n_samples
+covar.n_covariates
+```
+
 ## GRGObject
 
 Genotype Representation Graph (requires `pip install pygrgl`).

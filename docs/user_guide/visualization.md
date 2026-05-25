@@ -55,11 +55,11 @@ su.viz.chromosome_painting(
 import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots()
+Q_sorted, _, boundaries, _ = su.viz.reorder_admixture(admobj.Q)
 su.viz.plot_admixture(
     ax=ax,
-    Q_mat_sorted=admobj.Q,
-    boundary_list=pop_boundaries,
-    show_boundaries=True,
+    Q_mat_sorted=Q_sorted,
+    boundary_list=boundaries,
 )
 ```
 

@@ -1,6 +1,6 @@
 # Processing
 
-Dimensionality-reduction and ancestry-aware processing classes.
+Classes for PCA, missing-data PCA with local-ancestry masking, and multi-array ancestry-specific MDS. All three accept `SNPObject` inputs directly and expose `X_new_` after fitting. Embedding tables can be exported with the helper functions below.
 
 ```{eval-rst}
 .. autoclass:: snputils.processing.pca.PCA

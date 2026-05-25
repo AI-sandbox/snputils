@@ -15,7 +15,7 @@
 
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and more collaborators worldwide.
 
-*Note: **snputils** is under active development. While the core API is stabilizing, we are continuously adding features, optimizing performance, and expanding format support.*
+**snputils** is stable and ready for production workflows. The core API is documented, tested, and suitable for day-to-day genomic analysis. The project is actively maintained: we ship regular releases, welcome contributions, and continue to extend format support, analyses, and performance.
 
 ## Why snputils?
 

@@ -14,6 +14,11 @@ Phenotype data containers and readers for single-trait and multi-trait tables. P
    :members:
 ```
 
+```{eval-rst}
+.. autoclass:: snputils.CovariateObject
+   :members:
+```
+
 ## Readers
 
 ```{eval-rst}

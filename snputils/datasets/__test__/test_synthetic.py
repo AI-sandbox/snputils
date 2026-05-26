@@ -6,8 +6,10 @@ from snputils.datasets import (
     build_synthetic_grg,
     build_synthetic_maasmds_dataset,
     build_synthetic_mdpca_dataset,
+    build_synthetic_phenotype_dataset,
     build_synthetic_snp_dataset,
 )
+from snputils.phenotype.genobj import CovariateObject, MultiPhenotypeObject, PhenotypeObject
 from snputils.processing import mdPCA, maasMDS
 from snputils.snp.genobj.grgobj import GRGObject
 from snputils.snp.genobj.snpobj import SNPObject
@@ -30,6 +32,32 @@ def test_build_synthetic_snp_dataset_can_return_summed_dosages():
 
     assert snp.genotypes.shape == (5, 4)
     assert np.all((snp.genotypes >= 0) & (snp.genotypes <= 2))
+
+
+def test_build_synthetic_phenotype_dataset_returns_aligned_objects():
+    dataset = build_synthetic_phenotype_dataset(n_samples=10, n_snps=30, seed=7)
+
+    assert isinstance(dataset["snpobj"], SNPObject)
+    assert isinstance(dataset["multi_phenotype"], MultiPhenotypeObject)
+    assert isinstance(dataset["quantitative"], PhenotypeObject)
+    assert isinstance(dataset["binary"], PhenotypeObject)
+    assert isinstance(dataset["covariates"], CovariateObject)
+    assert dataset["phen_df"].columns.tolist() == [
+        "IID",
+        "trait_quantitative",
+        "trait_binary_01",
+        "trait_binary_12",
+        "age",
+        "batch",
+        "sex",
+    ]
+    assert dataset["binary"].is_quantitative is False
+    assert set(np.unique(dataset["binary"].values).tolist()) == {0, 1}
+    assert dataset["quantitative"].is_quantitative is True
+    assert dataset["covariates"].covariate_names == ["age", "batch", "sex"]
+    assert dataset["quantitative"].samples == dataset["covariates"].samples
+    assert dataset["shuffled_phen_df"]["IID"].tolist() != dataset["phen_df"]["IID"].tolist()
+    assert len(dataset["effect_variant_ids"]) == 3
 
 
 def test_build_synthetic_mdpca_dataset_works_with_in_memory_labels():
@@ -96,7 +124,7 @@ def test_build_synthetic_maasmds_dataset_has_three_overlapping_arrays():
     assert set(model.array_labels_.tolist()) == {1, 2, 3}
 
 
-def test_build_synthetic_chromosome_painting_dataset_covers_autosomes_only():
+def test_build_synthetic_chromosome_painting_dataset_covers_autosomes_and_x_by_default():
     dataset = build_synthetic_chromosome_painting_dataset(
         n_samples=3,
         windows_per_chromosome=3,
@@ -104,11 +132,27 @@ def test_build_synthetic_chromosome_painting_dataset_covers_autosomes_only():
     )
 
     laiobj = dataset["laiobj"]
-    assert len(dataset["chromosomes"]) == 22
-    assert laiobj.n_windows == 66
+    assert len(dataset["chromosomes"]) == 23
+    assert laiobj.n_windows == 69
     assert laiobj.chromosomes[0] == "1"
-    assert laiobj.chromosomes[-1] == "22"
-    assert dataset["sample_sex"]["sex"].tolist() == ["female", "female", "male"]
+    assert laiobj.chromosomes[-1] == "X"
+    assert dataset["sample_sex"]["sex"].tolist() == ["female", "female", "female"]
+
+
+def test_build_synthetic_chromosome_painting_dataset_can_still_restrict_to_autosomes():
+    dataset = build_synthetic_chromosome_painting_dataset(
+        n_samples=2,
+        windows_per_chromosome=4,
+        seed=6,
+        chromosomes=[str(chrom) for chrom in range(1, 23)],
+        male_samples=["sample1"],
+    )
+
+    laiobj = dataset["laiobj"]
+    assert len(dataset["chromosomes"]) == 22
+    assert laiobj.n_windows == 88
+    assert "X" not in set(map(str, laiobj.chromosomes.tolist()))
+    assert dataset["sample_sex"]["sex"].tolist() == ["female", "male"]
 
 
 def test_build_synthetic_grg_returns_convertible_grgobject(tmp_path):

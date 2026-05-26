@@ -14,7 +14,6 @@ from snputils.phenotype.io.read import PhenotypeReader
 from ._association import (
     _apply_multiple_testing_adjustment,
     _compute_effective_chunk_size,
-    _compute_group_counts_batch,
     _compute_linear_ci_beta,
     _compute_logistic_ci_or,
     _compute_multiple_testing_adjustments,

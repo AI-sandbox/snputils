@@ -1,112 +1,114 @@
 import logging
-from pathlib import Path
-import pandas as pd
 import os
+from pathlib import Path
 from typing import List, Optional, Union
+
+import pandas as pd
+
+from .base import PhenotypeBaseReader
+from .phenotypeReader import PhenotypeReader
+from snputils.phenotype.genobj import MultiPhenotypeObject
 
 log = logging.getLogger(__name__)
 
-from .base import PhenotypeBaseReader
-from snputils.phenotype.genobj import MultiPhenotypeObject
 
-
-SUPPORTED_EXTENSIONS = ('.xlsx', '.csv', '.tsv', '.txt', '.phe', '.pheno', '.map', '.smap', '.phen')
+SUPPORTED_EXTENSIONS = (".xlsx", ".csv", ".tsv", ".txt", ".phe", ".pheno", ".map", ".smap", ".phen")
 
 
 class MultiPhenReader(PhenotypeBaseReader):
-    """
-    Reader for multi-phenotype data from file (.xlsx, .csv, .tsv, .txt, .phe, .pheno, .map, .smap, .phen),
-    constructing a `MultiPhenotypeObject`.
-    """
+    """Reader for headered multi-phenotype tables with an ``IID`` column."""
+
     def __init__(self, file: Union[str, Path]) -> None:
-        """
-        Args:
-            file (str or pathlib.Path):
-                Path to the file containing phenotype data. Accepted formats: .xlsx, .csv, .tsv, .txt, .phe, .pheno, .map, .smap, .phen.
-        """
-        self.__file = file
+        super().__init__(file)
 
     @property
     def file(self) -> Path:
-        """
-        Retrieve `file`.
+        return Path(self._file)
 
-        Returns:
-            pathlib.Path:
-                Path to the file containing phenotype data. Accepted formats: .xlsx, .csv, .tsv, .txt, .phe, .pheno, .map, .smap, .phen.
-        """
-        return self.__file
+    def _read_raw_table(self, sep: str, header: Optional[int]) -> pd.DataFrame:
+        file_extension = os.path.splitext(self.file)[1]
+        log.info("Reading '%s' file from '%s'...", file_extension, self.file)
+
+        if file_extension == ".xlsx":
+            return pd.read_excel(self.file, header=header, index_col=None)
+        if file_extension == ".csv":
+            return pd.read_csv(self.file, sep=sep, header=header)
+        if file_extension in [".map", ".smap"]:
+            return pd.read_csv(self.file, sep=sep, header=header)
+        if file_extension == ".tsv":
+            return pd.read_csv(self.file, sep="\t", header=header)
+        if file_extension in [".txt", ".phe", ".pheno"]:
+            return pd.read_csv(self.file, sep=r"\s+", header=header)
+        if file_extension == ".phen":
+            with open(self.file, "r", encoding="utf-8") as handle:
+                contents = [line.split() for line in handle if line.strip()]
+            if len(contents) < 2:
+                raise ValueError("Empty phenotype file.")
+            return pd.DataFrame(contents[1:], columns=["IID", "PHENO"])
+        raise ValueError(
+            f"Unsupported file extension {file_extension}. Supported extensions: {SUPPORTED_EXTENSIONS}."
+        )
 
     def read(
-            self,
-            samples_idx: int = 0,
-            phen_names: Optional[List] = None,
-            sep: str = ',',
-            header: int = 0,
-            drop: bool = False
-        ) -> 'MultiPhenotypeObject':
-        """
-        Read data from `file` and construct a `MultiPhenotypeObject`.
-
-        Args:
-            samples_idx (int, default=0): Index of the column containing sample identifiers.
-                Default is 0, assuming the first column contains sample identifiers.
-            phen_names (list of str, optional): List of phenotype column names. If provided,
-                these columns will be renamed to the specified names.
-            sep (str, default=','): The delimiter for separating values in `.csv`, `.tsv`,
-                `.txt`, `.phe`, `.pheno`, or `.map` files. Default is ','; use `sep=r'\\s+'` for whitespace-delimited.
-            header (int, default=0): Row index to use as the column names. By default,
-                uses the first row (`header=0`). Set to `None` if column names are provided
-                explicitly.
-            drop (bool, default=False): If True, removes columns not listed in `phen_names`
-                (except the samples column).
-
-        Returns:
-            MultiPhenotypeObject:
-                A multi-phenotype object instance.
-        """
-        file_extension = os.path.splitext(self.file)[1]
-
-        log.info(f"Reading '{file_extension}' file from '{self.file}'...")
-
-        if file_extension == '.xlsx':
-            phen_df = pd.read_excel(self.file, header=0, index_col=None)
-        elif file_extension == '.csv':
-            phen_df = pd.read_csv(self.file, sep=sep, header=header)
-        elif file_extension in ['.map', '.smap']:
-            phen_df = pd.read_csv(self.file, sep=sep, header=header)
-        elif file_extension == '.tsv':
-            phen_df = pd.read_csv(self.file, sep='\t')
-        elif file_extension in ['.txt', '.phe', '.pheno']:
-            phen_df = pd.read_csv(self.file, sep=r'\s+', header=header)
-        elif file_extension == '.phen':
-            with open(self.file, 'r') as f:
-                contents = f.readlines()
-            phen_dict = {line.split()[0]: line.split()[1].strip() for line in contents[1:]}
-            phen_df = pd.DataFrame({'samples': list(phen_dict.keys()), 'phenotype': list(phen_dict.values())})
-        else:
+        self,
+        samples_idx: int = 0,
+        phen_names: Optional[List[str]] = None,
+        sep: str = ",",
+        header: Optional[int] = 0,
+        drop: bool = False,
+    ) -> "MultiPhenotypeObject":
+        """Read a multi-phenotype table using the same ``IID`` convention as `read_pheno()`."""
+        if not self.file.exists():
+            raise FileNotFoundError(f"Phenotype file not found: '{self.file}'")
+        if drop:
             raise ValueError(
-                f"Unsupported file extension {file_extension}. Supported extensions: {SUPPORTED_EXTENSIONS}."
+                "`drop` is not supported in the IID-based reader API. "
+                "Select columns before writing the file or after reading the object."
             )
 
-        phen_df.rename(columns={phen_df.columns[samples_idx]: 'samples'}, inplace=True)
+        has_iid_header = PhenotypeReader._has_header_with_iid(self.file)
+        if header is None and has_iid_header:
+            raise ValueError("header=None is not supported for headered phenotype files with IID.")
+        if not has_iid_header:
+            raise ValueError("Phenotype file must include an IID column in the header.")
 
-        if samples_idx != 0:
-            cols = ['samples'] + [col for col in phen_df.columns if col != 'samples']
-            phen_df = phen_df[cols]
+        phen_df = self._read_raw_table(sep=sep, header=header)
+
+        if phen_df.empty:
+            raise ValueError("Empty phenotype file.")
+
+        columns = [str(col) for col in phen_df.columns]
+        normalized_columns = [col.lstrip("#").upper() for col in columns]
+        if "IID" not in normalized_columns:
+            raise ValueError("Phenotype file must include an IID column in the header.")
+
+        iid_idx = normalized_columns.index("IID")
+        if samples_idx != 0 and samples_idx != iid_idx:
+            raise ValueError(
+                "`samples_idx` no longer selects an arbitrary sample column; "
+                "the input must contain an IID column."
+            )
+
+        iid_col = columns[iid_idx]
+        phenotype_candidates = columns[iid_idx + 1 :]
+        if not phenotype_candidates:
+            raise ValueError(
+                "Phenotype file must include at least one phenotype column after IID."
+            )
+
+        out_df = phen_df.loc[:, [iid_col] + phenotype_candidates].copy()
+        out_df.columns = ["IID"] + phenotype_candidates
 
         if phen_names is not None:
-            if drop:
-                non_phen_columns = list(set(phen_df.columns) - set(['samples']+phen_names))
-                phen_df = phen_df.drop(non_phen_columns, axis=1)
+            renamed = [str(name) for name in phen_names]
+            if len(renamed) != len(phenotype_candidates):
+                raise ValueError(
+                    f"Mismatch between number of phenotype columns ({len(phenotype_candidates)}) "
+                    f"and length of `phen_names` ({len(renamed)})."
+                )
+            out_df.columns = ["IID"] + renamed
 
-            phenotype_col_count = phen_df.shape[1] - 1
-            if phenotype_col_count == len(phen_names):
-                phen_df.columns.values[1:] = phen_names
-            else:
-                raise ValueError(f"Mismatch between number of phenotype columns ({phenotype_col_count}) "
-                                 f"and length of `phen_names` ({len(phen_names)}).")
+        return MultiPhenotypeObject(phen_df=out_df, sample_column="IID")
 
-        return MultiPhenotypeObject(phen_df=phen_df)
 
 PhenotypeBaseReader.register(MultiPhenReader)

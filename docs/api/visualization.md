@@ -1,6 +1,6 @@
 # Visualization
 
-Plotting utilities exposed by the visualization package.
+Plotting helpers for embeddings, local ancestry, global admixture proportions, and association summaries. Most functions accept in-memory objects or result files with the column names documented in each signature. Scatter plots expect a fitted PCA, mdPCA, or maasMDS model with `X_new_` and `samples_`.
 
 ```{eval-rst}
 .. autofunction:: snputils.visualization.scatter

@@ -15,7 +15,40 @@
 
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and more collaborators worldwide.
 
-*Note: **snputils** is under active development. While the core API is stabilizing, we are continuously adding features, optimizing performance, and expanding format support.*
+**snputils** is stable and ready for production workflows. The core API is documented, tested, and suitable for day-to-day genomic analysis. The project is actively maintained: we ship regular releases, welcome contributions, and continue to extend format support, analyses, and performance.
+
+## Why snputils?
+
+- One API across genotype, local ancestry, global ancestry, phenotype, and IBD data
+- Fast readers and writers for common population-genetics formats
+- In-memory Python workflows and file-backed CLI workflows in the same package
+- Ancestry-aware analyses including PCA and advanced alternatives, admixture mapping, and ancestry-specific allele frequencies
+- Built-in plotting for embeddings, local ancestry, admixture, and association results
+
+## Quickstart
+
+```python
+import snputils as su
+
+snp = su.read_snp("cohort.vcf.gz")                    # VCF, BGEN, BED, PGEN
+snp = snp.filter_biallelic_variants()
+snp.save("cohort.pgen")                               # convert to PGEN
+
+lai = su.read_lai("local_ancestry.msp")               # MSP or FLARE local ancestry
+adm = su.read_admixture("admixture_prefix")           # ADMIXTURE-style global ancestry
+pheno = su.read_pheno("phenotypes.tsv", col="trait")
+ibd = su.read_ibd("segments.hapibd")
+
+pcs = su.PCA(n_components=2).fit_transform(snp)
+afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai)
+gwas = su.run_gwas(pheno, snp)
+admix = su.run_admixture_mapping(pheno, lai)
+
+su.viz.scatter(pcs, "labels.tsv", save_path="pca.png", show=False)
+su.viz.chromosome_painting(lai, "chr_paintings/")
+su.viz.qq_plot(gwas)
+su.viz.manhattan_plot(admix)
+```
 
 ## Installation
 
@@ -29,75 +62,85 @@ Optionally, for PyTorch-backed features, install with the `[torch]` extra:
 pip install 'snputils[torch]'
 ```
 
+Optional extras:
+
+- `pip install 'snputils[tests]'` for the test stack
+- `pip install 'snputils[docs]'` for local documentation builds
+- `pip install 'snputils[demos]'` for notebook demos
+
 ## Key Features
 
-### Ease of Use
-
-**snputils** is designed to be user-friendly and intuitive, with a simple API that allows you to quickly load, process, and visualize genomic data. For example, reading a whole genome VCF file is as simple as:
-```python
-import snputils as su
-snpobj = su.read_snp("path/to/file.vcf.gz")
-```
-
-Similarly, reading BED or PGEN filesets is straightforward:
-```python
-snpobj = su.read_snp("path/to/file.pgen")
-```
-
-Working with ancestry files, performing processing operations, and creating visualizations is just as straightforward. See the [tutorial notebooks](https://github.com/AI-sandbox/snputils/tree/main/docs/tutorials) for examples.
-
 ### File Format Support
-**snputils** aims to provide the fastest available readers and writers for various genomic data formats:
+
+**snputils** provides high-level dispatchers like `read_snp`, `read_lai`, `read_admixture`, `read_pheno`, and `read_ibd`, plus explicit reader and writer classes when you need finer control.
+
 - **VCF**: Support for `.vcf` and `.vcf.gz` files
 - **BGEN**: Support for `.bgen` files
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets
+- **GRG**: Read and write graph-based genome representation files
 - **Local Ancestry**: Handle `.msp` and FLARE `.anc.vcf.gz` local ancestry formats
-- **Admixture**: Read and write `.Q` and `.P` files
+- **Global Ancestry / ADMIXTURE**: Read and write `.Q` and `.P` files
+- **IBD**: Read `hap-IBD` and `ancIBD` outputs into a unified object
+
+### Data Objects and Utilities
+
+- **SNPObject** for genotype data, including filtering, saving, and allele-frequency helpers
+- **LocalAncestryObject** and **GlobalAncestryObject** for ancestry-aware workflows
+- **PhenotypeObject**, **MultiPhenotypeObject**, and **CovariateObject** for trait data
+- **IBDObject** for segment filtering and ancestry-restricted trimming
+- Synthetic dataset builders for SNP, mdPCA, maasMDS, chromosome-painting, admixture, and GRG examples
+- Conversion helpers such as VCF-to-GRG workflows
 
 ### Processing & Analysis Tools
-- **Basic Data Manipulation**
-  - Filter variants and samples, correct SNP flips, and filter out ambiguous SNPs
-  - Compute cohort allele frequency and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)` or in streaming for memory efficiency with `snputils.stats.allele_freq_stream(...)`
-  - Standardized querying across genotype, local ancestry, global ancestry, and IBD data
 
-- **Dimensionality Reduction**
-  - Standard PCA with optional GPU acceleration
-  - Missing-data PCA (mdPCA)
-  - Multi-array ancestry-specific MDS (maasMDS)
+- **Basic manipulation**
+  - Filter variants and samples, correct SNP flips, and filter ambiguous SNPs
+  - Compute cohort and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)`
+  - Stream allele frequencies with `snputils.stats.allele_freq_stream(...)` for memory efficiency
 
-- **Population Genetic Statistics**
+- **Dimensionality reduction**
+  - Standard PCA with optional PyTorch acceleration
+  - Missing-data PCA (`mdPCA`)
+  - Multi-array ancestry-specific MDS (`maasMDS`)
+
+- **Population-genetic statistics**
   - Compute $D$, $f_2$, $f_3$, $f_4$, the $f_4$-ratio, and $F_{ST}$ (Hudson, Weir-Cockerham, and Tsallis $F_{q}$)
-  - Includes block jackknife standard errors and optional ancestry masking
+  - Block jackknife standard errors where applicable
+  - Optional ancestry masking in relevant workflows
 
-- **Identity-by-Descent (IBD) & Relatedness**
-  - Read `hap-IBD` and `ancIBD` outputs into a unified format
-  - Fast filtering and ancestry-restricted segment trimming using local ancestry
+- **Association analysis**
+  - GWAS on SNP dosages for binary and quantitative traits
+  - Admixture mapping from local ancestry dosage
+  - Built-in Manhattan and Q–Q plotting utilities
 
-- **Association Analysis**
-  - **Admixture Mapping:** Locus-by-locus regression of local ancestry dosage on traits
-  - **GWAS:** Variant-level association testing on SNP dosages for binary and quantitative traits
+- **IBD and ancestry-aware trimming**
+  - Unified IBD ingestion from common upstream tools
+  - Segment filtering and ancestry-restricted trimming using local ancestry
 
-- **Admixture Simulation**
-  - **Simulation:** Lightweight haplotype-based simulation of admixed mosaics from real founder haplotypes
+- **Simulation**
+  - Lightweight haplotype-based simulation of admixed mosaics from founder haplotypes
 
 ### Visualization
-- Interactive global ancestry bar plots
-- Detailed scatter plots of PCA, mdPCA, and maasMDS
-- Admixture mapping Manhattan plots
-- Local ancestry visualization 
-  - Chromosome painting (with [Tagore](https://github.com/jordanlab/tagore))
-  - Dataset-level
+
+- Scatter plots for PCA, mdPCA, and maasMDS embeddings
+- Global ancestry bar plots
+- Local ancestry visualization
+  - Chromosome painting
+  - Dataset-level cohort summaries
+- Association plots
+  - Manhattan plots
+  - Q–Q plots
 
 <p align="center">
-    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/assets/lai_dataset_level.png" width="800">
+    <img src="https://raw.githubusercontent.com/AI-sandbox/snputils/refs/heads/main/assets/snputils_composite.png" width="800">
 </p>
 
 
 ### Performance
 
 - Fast file I/O through built-in methods or optimized wrappers (e.g., [Pgenlib](https://pypi.org/project/Pgenlib/) for PLINK files)
-- Memory-efficient operations using [NumPy](https://numpy.org) and [Polars](https://pola.rs)
+- Memory-efficient operations using [NumPy](https://numpy.org) and [Polars](https://pola.rs), including streaming workflows
 - Optional GPU acceleration via [PyTorch](https://pytorch.org) for computationally intensive tasks
 - Support for large-scale genomic datasets through efficient memory management
 
@@ -108,9 +151,6 @@ Our benchmark demonstrates superior performance compared to existing tools:
 </p>
 
 *Reading time and peak-memory comparison for chromosome 22 data across different tools. See the [benchmark directory](https://github.com/AI-sandbox/snputils/tree/main/benchmark) for detailed methodology and results.*
-
-The **snputils** package is continuously updated with new features and improvements.
-
 
 ## Command-Line Interface
 
@@ -133,12 +173,22 @@ Available subcommands include:
 
 The Python API remains the full surface for low-level readers/writers, object manipulation, IBD filtering and trimming, f-statistics, allele-frequency helpers, custom visualizations, and notebook-oriented workflows. Use the CLI when a workflow naturally starts from files and produces files; use Python when you need programmatic composition or in-memory objects.
 
+## Documentation and Examples
 
-## Documentation & Support
+- **Documentation**: [docs.snputils.org](https://docs.snputils.org)
+- **Quickstart**: [Quickstart guide](https://docs.snputils.org/en/latest/quickstart.html)
+- **Tutorials**: PCA, mdPCA, maasMDS, SNP objects, allele frequency, local ancestry visualization, admixture mapping, and GRG workflows
+- **API Reference**: Readers, writers, data objects, processing classes, statistics, datasets, and visualization helpers
+- **Issues and feature requests**: [GitHub Issues](https://github.com/AI-sandbox/snputils/issues)
 
-- **Documentation**: User guide, tutorials, and API reference at [docs.snputils.org](https://docs.snputils.org).
-- **Examples & Tutorials**: Browse the tutorials in the documentation or the source notebooks in [`docs/tutorials`](https://github.com/AI-sandbox/snputils/tree/main/docs/tutorials).
-- **Issues & Community**: Report bugs, ask questions, or request features via [GitHub Issues](https://github.com/AI-sandbox/snputils/issues).
+## Public API Highlights
+
+Top-level imports include:
+
+- Readers and objects: `read_snp`, `read_lai`, `read_admixture`, `read_ibd`, `read_pheno`, `SNPObject`, `LocalAncestryObject`, `GlobalAncestryObject`, `IBDObject`
+- Analysis: `PCA`, `mdPCA`, `maasMDS`, `run_gwas`, `run_admixture_mapping`, `allele_freq_stream`
+- Datasets: `load_dataset`, `available_datasets_list`, `build_synthetic_*`
+- Visualization namespace: `snputils.viz`
 
 ## Citation
 
@@ -159,5 +209,3 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
 ## Acknowledgments
 
 We would like to thank the open-source packages that make **snputils** possible.
-
-

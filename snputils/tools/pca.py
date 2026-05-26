@@ -10,6 +10,7 @@ from snputils.visualization._figure_export import (
     default_savefig_kwargs,
     scatter_rasterized_for_path,
 )
+from snputils.visualization.constants import get_palette_color
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def run_pca_command(args: argparse.Namespace) -> int:
         y_label = "Constant (0)"
 
     plt.figure(figsize=(10, 8))
-    _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5}
+    _scatter_kw: dict = {"linewidth": 0, "alpha": 0.5, "color": get_palette_color(0)}
     if scatter_rasterized_for_path(str(args.plot)):
         _scatter_kw["rasterized"] = True
     plt.scatter(x, y, **_scatter_kw)

@@ -113,8 +113,6 @@ def _chunk_label_array(
       chunked => shape (B, n_win, dim), (B, n_win, 1), or (B, n_win)
         depending on descriptor + dimension
     """
-    device = labels.device
-
     if labels.ndim == 2:
         # shape => (B, D) => discrete or continuous w/ dim=1
         B, D = labels.shape
@@ -509,6 +507,8 @@ class OnlineSimulator:
           - final_discrete_labels_window == (B, n_windows) if discrete was present, else None
           - final_continuous_labels_window == (B, n_windows, cdim) if continuous was present, else None
         """
+        del balanced, single_ancestry
+
         # pick random subset of samples
         N = self.snps.shape[0]
         idx = torch.randint(N, (batch_size,))

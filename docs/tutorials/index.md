@@ -1,6 +1,6 @@
 # Tutorials
 
-The tutorial notebooks live in `docs/tutorials/` and are committed with saved cell outputs; the documentation renders those outputs without re-executing the notebooks.
+End-to-end notebooks for data objects, population structure, ancestry visualization, association testing, and GRG workflows. Examples use synthetic or bundled datasets unless a notebook states otherwise.
 
 ::::{grid} 1 1 2 2
 :gutter: 2
@@ -21,6 +21,12 @@ Run PCA workflows on SNP data and inspect components.
 :link: snp-allele-frequency
 :link-type: doc
 Compute cohort and ancestry-aware allele frequencies.
+:::
+
+:::{grid-item-card} F-statistics
+:link: f-statistics
+:link-type: doc
+Compute f-statistics, D-statistics, f4-ratios, and F_ST.
 :::
 
 :::{grid-item-card} Local Ancestry Visualization
@@ -68,6 +74,7 @@ Work with genotype representation graph data.
 snp-object
 pca
 snp-allele-frequency
+f-statistics
 local-ancestry-visualization
 mdpca
 maasmds

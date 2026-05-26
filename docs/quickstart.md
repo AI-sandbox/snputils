@@ -1,71 +1,49 @@
 # Quickstart
 
-The top-level package exposes the most common readers, data containers, and analysis helpers.
+The top-level package exposes the most common readers, data containers, and analysis helpers. A typical workflow loads genotypes, optional ancestry and phenotypes, runs analyses, and plots results:
 
 ```python
 import snputils as su
 
-snp = su.read_snp("cohort.vcf.gz")                   # Read VCF, BGEN, BED, PGEN,...
-snp = snp.filter_biallelic_variants()                # filter to biallelic
+snp = su.read_snp("cohort.vcf.gz")                   # VCF, BGEN, BED, PGEN, ...
+snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                              # convert VCF -> PLINK2
 
-af = snp.allele_freq()                               # per-SNP allele frequencies (AF)
-pcs = su.PCA().fit_transform(snp)                    # PCA and project data
-
-lai = su.read_lai("local_ancestry.msp")              # local ancestry  (LAI; MSP or FLARE)
+lai = su.read_lai("local_ancestry.msp")              # MSP or FLARE local ancestry
 adm = su.read_admixture("admixture")                 # global ancestry (ADMIXTURE)
-labels = su.read_labels("labels.tsv")                # sample metadata
+labels = su.read_labels("labels.tsv")                # sample metadata for plots
+pheno = su.read_pheno("phenotypes.tsv", col="trait")
+ibd = su.read_ibd("hap.ibd")
+
+af = snp.allele_freq()                               # per-SNP allele frequencies
+pcs = su.PCA(n_components=2).fit_transform(snp)
 afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
-su.viz.chromosome_painting(lai, "chr_paintings/")    # chromosome paintings
 
-mdpca = su.mdPCA(snp, lai, labels, ancestry="AFR")   # mdPCA (AFR-specific)
-su.viz.scatter(mdpca, labels)                        # plot mdPCA
+gwas = su.run_gwas(pheno, snp)
+admix = su.run_admixture_mapping(pheno, lai)
 
-pheno = su.read_pheno("phenotypes.tsv", col="trait") # read phenotype data
-ibd = su.read_ibd("hap.ibd")                         # read IBD data
-gwas = su.run_gwas(pheno, snp)                       # GWAS
-admix = su.run_admixture_mapping(pheno, lai)         # admixture mapping
-su.viz.qq_plot(gwas)                                 # GWAS Q–Q plot
-su.viz.qq_plot(admix)                                # admixture mapping Q–Q plot
-su.viz.manhattan_plot(gwas)                          # GWAS manhattan plot
-su.viz.manhattan_plot(admix)                         # admixture mapping manhattan plot
+su.viz.scatter(pcs, labels, save_path="pca.png", show=False)
+su.viz.chromosome_painting(lai, "chr_paintings/")
+su.viz.qq_plot(gwas)
+su.viz.manhattan_plot(admix)
 ```
 
-`read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`.
+`read_snp` dispatches from the file extension and returns a {class}`snputils.SNPObject`. Explicit readers are available when you need format-specific options:
 
 ```python
-bed = su.read_bed("cohort.bed")  
-bgen = su.read_bgen("cohort.bgen")                 # probabilities in calldata_gp
+bed = su.read_bed("cohort.bed")
+bgen = su.read_bgen("cohort.bgen")                   # probabilities in calldata_gp
 pgen = su.read_pgen("cohort.pgen")
 vcf = su.read_vcf("cohort.vcf.gz")
 ```
 
-## Local and Global Ancestry
+## Sample labels
 
-```python
-lai = su.read_lai("local_ancestry.msp")
-adm = su.read_admixture("global_ancestry")
-```
+{func}`snputils.read_labels` loads a TSV with `indID` and `label` columns. The table is accepted anywhere a labels path is expected—for example, pass the returned DataFrame directly to {func}`~snputils.visualization.scatter`.
 
-Local ancestry files are represented as {class}`snputils.LocalAncestryObject`; global ancestry and ADMIXTURE-style outputs use {class}`snputils.GlobalAncestryObject`.
+## Next steps
 
-## Phenotypes and IBD
-
-```python
-pheno = su.read_pheno("phenotypes.tsv")
-ibd = su.read_ibd("hap.ibd")
-```
-
-Phenotype data are represented by {class}`snputils.PhenotypeObject` or {class}`snputils.MultiPhenotypeObject`. Identity-by-descent segments are represented by {class}`snputils.IBDObject`.
-
-## Analysis and Visualization
-
-```python
-pca = su.PCA(n_components=2)
-coords = pca.fit_transform(snp)
-
-freq = snp.allele_freq()
-su.viz.scatter(pca, "labels.tsv", save_path="pca.png", show=False)
-```
-
-For complete workflows, see the tutorials.
+- **Object internals and filtering** — {doc}`user_guide/data-model`
+- **Format tables and writer options** — {doc}`user_guide/file-io`
+- **Analysis and CLI** — {doc}`user_guide/analysis`
+- **End-to-end notebooks** — {doc}`tutorials/index`

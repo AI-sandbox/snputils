@@ -5,8 +5,6 @@ import os
 import pathlib
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -41,8 +39,7 @@ def _generate_hex_colors(n: int) -> Dict[int, str]:
     """
     Generate hex color strings for integers ``0`` through ``n``.
 
-    Uses the ``snputils_palette`` for small palettes and falls back to the
-    plasma colormap when more colors are needed.
+    Uses the ``snputils_palette`` throughout, cycling when more colors are needed.
 
     Args:
         n: The maximum integer value (inclusive).
@@ -50,16 +47,9 @@ def _generate_hex_colors(n: int) -> Dict[int, str]:
     Returns:
         Dict[int, str]: Mapping from integer index to hex color string.
     """
-    from snputils.visualization.constants import snputils_palette  # lazy – avoids circular import
+    from snputils.visualization.constants import get_palette_color  # lazy – avoids circular import
 
-    if n <= len(snputils_palette):
-        return {i: color for i, color in enumerate(snputils_palette[: n + 1])}
-    cmap = plt.cm.plasma
-    colors = cmap(np.linspace(0, 1, n + 1))
-    return {
-        i: mcolors.to_hex((r, g, b), keep_alpha=False)
-        for i, (r, g, b, _) in enumerate(colors)
-    }
+    return {i: get_palette_color(i) for i in range(n + 1)}
 
 
 def _get_bed_data(

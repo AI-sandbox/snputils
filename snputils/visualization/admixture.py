@@ -1,6 +1,6 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
+
+from .constants import get_palette_colors
 
 def reorder_admixture(Q_mat):
     """
@@ -45,6 +45,8 @@ def plot_admixture(ax, Q_mat_sorted, boundary_list, col_order=None, colors=None,
     - minimal (bool): if True, overrides to disable boundaries, labels, ticks, limits and hides spines.
     """
     n_samples, K = Q_mat_sorted.shape
+    if colors is None:
+        colors = get_palette_colors(K)
 
     # Minimal overrides
     if minimal:

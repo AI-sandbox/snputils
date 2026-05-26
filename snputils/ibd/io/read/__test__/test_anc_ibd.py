@@ -1,6 +1,5 @@
 import gzip
 import tempfile
-from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -98,5 +97,4 @@ def test_ancibd_filter_segment_type():
         assert ibd.sample_id_1.tolist() == ["A"]
         assert ibd.sample_id_2.tolist() == ["B"]
         assert ibd.chrom.tolist() == ["1"]
-
 

@@ -16,6 +16,7 @@ from .synthetic import (
     build_synthetic_grg,
     build_synthetic_maasmds_dataset,
     build_synthetic_mdpca_dataset,
+    build_synthetic_phenotype_dataset,
     build_synthetic_snp_dataset,
 )
 from ._registry import (
@@ -39,6 +40,7 @@ __all__ = [
     "build_synthetic_grg",
     "build_synthetic_maasmds_dataset",
     "build_synthetic_mdpca_dataset",
+    "build_synthetic_phenotype_dataset",
     "build_synthetic_snp_dataset",
     "covariate_coefficients",
     "load_dataset",

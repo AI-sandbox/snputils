@@ -9,7 +9,7 @@ from typing import Callable, Mapping, Optional, Sequence, Union
 from adjustText import adjust_text
 
 from ._figure_export import default_savefig_kwargs, scatter_rasterized_for_path
-from .constants import snputils_palette
+from .constants import get_palette_colors
 
 PUBLICATION_RC = {
     "font.family": "sans-serif",
@@ -49,18 +49,8 @@ def _resolve_label_color(
 
 
 def _generate_distinct_colors(n: int) -> list[str]:
-    """Generate *n* colors using the snputils palette, then random fallback colors."""
-    if n <= 0:
-        return []
-    if n <= len(snputils_palette):
-        return list(snputils_palette[:n])
-
-    colors: list[str] = list(snputils_palette)
-    rng = np.random.default_rng(0)
-    for _ in range(n - len(snputils_palette)):
-        rgb = rng.integers(0, 256, size=3)
-        colors.append(f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
-    return colors
+    """Generate *n* colors by cycling the snputils palette."""
+    return get_palette_colors(n)
 
 
 def plot_embedding(

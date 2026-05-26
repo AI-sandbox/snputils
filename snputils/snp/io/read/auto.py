@@ -5,7 +5,7 @@ from typing import Union
 
 
 class SNPReader:
-    def __new__(cls,
+    def __new__(_cls,
                 filename: Union[str, pathlib.Path],
                 vcf_backend: str = 'default') -> SNPReader:
         """

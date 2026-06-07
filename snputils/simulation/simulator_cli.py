@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from snputils.snp.io.read import SNPReader
+from snputils.simulation._validation import validate_phased_simulation_input
 from snputils.simulation.simulator import OnlineSimulator
 
 logging.basicConfig(level=logging.INFO,
@@ -16,7 +17,7 @@ log = logging.getLogger("simulator_cli")
 
 def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--snp", required=True,
-                   help="Path to SNP input (VCF, BED, or PGEN fileset).")
+                   help="Path to phased SNP input (VCF, PGEN, or BGEN fileset). PLINK1 BED is not supported because it cannot store phase.")
     p.add_argument("--metadata", required=True,
                    help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
     p.add_argument("--output-dir", required=True,
@@ -65,6 +66,8 @@ def run_simulator_command(args: argparse.Namespace) -> int:
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     log.info("Output directory: %s", out_dir.resolve())
+
+    validate_phased_simulation_input(args.snp)
 
     log.info("Reading SNP input...")
     snp_data = SNPReader(args.snp).read(sum_strands=False)

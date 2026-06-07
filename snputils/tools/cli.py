@@ -593,7 +593,14 @@ def _add_maasmds_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--snp", required=True, help="Path to SNP input (VCF, BED, or PGEN fileset).")
+    parser.add_argument(
+        "--snp",
+        required=True,
+        help=(
+            "Path to phased SNP input (VCF, PGEN, or BGEN fileset). "
+            "PLINK1 BED is not supported because it cannot store phase."
+        ),
+    )
     parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")

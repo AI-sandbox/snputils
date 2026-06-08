@@ -601,7 +601,7 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
             "PLINK1 BED is not supported because it cannot store phase."
         ),
     )
-    parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
+    parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample/IID and Population columns.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")
     parser.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
@@ -611,6 +611,8 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="cpu", help="torch device string, e.g. 'cuda:0'.")
     parser.add_argument("--batch-size", type=int, default=256, help="#simulated haplotypes per batch.")
     parser.add_argument("--num-generations", type=int, default=10, help="Upper bound on random generations since admixture.")
+    parser.add_argument("--fixed-generations", action="store_true", help="Use exactly --num-generations instead of drawing uniformly from 0..num-generations.")
+    parser.add_argument("--ancestry-proportions", default=None, help="Comma-separated population proportions, e.g. YRI:0.8,CEU:0.2.")
     parser.add_argument("--n-batches", type=int, default=1, help="#separate batches to generate & save.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print additional debugging info.")
 

@@ -19,7 +19,7 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--snp", required=True,
                    help="Path to phased SNP input (VCF, PGEN, or BGEN fileset). PLINK1 BED is not supported because it cannot store phase.")
     p.add_argument("--metadata", required=True,
-                   help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
+                   help="TSV/CSV file with at least Sample/IID and Population columns.")
     p.add_argument("--output-dir", required=True,
                    help="Directory in which to save the simulated batches.")
     p.add_argument("--genetic-map", default=None,
@@ -38,6 +38,10 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="#simulated haplotypes per batch.")
     p.add_argument("--num-generations", type=int, default=10,
                    help="Upper bound on random generations since admixture.")
+    p.add_argument("--fixed-generations", action="store_true",
+                   help="Use exactly --num-generations instead of drawing uniformly from 0..num-generations.")
+    p.add_argument("--ancestry-proportions", default=None,
+                   help="Comma-separated population proportions, e.g. YRI:0.8,CEU:0.2.")
     p.add_argument("--n-batches", type=int, default=1,
                    help="#separate batches to generate & save.")
     p.add_argument("-v", "--verbose", action="store_true",
@@ -59,6 +63,41 @@ def parse_sim_args(argv=None) -> argparse.Namespace:
     return args
 
 
+def _parse_ancestry_proportions(value: str | None) -> dict[str, float] | None:
+    if value is None:
+        return None
+
+    proportions = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError("Expected ancestry proportions like YRI:0.8,CEU:0.2.")
+        pop, prob = item.split(":", 1)
+        proportions[pop.strip()] = float(prob)
+
+    if not proportions:
+        raise ValueError("No ancestry proportions were provided.")
+    return proportions
+
+
+def _read_genetic_map(path: str, chromosome: int | None = None) -> pd.DataFrame:
+    gm = pd.read_csv(path, sep=None, engine="python")
+    lower_cols = {str(c).lower(): c for c in gm.columns}
+
+    if {"pos", "cm"}.issubset(lower_cols) and ("chr" in lower_cols or "chm" in lower_cols or "chrom" in lower_cols):
+        chrom_col = lower_cols.get("chm", lower_cols.get("chr", lower_cols.get("chrom")))
+        gm = gm.rename(columns={chrom_col: "chm", lower_cols["pos"]: "pos", lower_cols["cm"]: "cM"})
+    else:
+        gm = pd.read_csv(path, sep=None, engine="python", names=["chm", "pos", "cM"])
+
+    if chromosome is not None:
+        gm = gm[gm.chm.astype(str) == str(chromosome)]
+
+    return gm[["chm", "pos", "cM"]]
+
+
 def run_simulator_command(args: argparse.Namespace) -> int:
     if getattr(args, "verbose", False):
         log.setLevel(logging.DEBUG)
@@ -74,24 +113,27 @@ def run_simulator_command(args: argparse.Namespace) -> int:
 
     log.info("Reading metadata table...")
     meta = pd.read_csv(args.metadata, sep=None, engine="python")
+    if "Sample" not in meta.columns and "IID" in meta.columns:
+        meta = meta.rename(columns={"IID": "Sample"})
     if "Single_Ancestry" in meta.columns:
         meta = meta[meta.Single_Ancestry == True]
 
-    cols_needed = ["Sample", "Population", "Latitude", "Longitude"]
+    cols_needed = ["Sample", "Population"]
     missing = [c for c in cols_needed if c not in meta.columns]
     if missing:
         log.error("Metadata is missing columns: %s", ", ".join(missing))
         sys.exit(1)
-    meta = meta[cols_needed]
+    keep_cols = ["Sample", "Population"]
+    if {"Latitude", "Longitude"}.issubset(meta.columns):
+        keep_cols.extend(["Latitude", "Longitude"])
+    meta = meta[keep_cols]
 
     genetic_map = None
     if args.genetic_map:
         log.info("Reading genetic map...")
-        gm = pd.read_csv(args.genetic_map, sep=None, engine="python",
-                         names=["chm", "pos", "cM"])
-        if args.chromosome is not None:
-            gm = gm[gm.chm == args.chromosome]
-        genetic_map = gm
+        genetic_map = _read_genetic_map(args.genetic_map, args.chromosome)
+
+    ancestry_proportions = _parse_ancestry_proportions(args.ancestry_proportions)
 
     log.info("Initialising OnlineSimulator...")
     simulator = OnlineSimulator(
@@ -101,6 +143,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
         make_haploid         = args.make_haploid,
         window_size          = args.window_size,
         store_latlon_as_nvec = args.store_latlon_as_nvec,
+        ancestry_proportions = ancestry_proportions,
     )
 
     log.info("Generating %d batch(es)...", args.n_batches)
@@ -108,6 +151,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
         snps, labels_d, labels_c, cp = simulator.simulate(
             batch_size         = args.batch_size,
             num_generation_max = args.num_generations,
+            num_generations     = args.num_generations if args.fixed_generations else None,
             pool_method        = "mode",
             device             = args.device
         )
@@ -122,6 +166,8 @@ def run_simulator_command(args: argparse.Namespace) -> int:
                         if labels_c is not None else np.empty(0)),
             cp       = (cp.cpu().numpy()
                         if cp is not None else np.empty(0)),
+            population_names = (np.asarray(simulator.population_names, dtype=str)
+                                if simulator.population_names is not None else np.empty(0, dtype=str)),
         )
         log.info("Saved %s", out_path.name)
 

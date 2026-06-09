@@ -164,6 +164,39 @@ def _fill_missing_segments(bed_df: pd.DataFrame, build: str) -> pd.DataFrame:
     return filled
 
 
+def _fill_marker_gaps(
+    bed_df: pd.DataFrame,
+    build: str,
+    extend_terminal: bool = False,
+) -> pd.DataFrame:
+    """
+    Extend each painted segment to the next painted segment on the same
+    chromosome copy so marker-sparse intervals do not appear as missing LAI.
+    """
+    from snputils.visualization.constants import CHROM_SIZES  # lazy – avoids circular import
+
+    if bed_df.empty:
+        return bed_df
+
+    out = bed_df.copy()
+    out.sort_values(by=["#chr", "chrCopy", "start"], inplace=True)
+    for _, idx in out.groupby(["#chr", "chrCopy"], sort=False).groups.items():
+        idx = list(idx)
+        for current, nxt in zip(idx[:-1], idx[1:]):
+            next_start = int(out.at[nxt, "start"])
+            out.at[current, "stop"] = max(int(out.at[current, "stop"]), next_start - 1)
+
+        if extend_terminal:
+            last = idx[-1]
+            chrom = str(out.at[last, "#chr"])
+            chrom_key = chrom[3:] if chrom.lower().startswith("chr") else chrom
+            chrom_size = CHROM_SIZES.get(build, {}).get(chrom_key)
+            if chrom_size is not None:
+                out.at[last, "stop"] = max(int(out.at[last, "stop"]), int(chrom_size))
+
+    return out
+
+
 def _sanitize_name(text: str) -> str:
     """
     Convert a string to a filesystem-safe identifier.
@@ -189,6 +222,7 @@ def msp_files_to_bed(
     build: str = "hg37",
     color_map: Optional[Union[str, Dict]] = None,
     fill_empty: bool = False,
+    fill_marker_gaps: bool = True,
 ) -> List[str]:
     """
     Convert a list of MSP files to per-sample BED files.
@@ -216,6 +250,10 @@ def msp_files_to_bed(
             default snputils palette when ``None``.
         fill_empty: If True, insert grey filler segments for unassigned
             chromosome regions.
+        fill_marker_gaps: If True, extend painted segments through
+            inter-marker gaps until the next segment on the same chromosome
+            copy. This avoids rendering sparse marker intervals as missing
+            ancestry.
 
     Returns:
         List[str]: Paths to the generated BED files, one per sample.
@@ -284,6 +322,13 @@ def msp_files_to_bed(
 
         final_sample_df = pd.concat(aggregated_dfs, ignore_index=True)
 
+        if fill_marker_gaps:
+            final_sample_df = _fill_marker_gaps(
+                final_sample_df,
+                build=build,
+                extend_terminal=fill_empty,
+            )
+
         if fill_empty:
             final_sample_df = _fill_missing_segments(final_sample_df, build)
 
@@ -302,6 +347,7 @@ def laiobj_sample_to_bed_df(
     num_labels: int = 8,
     fill_empty: bool = True,
     build: str = "hg38",
+    fill_marker_gaps: bool = True,
 ) -> pd.DataFrame:
     """
     Convert a single sample from a
@@ -325,8 +371,12 @@ def laiobj_sample_to_bed_df(
             is ``None``.
         fill_empty: If True, insert grey filler segments for unassigned
             chromosome regions.
-        build: Genome build version (``'hg37'`` or ``'hg38'``), used only
-            when *fill_empty* is ``True``.
+        build: Genome build version (``'hg37'`` or ``'hg38'``), used when
+            *fill_empty* or terminal marker-gap filling needs chromosome sizes.
+        fill_marker_gaps: If True, extend painted segments through
+            inter-marker gaps until the next segment on the same chromosome
+            copy. This avoids rendering sparse marker intervals as missing
+            ancestry.
 
     Returns:
         pandas.DataFrame: BED DataFrame with columns ``#chr``, ``start``,
@@ -399,6 +449,13 @@ def laiobj_sample_to_bed_df(
         )
 
     bed_df = pd.DataFrame(rows)
+
+    if fill_marker_gaps:
+        bed_df = _fill_marker_gaps(
+            bed_df,
+            build=build,
+            extend_terminal=fill_empty,
+        )
 
     if fill_empty:
         bed_df = _fill_missing_segments(bed_df, build)

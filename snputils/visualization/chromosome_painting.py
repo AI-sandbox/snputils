@@ -272,6 +272,7 @@ def _paint_from_laiobj(
     color_map: Optional[Union[str, Dict]],
     num_labels: int,
     fill_empty: bool,
+    fill_marker_gaps: bool,
     output_format: str,
     force: bool,
     verbose: bool,
@@ -289,6 +290,7 @@ def _paint_from_laiobj(
             color_map=color_map,
             num_labels=num_labels,
             fill_empty=fill_empty,
+            fill_marker_gaps=fill_marker_gaps,
             build=build,
         )
         safe_name = sid.replace(".", "_").replace("/", "_")
@@ -324,6 +326,7 @@ def _paint_from_msp(
     color_map: Optional[Union[str, Dict]],
     num_labels: int,
     fill_empty: bool,
+    fill_marker_gaps: bool,
     output_format: str,
     force: bool,
     verbose: bool,
@@ -341,6 +344,7 @@ def _paint_from_msp(
         num_labels=num_labels,
         build=build,
         fill_empty=fill_empty,
+        fill_marker_gaps=fill_marker_gaps,
     )
 
     output_files: List[str] = []
@@ -391,6 +395,7 @@ def chromosome_painting(
     color_map: Optional[Union[str, Dict]] = None,
     num_labels: int = 8,
     fill_empty: bool = True,
+    fill_marker_gaps: bool = True,
     output_format: str = "png",
     force: bool = True,
     verbose: bool = False,
@@ -439,6 +444,10 @@ def chromosome_painting(
             is ``None``.
         fill_empty: If True, fill unassigned chromosome regions with a
             neutral grey color.
+        fill_marker_gaps: If True, extend painted segments through
+            inter-marker gaps until the next segment on the same chromosome
+            copy. This avoids rendering sparse marker intervals as missing
+            ancestry. Defaults to True.
         output_format: Output format, ``'png'`` or ``'pdf'``.
         force: If True, overwrite existing output files.
         verbose: If True, emit progress log messages.
@@ -509,6 +518,7 @@ def chromosome_painting(
             color_map=color_map,
             num_labels=num_labels,
             fill_empty=fill_empty,
+            fill_marker_gaps=fill_marker_gaps,
             output_format=output_format,
             force=force,
             verbose=verbose,
@@ -549,6 +559,7 @@ def chromosome_painting(
             color_map=color_map,
             num_labels=num_labels,
             fill_empty=fill_empty,
+            fill_marker_gaps=fill_marker_gaps,
             output_format=output_format,
             force=force,
             verbose=verbose,

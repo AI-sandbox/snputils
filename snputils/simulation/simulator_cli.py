@@ -24,6 +24,9 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="Directory in which to save the simulated batches.")
     p.add_argument("--output-prefix", default=None,
                    help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
+    p.add_argument("--output-format", default="same",
+                   choices=("same", "pgen", "vcf", "vcf.gz", "bgen"),
+                   help="Genotype output format for --n-individuals cohort output.")
     p.add_argument("--genetic-map", default=None,
                    help="Genetic map table with columns: chrom, pos, cM.")
     p.add_argument("--chromosome", type=int, default=None,
@@ -113,11 +116,41 @@ def _copy_array(obj, name: str):
     return np.asarray(value).copy()
 
 
-def _write_pgen_like_input(snp_data, genotypes: np.ndarray, samples: np.ndarray, output_prefix: Path) -> None:
-    from snputils.snp.genobj.snpobj import SNPObject
-    from snputils.snp.io.write.pgen import PGENWriter
+def _infer_output_format(input_path: str, requested_format: str) -> str:
+    if requested_format != "same":
+        return requested_format
 
-    snpobj = SNPObject(
+    suffixes = [suffix.lower() for suffix in Path(input_path).suffixes]
+    if len(suffixes) >= 2 and suffixes[-2:] == [".vcf", ".gz"]:
+        return "vcf.gz"
+    if not suffixes:
+        raise ValueError("Cannot infer output format from input path without an extension.")
+    suffix = suffixes[-1]
+    if suffix in {".pgen", ".pvar", ".psam", ".pvar.zst"}:
+        return "pgen"
+    if suffix == ".vcf":
+        return "vcf"
+    if suffix == ".bgen":
+        return "bgen"
+    raise ValueError(f"Cannot infer cohort output format from input path: {input_path}")
+
+
+def _output_genotype_path(output_prefix: Path, output_format: str) -> Path:
+    if output_format == "pgen":
+        return output_prefix.with_suffix(".pgen")
+    if output_format == "vcf":
+        return output_prefix.with_suffix(".vcf")
+    if output_format == "vcf.gz":
+        return output_prefix.with_suffix(".vcf.gz")
+    if output_format == "bgen":
+        return output_prefix.with_suffix(".bgen")
+    raise ValueError(f"Unsupported output format: {output_format}")
+
+
+def _build_simulated_snpobject(snp_data, genotypes: np.ndarray, samples: np.ndarray):
+    from snputils.snp.genobj.snpobj import SNPObject
+
+    return SNPObject(
         genotypes=genotypes,
         samples=samples,
         sample_sex=np.repeat("NA", len(samples)),
@@ -131,7 +164,37 @@ def _write_pgen_like_input(snp_data, genotypes: np.ndarray, samples: np.ndarray,
         variants_qual=_copy_array(snp_data, "variants_qual"),
         variants_info=_copy_array(snp_data, "variants_info"),
     )
-    PGENWriter(snpobj=snpobj, filename=str(output_prefix)).write()
+
+
+def _write_genotypes_like_input(
+    snp_data,
+    genotypes: np.ndarray,
+    samples: np.ndarray,
+    output_prefix: Path,
+    output_format: str,
+) -> Path:
+    snpobj = _build_simulated_snpobject(snp_data, genotypes, samples)
+    output_path = _output_genotype_path(output_prefix, output_format)
+
+    if output_format == "pgen":
+        from snputils.snp.io.write.pgen import PGENWriter
+
+        PGENWriter(snpobj=snpobj, filename=str(output_path)).write()
+    elif output_format in {"vcf", "vcf.gz"}:
+        from snputils.snp.io.write.vcf import VCFWriter
+
+        VCFWriter(snpobj=snpobj, filename=str(output_path), phased=True).write(
+            rename_missing_values=False,
+            variants_info=snpobj.variants_info,
+        )
+    elif output_format == "bgen":
+        from snputils.snp.io.write.bgen import BGENWriter
+
+        BGENWriter(snpobj=snpobj, filename=output_path).write(phased=True)
+    else:
+        raise ValueError(f"Unsupported output format: {output_format}")
+
+    return output_path
 
 
 def _write_exact_msp(
@@ -207,12 +270,10 @@ def _run_cohort_output(args, simulator, snp_data, out_dir: Path) -> int:
         sample_prefix=args.sample_prefix,
     )
 
-    input_suffixes = [suffix.lower() for suffix in Path(args.snp).suffixes]
-    if not input_suffixes or input_suffixes[-1] != ".pgen":
-        raise ValueError("Cohort fileset output currently supports PGEN input/output.")
-
-    log.info("Writing simulated PGEN fileset to %s.[pgen|pvar|psam]", output_prefix)
-    _write_pgen_like_input(snp_data, genotypes, samples, output_prefix)
+    output_format = _infer_output_format(args.snp, args.output_format)
+    genotype_path = _output_genotype_path(output_prefix, output_format)
+    log.info("Writing simulated %s genotype output to %s", output_format, genotype_path)
+    _write_genotypes_like_input(snp_data, genotypes, samples, output_prefix, output_format)
 
     ancestry_map = {str(i): str(pop) for i, pop in enumerate(simulator.population_names)}
     msp_path = output_prefix.with_suffix(".msp")

@@ -36,6 +36,8 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="torch device string, e.g. 'cuda:0'.")
     p.add_argument("--batch-size", type=int, default=256,
                    help="#simulated haplotypes per batch.")
+    p.add_argument("--diploid-output", action="store_true",
+                   help="Save simulated diploid samples. When set, --batch-size is the number of samples.")
     p.add_argument("--num-generations", type=int, default=10,
                    help="Upper bound on random generations since admixture.")
     p.add_argument("--fixed-generations", action="store_true",
@@ -148,13 +150,25 @@ def run_simulator_command(args: argparse.Namespace) -> int:
 
     log.info("Generating %d batch(es)...", args.n_batches)
     for b in range(1, args.n_batches + 1):
+        simulate_batch_size = args.batch_size * 2 if args.diploid_output else args.batch_size
         snps, labels_d, labels_c, cp = simulator.simulate(
-            batch_size         = args.batch_size,
+            batch_size         = simulate_batch_size,
             num_generation_max = args.num_generations,
             num_generations     = args.num_generations if args.fixed_generations else None,
             pool_method        = "mode",
             device             = args.device
         )
+
+        output_ploidy = 1
+        if args.diploid_output:
+            output_ploidy = 2
+            snps = snps.reshape(args.batch_size, output_ploidy, snps.shape[-1])
+            if labels_d is not None:
+                labels_d = labels_d.reshape(args.batch_size, output_ploidy, labels_d.shape[-1])
+            if labels_c is not None:
+                labels_c = labels_c.reshape(args.batch_size, output_ploidy, labels_c.shape[-2], labels_c.shape[-1])
+            if cp is not None:
+                cp = cp.reshape(args.batch_size, output_ploidy, cp.shape[-1])
 
         out_path = out_dir / f"batch_{b:04d}.npz"
         np.savez_compressed(
@@ -168,6 +182,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
                         if cp is not None else np.empty(0)),
             population_names = (np.asarray(simulator.population_names, dtype=str)
                                 if simulator.population_names is not None else np.empty(0, dtype=str)),
+            output_ploidy = np.asarray(output_ploidy, dtype=np.int8),
         )
         log.info("Saved %s", out_path.name)
 

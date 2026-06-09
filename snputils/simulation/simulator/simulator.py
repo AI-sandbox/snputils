@@ -384,9 +384,11 @@ class OnlineSimulator:
                                  
         if self.genetic_map is not None:
             cm_interp = np.interp(self.snp_data.variants_pos, self.genetic_map['pos'], self.genetic_map['cM'])
+            self.cm_per_snp = cm_interp
             self.rate_per_snp = np.gradient(cm_interp/100.0)
             log.info(f"rate/snp shape = {self.rate_per_snp.shape}")
         else:
+            self.cm_per_snp = getattr(self.snp_data, "variants_cm", None)
             self.rate_per_snp = None
         
 
@@ -605,6 +607,72 @@ class OnlineSimulator:
                 batch_continuous = batch_continuous.to(device)
 
         return batch_snps, batch_discrete, batch_continuous
+
+    def simulate_diploid_population(
+        self,
+        n_individuals,
+        num_generation_max=10,
+        num_generations=None,
+        sample_prefix="SIM",
+    ):
+        """
+        Simulate a full diploid cohort from ancestry-specific founder haplotypes.
+
+        Returns:
+          genotypes: int8 array with shape (n_snps, n_individuals, 2)
+          samples: sample IDs with shape (n_individuals,)
+          segments: list of per-haplotype (starts, ends, ancestry_codes) arrays
+        """
+        if self.ancestry_codes is None or self.ancestry_probs is None:
+            raise ValueError("simulate_diploid_population requires ancestry_proportions.")
+        if self.snps.ndim != 2:
+            raise ValueError("simulate_diploid_population requires haploid founder data; use make_haploid=True.")
+
+        n_individuals = int(n_individuals)
+        if n_individuals <= 0:
+            raise ValueError("n_individuals must be positive.")
+
+        founder_snps = self.snps.cpu().numpy()
+        _, n_snps = founder_snps.shape
+        genotypes = np.empty((n_snps, n_individuals, 2), dtype=np.int8)
+
+        founder_pools = {
+            int(code): np.flatnonzero(self.sample_population_codes == code)
+            for code in self.ancestry_codes
+        }
+        samples = np.asarray([f"{sample_prefix}{i + 1:06d}" for i in range(n_individuals)], dtype=str)
+        segments = []
+
+        for person_idx in range(n_individuals):
+            for strand_idx in range(2):
+                split_points = self._draw_split_points(n_snps, num_generation_max, num_generations)
+                starts = np.concatenate(([0], split_points))
+                ends = np.concatenate((split_points, [n_snps]))
+
+                seg_starts = []
+                seg_ends = []
+                seg_codes = []
+                for start, end in zip(starts, ends):
+                    code = int(np.random.choice(self.ancestry_codes, p=self.ancestry_probs))
+                    donor_idx = int(np.random.choice(founder_pools[code]))
+                    genotypes[start:end, person_idx, strand_idx] = founder_snps[donor_idx, start:end]
+
+                    if seg_codes and seg_codes[-1] == code and seg_ends[-1] == start:
+                        seg_ends[-1] = int(end)
+                    else:
+                        seg_starts.append(int(start))
+                        seg_ends.append(int(end))
+                        seg_codes.append(code)
+
+                segments.append(
+                    (
+                        np.asarray(seg_starts, dtype=np.int64),
+                        np.asarray(seg_ends, dtype=np.int64),
+                        np.asarray(seg_codes, dtype=np.uint8),
+                    )
+                )
+
+        return genotypes, samples, segments
 
     def simulate(
         self,

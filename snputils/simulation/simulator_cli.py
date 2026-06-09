@@ -22,6 +22,8 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="TSV/CSV file with at least Sample/IID and Population columns.")
     p.add_argument("--output-dir", required=True,
                    help="Directory in which to save the simulated batches.")
+    p.add_argument("--output-prefix", default=None,
+                   help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
     p.add_argument("--genetic-map", default=None,
                    help="Genetic map table with columns: chrom, pos, cM.")
     p.add_argument("--chromosome", type=int, default=None,
@@ -44,6 +46,10 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="Use exactly --num-generations instead of drawing uniformly from 0..num-generations.")
     p.add_argument("--ancestry-proportions", default=None,
                    help="Comma-separated population proportions, e.g. YRI:0.8,CEU:0.2.")
+    p.add_argument("--n-individuals", type=int, default=None,
+                   help="Simulate this many diploid individuals and write a single fileset instead of NPZ batches.")
+    p.add_argument("--sample-prefix", default="SIM",
+                   help="Sample ID prefix for --n-individuals cohort output.")
     p.add_argument("--n-batches", type=int, default=1,
                    help="#separate batches to generate & save.")
     p.add_argument("-v", "--verbose", action="store_true",
@@ -100,6 +106,130 @@ def _read_genetic_map(path: str, chromosome: int | None = None) -> pd.DataFrame:
     return gm[["chm", "pos", "cM"]]
 
 
+def _copy_array(obj, name: str):
+    value = getattr(obj, name, None)
+    if value is None:
+        return None
+    return np.asarray(value).copy()
+
+
+def _write_pgen_like_input(snp_data, genotypes: np.ndarray, samples: np.ndarray, output_prefix: Path) -> None:
+    from snputils.snp.genobj.snpobj import SNPObject
+    from snputils.snp.io.write.pgen import PGENWriter
+
+    snpobj = SNPObject(
+        genotypes=genotypes,
+        samples=samples,
+        sample_sex=np.repeat("NA", len(samples)),
+        variants_ref=_copy_array(snp_data, "variants_ref"),
+        variants_alt=_copy_array(snp_data, "variants_alt"),
+        variants_chrom=_copy_array(snp_data, "variants_chrom"),
+        variants_cm=_copy_array(snp_data, "variants_cm"),
+        variants_filter_pass=_copy_array(snp_data, "variants_filter_pass"),
+        variants_id=_copy_array(snp_data, "variants_id"),
+        variants_pos=_copy_array(snp_data, "variants_pos"),
+        variants_qual=_copy_array(snp_data, "variants_qual"),
+        variants_info=_copy_array(snp_data, "variants_info"),
+    )
+    PGENWriter(snpobj=snpobj, filename=str(output_prefix)).write()
+
+
+def _write_exact_msp(
+    path: Path,
+    samples: np.ndarray,
+    segments: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    snp_data,
+    cm_per_snp,
+    ancestry_map: dict[str, str],
+) -> None:
+    n_haplotypes = len(segments)
+    if n_haplotypes != len(samples) * 2:
+        raise ValueError("Expected two haplotype segment lists per simulated sample.")
+
+    breakpoints = {0, len(snp_data.variants_pos)}
+    for starts, ends, _ in segments:
+        breakpoints.update(int(x) for x in starts)
+        breakpoints.update(int(x) for x in ends)
+    breakpoints = np.asarray(sorted(breakpoints), dtype=np.int64)
+
+    variant_pos = np.asarray(snp_data.variants_pos)
+    variant_chrom = np.asarray(snp_data.variants_chrom)
+    if cm_per_snp is None:
+        cm_per_snp = np.full(len(variant_pos), np.nan)
+    else:
+        cm_per_snp = np.asarray(cm_per_snp)
+
+    haplotypes = [f"{sample}.{strand}" for sample in samples for strand in range(2)]
+    segment_ptrs = np.zeros(n_haplotypes, dtype=np.int64)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as out:
+        out.write(
+            "#Subpopulation order/codes: "
+            + "\t".join(f"{name}={code}" for code, name in ancestry_map.items())
+            + "\n"
+        )
+        out.write("#chm\tspos\tepos\tsgpos\tegpos\tn snps\t" + "\t".join(haplotypes) + "\n")
+
+        for start, end in zip(breakpoints[:-1], breakpoints[1:]):
+            if start == end:
+                continue
+            codes = []
+            for hap_idx, (seg_starts, seg_ends, seg_codes) in enumerate(segments):
+                ptr = segment_ptrs[hap_idx]
+                while ptr + 1 < len(seg_ends) and seg_ends[ptr] <= start:
+                    ptr += 1
+                segment_ptrs[hap_idx] = ptr
+                codes.append(str(int(seg_codes[ptr])))
+
+            row = [
+                str(variant_chrom[start]),
+                str(int(variant_pos[start])),
+                str(int(variant_pos[end - 1])),
+                str(cm_per_snp[start]),
+                str(cm_per_snp[end - 1]),
+                str(int(end - start)),
+            ]
+            out.write("\t".join(row + codes) + "\n")
+
+
+def _run_cohort_output(args, simulator, snp_data, out_dir: Path) -> int:
+    if args.ancestry_proportions is None:
+        raise ValueError("--n-individuals requires --ancestry-proportions.")
+
+    output_prefix = Path(args.output_prefix).expanduser() if args.output_prefix else out_dir / "simulated"
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    log.info("Simulating %d diploid individual(s)...", args.n_individuals)
+    genotypes, samples, segments = simulator.simulate_diploid_population(
+        n_individuals=args.n_individuals,
+        num_generation_max=args.num_generations,
+        num_generations=args.num_generations if args.fixed_generations else None,
+        sample_prefix=args.sample_prefix,
+    )
+
+    input_suffixes = [suffix.lower() for suffix in Path(args.snp).suffixes]
+    if not input_suffixes or input_suffixes[-1] != ".pgen":
+        raise ValueError("Cohort fileset output currently supports PGEN input/output.")
+
+    log.info("Writing simulated PGEN fileset to %s.[pgen|pvar|psam]", output_prefix)
+    _write_pgen_like_input(snp_data, genotypes, samples, output_prefix)
+
+    ancestry_map = {str(i): str(pop) for i, pop in enumerate(simulator.population_names)}
+    msp_path = output_prefix.with_suffix(".msp")
+    log.info("Writing exact ground-truth MSP to %s", msp_path)
+    _write_exact_msp(
+        path=msp_path,
+        samples=samples,
+        segments=segments,
+        snp_data=snp_data,
+        cm_per_snp=simulator.cm_per_snp,
+        ancestry_map=ancestry_map,
+    )
+
+    log.info("[✓] Wrote simulated cohort files with prefix %s", output_prefix)
+    return 0
+
+
 def run_simulator_command(args: argparse.Namespace) -> int:
     if getattr(args, "verbose", False):
         log.setLevel(logging.DEBUG)
@@ -147,6 +277,9 @@ def run_simulator_command(args: argparse.Namespace) -> int:
         store_latlon_as_nvec = args.store_latlon_as_nvec,
         ancestry_proportions = ancestry_proportions,
     )
+
+    if args.n_individuals is not None:
+        return _run_cohort_output(args, simulator, snp_data, out_dir)
 
     log.info("Generating %d batch(es)...", args.n_batches)
     for b in range(1, args.n_batches + 1):

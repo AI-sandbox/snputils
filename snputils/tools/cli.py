@@ -603,6 +603,7 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample/IID and Population columns.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
+    parser.add_argument("--output-prefix", default=None, help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")
     parser.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
     parser.add_argument("--window-size", type=int, default=1000, help="#SNPs per window.")
@@ -614,6 +615,8 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--num-generations", type=int, default=10, help="Upper bound on random generations since admixture.")
     parser.add_argument("--fixed-generations", action="store_true", help="Use exactly --num-generations instead of drawing uniformly from 0..num-generations.")
     parser.add_argument("--ancestry-proportions", default=None, help="Comma-separated population proportions, e.g. YRI:0.8,CEU:0.2.")
+    parser.add_argument("--n-individuals", type=int, default=None, help="Simulate this many diploid individuals and write a single fileset instead of NPZ batches.")
+    parser.add_argument("--sample-prefix", default="SIM", help="Sample ID prefix for --n-individuals cohort output.")
     parser.add_argument("--n-batches", type=int, default=1, help="#separate batches to generate & save.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print additional debugging info.")
 

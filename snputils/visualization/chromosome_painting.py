@@ -395,7 +395,7 @@ def chromosome_painting(
     color_map: Optional[Union[str, Dict]] = None,
     num_labels: int = 8,
     fill_empty: bool = True,
-    fill_marker_gaps: bool = True,
+    fill_marker_gaps: bool = False,
     output_format: str = "png",
     force: bool = True,
     verbose: bool = False,
@@ -447,7 +447,7 @@ def chromosome_painting(
         fill_marker_gaps: If True, extend painted segments through
             inter-marker gaps until the next segment on the same chromosome
             copy. This avoids rendering sparse marker intervals as missing
-            ancestry. Defaults to True.
+            ancestry. Defaults to False.
         output_format: Output format, ``'png'`` or ``'pdf'``.
         force: If True, overwrite existing output files.
         verbose: If True, emit progress log messages.

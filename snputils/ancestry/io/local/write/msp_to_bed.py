@@ -222,7 +222,7 @@ def msp_files_to_bed(
     build: str = "hg37",
     color_map: Optional[Union[str, Dict]] = None,
     fill_empty: bool = False,
-    fill_marker_gaps: bool = True,
+    fill_marker_gaps: bool = False,
 ) -> List[str]:
     """
     Convert a list of MSP files to per-sample BED files.
@@ -347,7 +347,7 @@ def laiobj_sample_to_bed_df(
     num_labels: int = 8,
     fill_empty: bool = True,
     build: str = "hg38",
-    fill_marker_gaps: bool = True,
+    fill_marker_gaps: bool = False,
 ) -> pd.DataFrame:
     """
     Convert a single sample from a

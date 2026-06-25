@@ -122,3 +122,22 @@ def test_bcf_writer_with_info(tmp_path):
     observed = BCFReader(str(output_path)).read(fields=["INFO"])
     # BCFReader returns a parsed string for INFO, e.g. "END=1000"
     np.testing.assert_array_equal(observed.variants_info, np.array(["END=1000", "END=2000"], dtype=object))
+
+def test_snpobj_save_bcf(tmp_path):
+    output_path = tmp_path / "saved.bcf"
+    snpobj = SNPObject(
+        genotypes=np.array([[[0, 0]], [[1, 1]]], dtype=np.int8),
+        samples=np.array(["s1"]),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["v1", "v2"], dtype=object),
+        variants_pos=np.array([10, 20]),
+    )
+
+    snpobj.save(output_path)
+    assert output_path.exists()
+
+    observed = BCFReader(str(output_path)).read()
+    np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
+

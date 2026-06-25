@@ -2480,12 +2480,13 @@ class SNPObject:
         - `.bgen`: BGEN genotype probability format.
         - `.pgen`: Plink2 binary genotype format.
         - `.vcf`: Variant Call Format.
+        - `.bcf`: Binary Call Format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
-                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.pkl`.
+                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.bcf`, `.pkl`.
         """
         ext = Path(file).suffix.lower()
         if ext == '.bed':
@@ -2496,6 +2497,8 @@ class SNPObject:
             self.save_pgen(file)
         elif ext == '.vcf':
             self.save_vcf(file)
+        elif ext == '.bcf':
+            self.save_bcf(file)
         elif ext == '.pkl':
             self.save_pickle(file)
         else:

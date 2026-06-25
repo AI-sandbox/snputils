@@ -5,7 +5,7 @@ The top-level package exposes the most common readers, data containers, and anal
 ```python
 import snputils as su
 
-snp = su.read_snp("cohort.vcf.gz")                   # VCF, BGEN, BED, PGEN, ...
+snp = su.read_snp("cohort.vcf.gz")                   # VCF, BCF, BGEN, BED, PGEN, ...
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                              # convert VCF -> PLINK2
 
@@ -32,6 +32,7 @@ su.viz.manhattan_plot(admix)
 
 ```python
 bed = su.read_bed("cohort.bed")
+bcf = su.read_bcf("cohort.bcf")
 bgen = su.read_bgen("cohort.bgen")                   # probabilities in calldata_gp
 pgen = su.read_pgen("cohort.pgen")
 vcf = su.read_vcf("cohort.vcf.gz")

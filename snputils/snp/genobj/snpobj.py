@@ -2480,12 +2480,13 @@ class SNPObject:
         - `.bgen`: BGEN genotype probability format.
         - `.pgen`: Plink2 binary genotype format.
         - `.vcf`: Variant Call Format.
+        - `.bcf`: Binary Call Format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
-                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.pkl`.
+                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.bcf`, `.pkl`.
         """
         ext = Path(file).suffix.lower()
         if ext == '.bed':
@@ -2496,6 +2497,8 @@ class SNPObject:
             self.save_pgen(file)
         elif ext == '.vcf':
             self.save_vcf(file)
+        elif ext == '.bcf':
+            self.save_bcf(file)
         elif ext == '.pkl':
             self.save_pickle(file)
         else:
@@ -2571,6 +2574,22 @@ class SNPObject:
         """
         from snputils.snp.io.write.vcf import VCFWriter
         writer = VCFWriter(snpobj=self, filename=file)
+        writer.write()
+
+    def save_bcf(self, file: Union[str, Path], phased: bool = False) -> None:
+        """
+        Save the data stored in `self` to a `.bcf` file.
+
+        Args:
+            file (str or pathlib.Path): 
+                Path to the file where the data will be saved. It should end with `.bcf`. 
+                If the provided path does not have this extension, it will be appended.
+            phased (bool, optional):
+                If True, genotype data is written in phased format.
+                If False, genotype data is written in unphased format. Defaults to False.
+        """
+        from snputils.snp.io.write.bcf import BCFWriter
+        writer = BCFWriter(snpobj=self, filename=file, phased=phased)
         writer.write()
 
     def save_pickle(self, file: Union[str, Path]) -> None:

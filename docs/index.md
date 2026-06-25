@@ -18,7 +18,7 @@ Developed in collaboration between Stanford University's Department of Biomedica
 
 ## Supported formats
 
-High-level dispatchers such as {func}`~snputils.read_snp`, {func}`~snputils.read_lai`, {func}`~snputils.read_admixture`, {func}`~snputils.read_pheno`, and {func}`~snputils.read_ibd` cover VCF/BGEN/PLINK BED and PGEN, MSP and FLARE local ancestry, ADMIXTURE `.Q`/`.P`, phenotype tables, hap-IBD and ancIBD segments, and GRG graphs. See {doc}`user_guide/file-io` for format tables and reader options.
+High-level dispatchers such as {func}`~snputils.read_snp`, {func}`~snputils.read_lai`, {func}`~snputils.read_admixture`, {func}`~snputils.read_pheno`, and {func}`~snputils.read_ibd` cover VCF/BCF/BGEN/PLINK BED and PGEN, MSP and FLARE local ancestry, ADMIXTURE `.Q`/`.P`, phenotype tables, hap-IBD and ancIBD segments, and GRG graphs. See {doc}`user_guide/file-io` for format tables and reader options.
 
 ::::{grid} 1 1 2 2
 :gutter: 2

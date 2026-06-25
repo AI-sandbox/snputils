@@ -1,4 +1,5 @@
 import logging
+import gzip
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -67,7 +68,11 @@ class VCFWriter:
         self.__chrom_partition = chrom_partition
 
         file_extensions = (".vcf", ".bcf")
-        if self.__filename.suffix in file_extensions:
+        suffixes = self.__filename.suffixes
+        if len(suffixes) >= 2 and suffixes[-2:] == [".vcf", ".gz"]:
+            self.__file_extension = ".vcf.gz"
+            self.__filename = self.__filename.with_suffix("").with_suffix("")
+        elif self.__filename.suffix in file_extensions:
             self.__file_extension = self.__filename.suffix
             self.__filename = self.__filename.with_suffix('')
         else:
@@ -113,7 +118,10 @@ class VCFWriter:
         else:
             file = self.__filename.parent / f"{self.__filename.stem}_{chrom}{self.__file_extension}"
 
-        out = open(file, "w")
+        if self.__file_extension == ".vcf.gz":
+            out = gzip.open(file, "wt", encoding="utf-8")
+        else:
+            out = open(file, "w")
         out.write("##fileformat=VCFv4.1\n")
         out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n')
         if variants_info is not None and any("END=" in s for s in variants_info):

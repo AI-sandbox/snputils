@@ -70,6 +70,8 @@ snputils admixture-map \
 
 **Simulation** — generate admixed haplotype batches (PyTorch required):
 
+Use a phased VCF, PGEN, or BGEN input. PLINK1 BED/BIM/FAM is not accepted for simulation because it does not preserve phase.
+
 ```bash
 snputils simulate \
     --snp cohort.pgen \

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from snputils.ancestry.io.local.read.__test__.fixtures import make_synthetic_dataset, write_msp
+from snputils.simulation._validation import validate_phased_simulation_input
 from snputils.tools.cli import main
 
 
@@ -317,6 +318,14 @@ def test_main_help_flag_prints_help_and_exits_0(
     assert "gwas" in captured.out
     assert "simulate" in captured.out
     assert re.search(r"https://docs\.snputils\.org\b", captured.out)
+
+
+def test_simulate_rejects_plink1_bed_input() -> None:
+    with pytest.raises(ValueError, match="PLINK1 BED/BIM/FAM"):
+        validate_phased_simulation_input("founders.bed")
+
+    with pytest.raises(ValueError, match="PLINK1 BED/BIM/FAM"):
+        validate_phased_simulation_input("founders.bim")
 
 
 def test_main_version_flag_prints_version(

@@ -69,6 +69,30 @@ def _generate_bgen_from_vcf(data_path: pathlib.Path, subset_vcf_file: pathlib.Pa
     raise RuntimeError("PLINK2 failed to produce a readable BGEN fixture.")
 
 
+def _generate_bcf_from_vcf(data_path: pathlib.Path, subset_vcf_file: pathlib.Path) -> None:
+    bcf_path = data_path / "bcf"
+    os.makedirs(bcf_path, exist_ok=True)
+    prefix = bcf_path / "subset"
+    bcf_file = prefix.with_suffix(".bcf")
+    if bcf_file.exists():
+        return
+
+    print("Generating BCF format with PLINK2 --export bcf...")
+    subprocess.run(
+        [
+            "./plink2",
+            "--vcf",
+            subset_vcf_file,
+            "--export",
+            "bcf",
+            "--out",
+            "bcf/subset",
+        ],
+        cwd=str(data_path),
+        check=True,
+    )
+
+
 @pytest.fixture(scope="module")
 def data_path():
     module_path = pathlib.Path(inspect.getfile(snputils)).parent.parent
@@ -161,6 +185,7 @@ def data_path():
             )
 
     _generate_bgen_from_vcf(data_path, subset_vcf_file)
+    _generate_bcf_from_vcf(data_path, subset_vcf_file)
 
     return str(data_path)
 
@@ -178,6 +203,13 @@ def snpobj_bed(data_path):
 @pytest.fixture(scope="module")
 def snpobj_bgen(data_path):
     return BGENReader(data_path + "/bgen/subset.bgen").read(variant_idxs=np.arange(100))
+
+
+@pytest.fixture(scope="module")
+def snpobj_bcf(data_path):
+    from snputils.snp.io.read.bcf import BCFReader
+
+    return BCFReader(data_path + "/bcf/subset.bcf").read(variant_idxs=np.arange(100))
 
 
 @pytest.fixture(scope="module")

@@ -39,7 +39,6 @@ dependencies = [
     "nbformat",
     "adjustText",
     "zstandard",
-    "pygrgl",
     "cairosvg"
 ]
 
@@ -57,6 +56,9 @@ docs = [
 ]
 benchmark = ["pytest", "pytest-benchmark", "memory_profiler",
              "pandas-plink", "pysam", "scikit-allel", "sgkit[plink]", "hail>=0.2.130", "pysnptools", "Pgenlib", "cyvcf2", "plinkio", "PyVCF3"]
+grg = [
+    "pygrgl @ git+https://github.com/salcc/grgl.git@f31e7f6eeddd114ed56d4c963ff908dcebb1de0a"
+]
 
 [project.urls]
 "Homepage" = "https://snputils.org"
@@ -93,5 +95,6 @@ passenv =
 extras =
     tests
     torch
+    grg
 commands = python -m pytest -vv --color=yes --cov=snputils --cov-report=xml
 """

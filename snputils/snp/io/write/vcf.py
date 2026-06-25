@@ -68,7 +68,8 @@ def _normalize_filter_values(data: SNPObject) -> np.ndarray:
 class VCFWriter:
     """
     A writer class for exporting SNP data from a `snputils.snp.genobj.SNPObject` 
-    into an `.vcf` file.
+    into an `.vcf` file. Supports sampleless VCF writes (annotation-only) when 
+    the input `SNPObject` has no samples.
     """
     def __init__(self, snpobj: SNPObject, filename: str, n_jobs: int = -1, phased: bool = False):
         """
@@ -88,11 +89,11 @@ class VCFWriter:
                 If False, genotype data is written in "maternal/paternal" format.
         """
         del n_jobs
-
+ 
         self.__snpobj = snpobj
         self.__filename = Path(filename)
         self.__phased = phased
-
+ 
     def write(
             self,
             chrom_partition: bool = False,
@@ -102,7 +103,8 @@ class VCFWriter:
             variants_info: Optional[Sequence[str]] = None,
         ):
         """
-        Writes the SNP data to VCF file(s).
+        Writes the SNP data to VCF file(s). If writing a sampleless VCF,
+        the genotypes array must be an empty array with a variant axis.
 
         Args:
             chrom_partition (bool, optional):

@@ -58,6 +58,8 @@ bcf = BCFReader("cohort.bcf").read(
 
 **BGEN notes:** Genotype probabilities are stored on `SNPObject.calldata_gp` with shape `(n_snps, n_samples, n_probs)`. Hard calls are not inferred during reads. Mixed-width BGEN records are padded with `NaN` columns.
 
+**Sampleless/Annotation-Only VCF notes:** `VCFReader` supports reading sampleless VCFs (VCFs containing variant metadata but no sample columns). In this case, the returned `SNPObject` will have an empty `genotypes` array with a variant axis (shape `(n_snps, 0)` or `(n_snps, 0, 2)`). Correspondingly, `VCFWriter` can write sampleless VCFs from such `SNPObject` instances, provided their `genotypes` array has a variant axis of size matching the variant count.
+
 **Writer options:**
 
 ```python

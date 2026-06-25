@@ -33,7 +33,7 @@ Extras can be combined: `pip install "snputils[torch,docs]"`.
 ## Format-specific notes
 
 - **PLINK2 PGEN** — uses [Pgenlib](https://pypi.org/project/Pgenlib/), included as a core dependency.
-- **GRG** — reading and writing genotype representation graphs requires [pygrgl](https://pypi.org/project/pygrgl/), also included in core dependencies.
+- **GRG** — reading and writing genotype representation graphs requires [pygrgl](https://github.com/aprilweilab/grgl#installing-from-pip). Install it separately.
 - **PyTorch workflows** — install the `torch` extra before using `TorchPCA`, `OnlineSimulator`, or `snputils simulate`.
 
 ## Build documentation locally

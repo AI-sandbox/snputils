@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import pandas as pd
-import pygrgl as pyg
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.phenotype.genobj import (
@@ -12,9 +11,11 @@ from snputils.phenotype.genobj import (
     MultiPhenotypeObject,
     PhenotypeObject,
 )
-from snputils.snp.genobj.grgobj import GRGObject
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.visualization.constants import CHROM_SIZES
+
+if TYPE_CHECKING:
+    from snputils.snp.genobj.grgobj import GRGObject
 
 
 DEFAULT_SYNTHETIC_ANCESTRY_MAP = {"0": "AFR", "1": "EUR", "2": "EAS"}
@@ -819,6 +820,18 @@ def build_synthetic_chromosome_painting_dataset(
 
 def build_synthetic_grg() -> GRGObject:
     """Build a tiny deterministic GRGObject."""
+    try:
+        import pygrgl as pyg
+        from snputils.snp.genobj.grgobj import GRGObject
+    except ModuleNotFoundError as exc:
+        if exc.name == "pygrgl":
+            raise ImportError(
+                "GRG support requires the optional dependency 'pygrgl'. "
+                "Install pygrgl separately: "
+                "https://github.com/aprilweilab/grgl#installing-from-pip"
+            ) from exc
+        raise
+
     grg = pyg.MutableGRG(6, 2, True)
     root = grg.make_node()
     left = grg.make_node()

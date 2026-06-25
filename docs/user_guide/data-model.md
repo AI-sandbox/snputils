@@ -149,7 +149,7 @@ covar.n_covariates
 
 ## GRGObject
 
-Genotype Representation Graph (requires `pip install pygrgl`).
+Genotype Representation Graph (requires [pygrgl](https://github.com/aprilweilab/grgl#installing-from-pip)).
 
 ```python
 grg = su.read_grg("cohort.grg")

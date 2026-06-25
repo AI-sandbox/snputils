@@ -39,7 +39,6 @@ dependencies = [
     "nbformat",
     "adjustText",
     "zstandard",
-    "pygrgl",
     "cairosvg"
 ]
 
@@ -57,6 +56,9 @@ docs = [
 ]
 benchmark = ["pytest", "pytest-benchmark", "memory_profiler",
              "pandas-plink", "pysam", "scikit-allel", "sgkit[plink]", "hail>=0.2.130", "pysnptools", "Pgenlib", "cyvcf2", "plinkio", "PyVCF3"]
+grg = [
+    "pygrgl @ git+https://github.com/salcc/grgl.git@cb908272f188ac26163b17dba545def69bc9ae0c"
+]
 
 [project.urls]
 "Homepage" = "https://snputils.org"

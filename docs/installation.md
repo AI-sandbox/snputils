@@ -24,6 +24,7 @@ Install feature-specific dependencies with pip extras:
 | Extra | Command | Purpose |
 |-------|---------|---------|
 | `torch` | `pip install "snputils[torch]"` | GPU-accelerated PCA (`TorchPCA`) and the `simulate` CLI |
+| `grg` | `pip install "snputils[grg]"` | GRG readers, writers, and helpers |
 | `docs` | `pip install "snputils[docs]"` | Build this documentation locally |
 | `demos` | `pip install "snputils[demos]"` | Run or edit tutorial notebooks |
 | `tests` | `pip install "snputils[tests]"` | pytest and coverage tooling |
@@ -33,7 +34,7 @@ Extras can be combined: `pip install "snputils[torch,docs]"`.
 ## Format-specific notes
 
 - **PLINK2 PGEN** — uses [Pgenlib](https://pypi.org/project/Pgenlib/), included as a core dependency.
-- **GRG** — reading and writing genotype representation graphs requires [pygrgl](https://pypi.org/project/pygrgl/), also included in core dependencies.
+- **GRG** — reading and writing genotype representation graphs requires [pygrgl](https://pypi.org/project/pygrgl/), installed by the `grg` extra.
 - **PyTorch workflows** — install the `torch` extra before using `TorchPCA`, `OnlineSimulator`, or `snputils simulate`.
 
 ## Build documentation locally

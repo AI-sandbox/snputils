@@ -7,7 +7,7 @@ from snputils.snp.io.write.bcf import BCFWriter
 
 def test_bcf_writer_roundtrip(tmp_path):
     output_path = tmp_path / "toy.bcf"
-    
+
     # 1. Create a toy SNPObject
     snpobj = SNPObject(
         genotypes=np.array([
@@ -42,7 +42,7 @@ def test_bcf_writer_roundtrip(tmp_path):
 
 def test_bcf_writer_phased(tmp_path):
     output_path = tmp_path / "phased.bcf"
-    
+
     snpobj = SNPObject(
         genotypes=np.array([
             [[0, 1], [1, 0]],
@@ -68,7 +68,7 @@ def test_bcf_writer_phased(tmp_path):
 
 def test_bcf_writer_chrom_partition(tmp_path):
     output_path = tmp_path / "partitioned.bcf"
-    
+
     snpobj = SNPObject(
         genotypes=np.array([
             [[0, 0], [1, 1]],
@@ -100,7 +100,7 @@ def test_bcf_writer_chrom_partition(tmp_path):
 
 def test_bcf_writer_with_info(tmp_path):
     output_path = tmp_path / "info.bcf"
-    
+
     snpobj = SNPObject(
         genotypes=np.array([
             [[0, 0], [1, 1]],
@@ -140,4 +140,3 @@ def test_snpobj_save_bcf(tmp_path):
 
     observed = BCFReader(str(output_path)).read()
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
-

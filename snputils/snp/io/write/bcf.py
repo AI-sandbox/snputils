@@ -41,7 +41,7 @@ def _encode_typed_int_list(ints: list[int]) -> bytes:
     else:
         type_code = 3
         val_bytes = b"".join(struct.pack("<i", x) for x in ints)
-    
+
     if n < 15:
         return bytes([(n << 4) | type_code]) + val_bytes
     if n <= 127:
@@ -54,7 +54,7 @@ def _encode_typed_int_list(ints: list[int]) -> bytes:
 
 class BCFWriter:
     """
-    A writer class for exporting SNP data from a `snputils.snp.genobj.SNPObject` 
+    A writer class for exporting SNP data from a `snputils.snp.genobj.SNPObject`
     into a `.bcf` file.
     """
     def __init__(self, snpobj: SNPObject, filename: str, n_jobs: int = -1, phased: bool = False):
@@ -62,13 +62,13 @@ class BCFWriter:
         Args:
             snpobj (SNPObject):
                 A SNPObject instance.
-            filename (str or pathlib.Path): 
-                Path to the file where the data will be saved. It should end with `.bcf`. 
+            filename (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.bcf`.
                 If the provided path does not have this extension, the `.bcf` extension will be appended.
-            n_jobs: 
+            n_jobs:
                 Number of jobs to run in parallel. Unused, included for API consistency.
-            phased: 
-                If True, genotype data is written in phased format.  
+            phased:
+                If True, genotype data is written in phased format.
                 If False, genotype data is written in unphased format.
         """
         del n_jobs
@@ -181,7 +181,7 @@ class BCFWriter:
                 pos = int(data_chrom.variants_pos[i]) - 1
                 ref = data_chrom.variants_ref[i]
                 rlen = len(ref)
-                
+
                 if data_chrom.variants_qual is not None and not np.isnan(data_chrom.variants_qual[i]):
                     qual_val = float(data_chrom.variants_qual[i])
                 else:
@@ -220,7 +220,7 @@ class BCFWriter:
                     gt_array[~missing] = (row[~missing] + 1) << 1
                     if self.__phased:
                         gt_array[~missing[:, 1], 1] |= 1
-                    
+
                     # FORMAT key index: GT (IDX = 1)
                     fmt_key_bytes = _encode_typed_int_list([1])
                     # FORMAT value descriptor: (2 values per sample, type 1 int8)

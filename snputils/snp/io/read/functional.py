@@ -110,7 +110,8 @@ def read_grg(filename: Union[str, pathlib.Path], **kwargs) -> "GRGObject":
         if exc.name == "pygrgl":
             raise ImportError(
                 "GRG support requires the optional dependency 'pygrgl'. "
-                "Install it with: pip install 'snputils[grg]'"
+                "Install pygrgl separately: "
+                "https://github.com/aprilweilab/grgl#installing-from-pip"
             ) from exc
         raise
 

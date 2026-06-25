@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
+
 
 
 _PLINK1_BED_SUFFIXES = {".bed", ".bim", ".fam"}

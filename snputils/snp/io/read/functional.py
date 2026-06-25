@@ -49,6 +49,19 @@ def read_bgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
     return BGENReader(filename).read(**kwargs)
 
 
+def read_bcf(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
+    """
+    Read a BCF file into a SNPObject.
+
+    Args:
+        filename: Filename of the BCF file to read.
+        **kwargs: Additional arguments passed to the reader method. See :class:`snputils.snp.io.read.bcf.BCFReader` for possible parameters.
+    """
+    from snputils.snp.io.read.bcf import BCFReader
+
+    return BCFReader(filename).read(**kwargs)
+
+
 def read_pgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
     """
     Read a PGEN fileset into a SNPObject.

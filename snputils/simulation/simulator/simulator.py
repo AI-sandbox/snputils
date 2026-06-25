@@ -288,6 +288,7 @@ class OnlineSimulator:
         window_size = None,
         store_latlon_as_nvec = False,
         cp_tolerance = 0,
+        ancestry_proportions = None,
     ):
         self.snp_data = snp_data
         self.meta = meta
@@ -296,13 +297,21 @@ class OnlineSimulator:
         self.window_size = window_size
         self.store_latlon_as_nvec = store_latlon_as_nvec
         self.cp_tolerance = cp_tolerance
+        self.ancestry_proportions = ancestry_proportions
         
         self.labels_discrete = None
         self.labels_continuous = None
+        self.population_names = None
+        self.pop2code = None
+        self.code2pop = None
+        self.sample_population_codes = None
+        self.ancestry_codes = None
+        self.ancestry_probs = None
 
         self._check_sample_metadata()
         self._intersect_snp_metadata()
         self._build_descriptors()
+        self._setup_ancestry_proportions()
         self._broadcast_labels_across_snps() 
 
     def _check_sample_metadata(self):
@@ -375,9 +384,11 @@ class OnlineSimulator:
                                  
         if self.genetic_map is not None:
             cm_interp = np.interp(self.snp_data.variants_pos, self.genetic_map['pos'], self.genetic_map['cM'])
+            self.cm_per_snp = cm_interp
             self.rate_per_snp = np.gradient(cm_interp/100.0)
             log.info(f"rate/snp shape = {self.rate_per_snp.shape}")
         else:
+            self.cm_per_snp = getattr(self.snp_data, "variants_cm", None)
             self.rate_per_snp = None
         
 
@@ -393,8 +404,11 @@ class OnlineSimulator:
         if self.has_discrete:
             pop_values = self.meta['Population'].values
             unique_pops = sorted(np.unique(pop_values))
-            pop2code = {p: i for i, p in enumerate(unique_pops)}
-            discrete_arr = np.array([pop2code[p] for p in pop_values], dtype=np.int16)
+            self.population_names = np.asarray(unique_pops, dtype=str)
+            self.pop2code = {p: i for i, p in enumerate(unique_pops)}
+            self.code2pop = {i: p for p, i in self.pop2code.items()}
+            discrete_arr = np.array([self.pop2code[p] for p in pop_values], dtype=np.int16)
+            self.sample_population_codes = discrete_arr.copy()
             # shape => (N,1)
             discrete_arr = discrete_arr[:, None]
             self.labels_discrete = torch.tensor(discrete_arr, dtype=torch.int16)
@@ -411,6 +425,50 @@ class OnlineSimulator:
             self.labels_continuous = torch.tensor(coords, dtype=torch.float32)
             log.info(f"Built continuous labels => shape {self.labels_continuous.shape}")
 
+    def _setup_ancestry_proportions(self):
+        """
+        Normalize optional ancestry proportions and map population labels to codes.
+        """
+        if self.ancestry_proportions is None:
+            return
+
+        if not self.has_discrete or self.pop2code is None:
+            raise ValueError("ancestry_proportions requires a 'Population' column in metadata.")
+
+        if self.snps.ndim != 2:
+            raise ValueError("ancestry_proportions currently requires make_haploid=True.")
+
+        if not isinstance(self.ancestry_proportions, dict):
+            raise TypeError("ancestry_proportions must be a dict like {'YRI': 0.8, 'CEU': 0.2}.")
+
+        codes = []
+        probs = []
+        for pop, prob in self.ancestry_proportions.items():
+            pop_key = str(pop)
+            if pop_key not in self.pop2code:
+                available = ", ".join(map(str, self.population_names))
+                raise ValueError(f"Population '{pop_key}' not found in metadata. Available: {available}")
+            prob = float(prob)
+            if prob < 0:
+                raise ValueError("ancestry_proportions cannot contain negative values.")
+            codes.append(self.pop2code[pop_key])
+            probs.append(prob)
+
+        probs = np.asarray(probs, dtype=np.float64)
+        total = probs.sum()
+        if total <= 0:
+            raise ValueError("ancestry_proportions must sum to a positive value.")
+
+        self.ancestry_codes = np.asarray(codes, dtype=np.int16)
+        self.ancestry_probs = probs / total
+        log.info(
+            "Using ancestry proportions: %s",
+            ", ".join(f"{self.code2pop[int(c)]}={p:.6g}" for c, p in zip(self.ancestry_codes, self.ancestry_probs)),
+        )
+
+        for code in self.ancestry_codes:
+            if not np.any(self.sample_population_codes == code):
+                raise ValueError(f"No founder haplotypes available for population '{self.code2pop[int(code)]}'.")
 
     def _broadcast_labels_across_snps(self):
         """
@@ -446,6 +504,7 @@ class OnlineSimulator:
         batch_labels_discrete,
         batch_labels_continuous,
         num_generation_max,
+        num_generations=None,
         device='cpu',
     ):
         """
@@ -462,18 +521,8 @@ class OnlineSimulator:
             if batch_labels_continuous is not None:
                 batch_labels_continuous = batch_labels_continuous.to(device)
 
-        # 1) Pick the number of generations
-        G = np.random.randint(0, num_generation_max+1)
-        # 2) If we have a rate_per_snp array, we can do random binomial switch at each SNP
-        #    or if cM is provided, uniform. 
-        #    We'll keep it simple: we do g random switch points
         B, D = batch_snps.shape 
-
-        if self.rate_per_snp is not None:
-            switch = np.random.binomial(G, self.rate_per_snp) % 2
-            split_points = np.flatnonzero(switch)
-        else:
-            split_points = torch.randint(D, (G,))
+        split_points = self._draw_split_points(D, num_generation_max, num_generations)
 
         for sp in split_points:
             perm = torch.randperm(B, device=batch_snps.device)
@@ -489,6 +538,142 @@ class OnlineSimulator:
 
         return batch_snps, batch_labels_discrete, batch_labels_continuous
 
+    def _draw_split_points(self, n_snps, num_generation_max, num_generations=None):
+        G = int(num_generation_max if num_generations is None else num_generations)
+        if G < 0:
+            raise ValueError("Number of generations must be non-negative.")
+        if num_generations is None:
+            G = np.random.randint(0, G + 1)
+
+        if G == 0:
+            return np.empty(0, dtype=np.int64)
+
+        if self.rate_per_snp is not None:
+            switch = np.random.binomial(G, self.rate_per_snp) % 2
+            split_points = np.flatnonzero(switch)
+        else:
+            if n_snps <= 1:
+                return np.empty(0, dtype=np.int64)
+            split_points = np.random.randint(1, n_snps, size=G)
+
+        split_points = np.unique(split_points)
+        return split_points[(split_points > 0) & (split_points < n_snps)].astype(np.int64)
+
+    def _simulate_from_ancestry_proportions(
+        self,
+        batch_size,
+        num_generation_max,
+        num_generations=None,
+        device='cpu',
+    ):
+        """
+        Build admixed haplotypes by drawing each segment's ancestry from the
+        requested global proportions and then sampling a donor haplotype from
+        that ancestry-specific founder pool.
+        """
+        if self.ancestry_codes is None or self.ancestry_probs is None:
+            raise ValueError("ancestry_proportions are not configured.")
+
+        _, n_snps = self.snps.shape
+        batch_snps = torch.empty((batch_size, n_snps), dtype=self.snps.dtype)
+        batch_discrete = torch.empty((batch_size, n_snps), dtype=torch.int16)
+        batch_continuous = None
+        if self.labels_continuous is not None:
+            coord_dim = self.labels_continuous.shape[2]
+            batch_continuous = torch.empty((batch_size, n_snps, coord_dim), dtype=torch.float32)
+
+        founder_pools = {
+            int(code): np.flatnonzero(self.sample_population_codes == code)
+            for code in self.ancestry_codes
+        }
+
+        for row in range(batch_size):
+            split_points = self._draw_split_points(n_snps, num_generation_max, num_generations)
+            starts = np.concatenate(([0], split_points))
+            ends = np.concatenate((split_points, [n_snps]))
+
+            for start, end in zip(starts, ends):
+                code = int(np.random.choice(self.ancestry_codes, p=self.ancestry_probs))
+                donor_idx = int(np.random.choice(founder_pools[code]))
+                batch_snps[row, start:end] = self.snps[donor_idx, start:end]
+                batch_discrete[row, start:end] = code
+                if batch_continuous is not None:
+                    batch_continuous[row, start:end, :] = self.labels_continuous[donor_idx, start:end, :]
+
+        if device != 'cpu':
+            batch_snps = batch_snps.to(device)
+            batch_discrete = batch_discrete.to(device)
+            if batch_continuous is not None:
+                batch_continuous = batch_continuous.to(device)
+
+        return batch_snps, batch_discrete, batch_continuous
+
+    def simulate_diploid_population(
+        self,
+        n_individuals,
+        num_generation_max=10,
+        num_generations=None,
+        sample_prefix="SIM",
+    ):
+        """
+        Simulate a full diploid cohort from ancestry-specific founder haplotypes.
+
+        Returns:
+          genotypes: int8 array with shape (n_snps, n_individuals, 2)
+          samples: sample IDs with shape (n_individuals,)
+          segments: list of per-haplotype (starts, ends, ancestry_codes) arrays
+        """
+        if self.ancestry_codes is None or self.ancestry_probs is None:
+            raise ValueError("simulate_diploid_population requires ancestry_proportions.")
+        if self.snps.ndim != 2:
+            raise ValueError("simulate_diploid_population requires haploid founder data; use make_haploid=True.")
+
+        n_individuals = int(n_individuals)
+        if n_individuals <= 0:
+            raise ValueError("n_individuals must be positive.")
+
+        founder_snps = self.snps.cpu().numpy()
+        _, n_snps = founder_snps.shape
+        genotypes = np.empty((n_snps, n_individuals, 2), dtype=np.int8)
+
+        founder_pools = {
+            int(code): np.flatnonzero(self.sample_population_codes == code)
+            for code in self.ancestry_codes
+        }
+        samples = np.asarray([f"{sample_prefix}{i + 1:06d}" for i in range(n_individuals)], dtype=str)
+        segments = []
+
+        for person_idx in range(n_individuals):
+            for strand_idx in range(2):
+                split_points = self._draw_split_points(n_snps, num_generation_max, num_generations)
+                starts = np.concatenate(([0], split_points))
+                ends = np.concatenate((split_points, [n_snps]))
+
+                seg_starts = []
+                seg_ends = []
+                seg_codes = []
+                for start, end in zip(starts, ends):
+                    code = int(np.random.choice(self.ancestry_codes, p=self.ancestry_probs))
+                    donor_idx = int(np.random.choice(founder_pools[code]))
+                    genotypes[start:end, person_idx, strand_idx] = founder_snps[donor_idx, start:end]
+
+                    if seg_codes and seg_codes[-1] == code and seg_ends[-1] == start:
+                        seg_ends[-1] = int(end)
+                    else:
+                        seg_starts.append(int(start))
+                        seg_ends.append(int(end))
+                        seg_codes.append(code)
+
+                segments.append(
+                    (
+                        np.asarray(seg_starts, dtype=np.int64),
+                        np.asarray(seg_ends, dtype=np.int64),
+                        np.asarray(seg_codes, dtype=np.uint8),
+                    )
+                )
+
+        return genotypes, samples, segments
+
     def simulate(
         self,
         batch_size=256,
@@ -496,7 +681,8 @@ class OnlineSimulator:
         balanced=False,
         single_ancestry=False,
         device='cpu',
-        pool_method='mode'
+        pool_method='mode',
+        num_generations=None,
     ):
         """
         Returns a tuple of:
@@ -509,42 +695,51 @@ class OnlineSimulator:
         """
         del balanced, single_ancestry
 
-        # pick random subset of samples
-        N = self.snps.shape[0]
-        idx = torch.randint(N, (batch_size,))
-        batch_snps = self.snps[idx].clone()
-
-        # Subset discrete
-        if self.labels_discrete is not None:
-            batch_discrete = self.labels_discrete[idx].clone()
+        if self.ancestry_proportions is not None:
+            batch_snps, batch_discrete, batch_continuous = self._simulate_from_ancestry_proportions(
+                batch_size=batch_size,
+                num_generation_max=num_generation_max,
+                num_generations=num_generations,
+                device=device,
+            )
         else:
-            batch_discrete = None
+            # pick random subset of samples
+            N = self.snps.shape[0]
+            idx = torch.randint(N, (batch_size,))
+            batch_snps = self.snps[idx].clone()
 
-        # Subset continuous
-        if self.labels_continuous is not None:
-            batch_continuous = self.labels_continuous[idx].clone()
-        else:
-            batch_continuous = None
+            # Subset discrete
+            if self.labels_discrete is not None:
+                batch_discrete = self.labels_discrete[idx].clone()
+            else:
+                batch_discrete = None
 
-        # Diploid input: (B, 2, D) → flatten strands into haplotype rows (B*2, D)
-        # so that _simulate_from_pool and all downstream logic see a 2-D tensor.
-        if batch_snps.ndim == 3:
-            B_dip, ploidy, D = batch_snps.shape
-            batch_snps = batch_snps.reshape(B_dip * ploidy, D)
-            if batch_discrete is not None:
-                batch_discrete = batch_discrete.repeat_interleave(ploidy, dim=0)
-            if batch_continuous is not None:
-                batch_continuous = batch_continuous.repeat_interleave(ploidy, dim=0)
-            
-        # 2) possibly do single_ancestry or balanced logic if you want
-        # We'll skip it for brevity; your original code had that logic.
+            # Subset continuous
+            if self.labels_continuous is not None:
+                batch_continuous = self.labels_continuous[idx].clone()
+            else:
+                batch_continuous = None
 
-        # Crossovers
-        batch_snps, batch_discrete, batch_continuous = self._simulate_from_pool(
-            batch_snps, batch_discrete, batch_continuous,
-            num_generation_max=num_generation_max,
-            device=device
-        )
+            # Diploid input: (B, 2, D) -> flatten strands into haplotype rows (B*2, D)
+            # so that _simulate_from_pool and all downstream logic see a 2-D tensor.
+            if batch_snps.ndim == 3:
+                B_dip, ploidy, D = batch_snps.shape
+                batch_snps = batch_snps.reshape(B_dip * ploidy, D)
+                if batch_discrete is not None:
+                    batch_discrete = batch_discrete.repeat_interleave(ploidy, dim=0)
+                if batch_continuous is not None:
+                    batch_continuous = batch_continuous.repeat_interleave(ploidy, dim=0)
+
+            # 2) possibly do single_ancestry or balanced logic if you want
+            # We'll skip it for brevity; your original code had that logic.
+
+            # Crossovers
+            batch_snps, batch_discrete, batch_continuous = self._simulate_from_pool(
+                batch_snps, batch_discrete, batch_continuous,
+                num_generation_max=num_generation_max,
+                num_generations=num_generations,
+                device=device
+            )
         # Window-chunk each label array if window_size is specified
         discrete_out = None
         continuous_out = None

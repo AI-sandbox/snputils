@@ -593,17 +593,31 @@ def _add_maasmds_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--snp", required=True, help="Path to SNP input (VCF, BED, or PGEN fileset).")
-    parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample / Population / Latitude / Longitude.")
+    parser.add_argument(
+        "--snp",
+        required=True,
+        help=(
+            "Path to phased SNP input (VCF, PGEN, or BGEN fileset). "
+            "PLINK1 BED is not supported because it cannot store phase."
+        ),
+    )
+    parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample/IID and Population columns.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
+    parser.add_argument("--output-prefix", default=None, help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
+    parser.add_argument("--output-format", default="same", choices=("same", "pgen", "vcf", "vcf.gz", "bgen"), help="Genotype output format for --n-individuals cohort output.")
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")
     parser.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
     parser.add_argument("--window-size", type=int, default=1000, help="#SNPs per window.")
     parser.add_argument("--store-latlon-as-nvec", action="store_true", help="Convert lat/lon to unit n-vectors (x,y,z).")
     parser.add_argument("--make-haploid", action="store_true", help="Flatten diploid genotypes into haplotypes.")
     parser.add_argument("--device", default="cpu", help="torch device string, e.g. 'cuda:0'.")
-    parser.add_argument("--batch-size", type=int, default=256, help="#simulated haplotypes per batch.")
+    parser.add_argument("--batch-size", type=int, default=256, help="#simulated haplotypes per batch, or persons with --diploid-output.")
+    parser.add_argument("--diploid-output", action="store_true", help="Save simulated diploid samples. When set, --batch-size is the number of samples.")
     parser.add_argument("--num-generations", type=int, default=10, help="Upper bound on random generations since admixture.")
+    parser.add_argument("--fixed-generations", action="store_true", help="Use exactly --num-generations instead of drawing uniformly from 0..num-generations.")
+    parser.add_argument("--ancestry-proportions", default=None, help="Comma-separated population proportions, e.g. YRI:0.8,CEU:0.2.")
+    parser.add_argument("--n-individuals", type=int, default=None, help="Simulate this many diploid individuals and write a single fileset instead of NPZ batches.")
+    parser.add_argument("--sample-prefix", default="SIM", help="Sample ID prefix for --n-individuals cohort output.")
     parser.add_argument("--n-batches", type=int, default=1, help="#separate batches to generate & save.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print additional debugging info.")
 

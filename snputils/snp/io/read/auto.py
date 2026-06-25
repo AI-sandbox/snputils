@@ -49,5 +49,9 @@ class SNPReader:
             from snputils.snp.io.read.bgen import BGENReader
 
             return BGENReader(filename)
+        elif extension == ".bcf":
+            from snputils.snp.io.read.bcf import BCFReader
+
+            return BCFReader(filename)
         else:
             raise ValueError(f"File format not supported: {filename}")

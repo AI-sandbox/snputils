@@ -15,7 +15,7 @@ Install the latest release from PyPI:
 pip install snputils
 ```
 
-This installs the library, the `snputils` command-line tool, and readers/writers for VCF, BGEN, PLINK BED/PGEN, MSP, FLARE, ADMIXTURE, phenotype, and IBD formats.
+This installs the library, the `snputils` command-line tool, read support for VCF, BCF, BGEN, PLINK BED/PGEN, MSP, FLARE, ADMIXTURE, phenotype, and IBD formats, plus the corresponding writers where implemented.
 
 ## Optional extras
 

@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 class SNPObject:
     """
-    A class for Single Nucleotide Polymorphism (SNP) data, with optional support for 
+    A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
     SNP-level Local Ancestry Information (LAI).
     """
     def __init__(
@@ -45,11 +45,11 @@ class SNPObject:
     ) -> None:
         """
         Args:
-            genotypes (array, optional): 
-                An array containing genotype data for each sample. This array can be either 2D with shape 
-                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
+            genotypes (array, optional):
+                An array containing genotype data for each sample. This array can be either 2D with shape
+                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
-            samples (array of shape (n_samples,), optional): 
+            samples (array of shape (n_samples,), optional):
                 An array containing unique sample identifiers.
             sample_fid (array of shape (n_samples,), optional):
                 PLINK-style family ID per sample (same order as ``samples``), for example population labels
@@ -57,25 +57,25 @@ class SNPObject:
                 use these values as default group labels if ``sample_labels`` is omitted.
             sample_sex (array of shape (n_samples,), optional):
                 PLINK-style sex code per sample, aligned with ``samples``.
-            variants_ref (array of shape (n_snps,), optional): 
+            variants_ref (array of shape (n_snps,), optional):
                 An array containing the reference allele for each SNP.
-            variants_alt (array of shape (n_snps,), optional): 
+            variants_alt (array of shape (n_snps,), optional):
                 An array containing the alternate allele for each SNP.
-            variants_chrom (array of shape (n_snps,), optional): 
+            variants_chrom (array of shape (n_snps,), optional):
                 An array containing the chromosome for each SNP.
             variants_cm (array of shape (n_snps,), optional):
                 An array containing the genetic-map position in centimorgans for each SNP.
-            variants_filter_pass (array of shape (n_snps,), optional): 
+            variants_filter_pass (array of shape (n_snps,), optional):
                 An array indicating whether each SNP passed control checks.
-            variants_id (array of shape (n_snps,), optional): 
+            variants_id (array of shape (n_snps,), optional):
                 An array containing unique identifiers (IDs) for each SNP.
-            variants_pos (array of shape (n_snps,), optional): 
+            variants_pos (array of shape (n_snps,), optional):
                 An array containing the chromosomal positions for each SNP.
-            variants_qual (array of shape (n_snps,), optional): 
+            variants_qual (array of shape (n_snps,), optional):
                 An array containing the Phred-scaled quality score for each SNP.
             variants_info (array of shape (n_snps,), optional):
                 An array containing VCF/PVAR INFO column values for each SNP.
-            calldata_lai (array, optional): 
+            calldata_lai (array, optional):
                 An array containing the ancestry for each SNP. This array can be either 2D with shape
                 `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
             calldata_gp (array, optional):
@@ -84,7 +84,7 @@ class SNPObject:
                 unphased probabilities typically have three columns and phased probabilities
                 typically have four columns. Mixed-width BGEN reads are padded with NaN
                 columns to keep this as a single array.
-            ancestry_map (dict of str to str, optional): 
+            ancestry_map (dict of str to str, optional):
                 A dictionary mapping ancestry codes to region names.
             calldata_gt (array, optional):
                 Backward-compatible alias for `genotypes`.
@@ -180,9 +180,9 @@ class SNPObject:
         Retrieve `genotypes`.
 
         Returns:
-            array: 
-                An array containing genotype data for each sample. This array can be either 2D with shape 
-                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape 
+            array:
+                An array containing genotype data for each sample. This array can be either 2D with shape
+                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape
                 `(n_snps, n_samples, 2)` if the strands are kept separate.
         """
         return self.__genotypes
@@ -214,7 +214,7 @@ class SNPObject:
         Retrieve `samples`.
 
         Returns:
-            array of shape (n_samples,): 
+            array of shape (n_samples,):
                 An array containing unique sample identifiers.
         """
         return self.__samples
@@ -437,7 +437,7 @@ class SNPObject:
         Retrieve `calldata_lai`.
 
         Returns:
-            array: 
+            array:
                 An array containing the ancestry for each SNP. This array can be either 2D with shape
                 `(n_snps, n_samples*2)`, or 3D with shape (n_snps, n_samples, 2).
         """
@@ -610,17 +610,17 @@ class SNPObject:
     def are_strands_summed(self) -> bool:
         """
         Retrieve `are_strands_summed`.
-        
+
         Returns:
-            bool: 
-                True if the maternal and paternal strands have been summed together, which is indicated by 
-                `genotypes` having shape `(n_snps, n_samples)`. False if the strands are stored separately, 
+            bool:
+                True if the maternal and paternal strands have been summed together, which is indicated by
+                `genotypes` having shape `(n_snps, n_samples)`. False if the strands are stored separately,
                 indicated by `genotypes` having shape `(n_snps, n_samples, 2)`.
         """
         if self.genotypes is None:
             warnings.warn("Genotype data `genotypes` is None.")
             return None
-        
+
         return self.genotypes.ndim == 2
 
     def copy(self) -> SNPObject:
@@ -628,7 +628,7 @@ class SNPObject:
         Create and return a copy of `self`.
 
         Returns:
-            SNPObject: 
+            SNPObject:
                 A new instance of the current object.
         """
         return copy.deepcopy(self)
@@ -638,8 +638,8 @@ class SNPObject:
         Retrieve a list of public attribute names for `self`.
 
         Returns:
-            list of str: 
-                A list of attribute names, with internal name-mangling removed, 
+            list of str:
+                A list of attribute names, with internal name-mangling removed,
                 for easier reference to public attributes in the instance.
         """
         return [attr.replace('_SNPObject__', '') for attr in vars(self)]
@@ -869,13 +869,13 @@ class SNPObject:
         Sum paternal and maternal strands.
 
         Args:
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants
                 filtered. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with summed strands if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with summed strands if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         if self.genotypes is None:
@@ -885,7 +885,7 @@ class SNPObject:
         if self.are_strands_summed:
             warnings.warn("Genotype data `genotypes` is already summed.")
             return self if inplace else self.copy()
-        
+
         if inplace:
             self.genotypes = self.genotypes.sum(axis=2, dtype=np.int8)
             return self
@@ -895,52 +895,52 @@ class SNPObject:
             return snpobj
 
     def filter_variants(
-            self, 
-            chrom: Optional[Union[str, Sequence[str], np.ndarray, None]] = None, 
-            pos: Optional[Union[int, Sequence[int], np.ndarray, None]] = None, 
-            indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None, 
+            self,
+            chrom: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
+            pos: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
+            indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
             mask: Optional[Union[Sequence[bool], np.ndarray, None]] = None,
-            include: bool = True, 
+            include: bool = True,
             inplace: bool = False
         ) -> Optional['SNPObject']:
         """
         Filter variants based on chromosome names, variant positions, indexes, or a boolean mask.
 
-        This method updates the `genotypes`, `variants_ref`, `variants_alt`, 
-        `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`,  
-        `variants_qual`, and `lai` attributes to include or exclude the specified variants. The filtering 
-        criteria can be based on chromosome names, variant positions, or indexes. If multiple 
+        This method updates the `genotypes`, `variants_ref`, `variants_alt`,
+        `variants_chrom`, `variants_filter_pass`, `variants_id`, `variants_pos`,
+        `variants_qual`, and `lai` attributes to include or exclude the specified variants. The filtering
+        criteria can be based on chromosome names, variant positions, or indexes. If multiple
         criteria are provided, their union is used for filtering. The order of the variants is preserved.
-        
-        Negative indexes are supported and follow 
+
+        Negative indexes are supported and follow
         [NumPy's indexing conventions](https://numpy.org/doc/stable/user/basics.indexing.html).
 
         Args:
-            chrom (str or array_like of str, optional): 
-                Chromosome(s) to filter variants by. Can be a single chromosome as a string or a sequence 
-                of chromosomes. If both `chrom` and `pos` are provided, they must either have matching lengths 
-                (pairing each chromosome with a position) or `chrom` should be a single value that applies to 
-                all positions in `pos`. Default is None. 
-            pos (int or array_like of int, optional): 
-                Position(s) to filter variants by. Can be a single position as an integer or a sequence of positions. 
-                If `chrom` is also provided, `pos` should either match `chrom` in length or `chrom` should be a 
+            chrom (str or array_like of str, optional):
+                Chromosome(s) to filter variants by. Can be a single chromosome as a string or a sequence
+                of chromosomes. If both `chrom` and `pos` are provided, they must either have matching lengths
+                (pairing each chromosome with a position) or `chrom` should be a single value that applies to
+                all positions in `pos`. Default is None.
+            pos (int or array_like of int, optional):
+                Position(s) to filter variants by. Can be a single position as an integer or a sequence of positions.
+                If `chrom` is also provided, `pos` should either match `chrom` in length or `chrom` should be a
                 single value. Default is None.
-            indexes (int or array_like of int, optional): 
+            indexes (int or array_like of int, optional):
                 Index(es) of the variants to include or exclude. Can be a single index or a sequence
                 of indexes. Negative indexes are supported. Default is None.
             mask (array_like of bool, optional):
                 Boolean mask aligned to the SNP axis. If provided with other criteria, the union of all
                 selected variants is used before applying ``include``.
-            include (bool, default=True): 
+            include (bool, default=True):
                 If True, includes only the specified variants. If False, excludes the specified
                 variants. Default is True.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants
                 filtered. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with the specified variants filtered if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with the specified variants filtered if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         if chrom is None and pos is None and indexes is None and mask is None:
@@ -1131,7 +1131,7 @@ class SNPObject:
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
     def filter_samples(
-            self, 
+            self,
             samples: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
             indexes: Optional[Union[int, Sequence[int], np.ndarray, None]] = None,
             include: bool = True,
@@ -1141,35 +1141,35 @@ class SNPObject:
         """
         Filter samples based on specified names or indexes.
 
-        This method updates the `samples` and `genotypes` attributes to include or exclude the specified 
+        This method updates the `samples` and `genotypes` attributes to include or exclude the specified
         samples. The order of the samples is preserved. Set `reorder=True` to match the ordering of the
         provided `samples` and/or `indexes` lists when including.
 
-        If both samples and indexes are provided, any sample matching either a name in samples or an index in 
+        If both samples and indexes are provided, any sample matching either a name in samples or an index in
         indexes will be included or excluded.
 
-        This method allows inclusion or exclusion of specific samples by their names or 
-        indexes. When both sample names and indexes are provided, the union of the specified samples 
-        is used. Negative indexes are supported and follow 
+        This method allows inclusion or exclusion of specific samples by their names or
+        indexes. When both sample names and indexes are provided, the union of the specified samples
+        is used. Negative indexes are supported and follow
         [NumPy's indexing conventions](https://numpy.org/doc/stable/user/basics.indexing.html).
 
         Args:
-            samples (str or array_like of str, optional): 
+            samples (str or array_like of str, optional):
                  Name(s) of the samples to include or exclude. Can be a single sample name or a
                  sequence of sample names. Default is None.
             indexes (int or array_like of int, optional):
                 Index(es) of the samples to include or exclude. Can be a single index or a sequence
                 of indexes. Negative indexes are supported. Default is None.
-            include (bool, default=True): 
+            include (bool, default=True):
                 If True, includes only the specified samples. If False, excludes the specified
                 samples. Default is True.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the samples 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the samples
                 filtered. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with the specified samples filtered if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with the specified samples filtered if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         if samples is None and indexes is None:
@@ -1196,7 +1196,7 @@ class SNPObject:
             out_of_bounds_indexes = indexes[(indexes < -n_samples) | (indexes >= n_samples)]
             if out_of_bounds_indexes.size > 0:
                 raise ValueError(f"One or more sample indexes are out of bounds.")
-            
+
             # Handle negative indexes
             adjusted_indexes = np.mod(indexes, n_samples)
 
@@ -1305,20 +1305,20 @@ class SNPObject:
 
     def detect_chromosome_format(self) -> str:
         """
-        Detect the chromosome naming convention in `variants_chrom` based on the prefix 
+        Detect the chromosome naming convention in `variants_chrom` based on the prefix
         of the first chromosome identifier in `unique_chrom`.
-        
+
         Recognized formats:
 
         - `'chr'`: Format with 'chr' prefix, e.g., 'chr1', 'chr2', ..., 'chrX', 'chrY', 'chrM'.
         - `'chm'`: Format with 'chm' prefix, e.g., 'chm1', 'chm2', ..., 'chmX', 'chmY', 'chmM'.
         - `'chrom'`: Format with 'chrom' prefix, e.g., 'chrom1', 'chrom2', ..., 'chromX', 'chromY', 'chromM'.
         - `'plain'`: Plain format without a prefix, e.g., '1', '2', ..., 'X', 'Y', 'M'.
-        
+
         If the format does not match any recognized pattern, `'Unknown format'` is returned.
 
         Returns:
-            str: 
+            str:
                 A string indicating the detected chromosome format (`'chr'`, `'chm'`, `'chrom'`, or `'plain'`).
                 If no recognized format is matched, returns `'Unknown format'`.
         """
@@ -1342,9 +1342,9 @@ class SNPObject:
         return 'Unknown format'
 
     def convert_chromosome_format(
-        self, 
-        from_format: str, 
-        to_format: str, 
+        self,
+        from_format: str,
+        to_format: str,
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
@@ -1358,16 +1358,16 @@ class SNPObject:
         - `'plain'`: Plain format without a prefix, e.g., '1', '2', ..., 'X', 'Y', 'M'.
 
         Args:
-            from_format (str): 
+            from_format (str):
                 The current chromosome format. Acceptable values are `'chr'`, `'chm'`, `'chrom'`, or `'plain'`.
-            to_format (str): 
+            to_format (str):
                 The target format for chromosome data conversion. Acceptable values match `from_format` options.
-            inplace (bool, default=False): 
+            inplace (bool, default=False):
                 If True, modifies `self` in place. If False, returns a new `SNPObject` with the converted format.
                 Default is False.
 
         Returns:
-            Optional[SNPObject]: A new `SNPObject` with the converted chromosome format if `inplace=False`. 
+            Optional[SNPObject]: A new `SNPObject` with the converted chromosome format if `inplace=False`.
             If `inplace=True`, modifies `self` in place and returns None.
         """
         # Define the list of standard chromosome identifiers
@@ -1419,22 +1419,22 @@ class SNPObject:
         - `'plain'`: Plain format without a prefix, e.g., '1', '2', ..., 'X', 'Y', 'M'.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject whose chromosome format will be matched.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the
                 chromosome format matching that of `snpobj`. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with matched chromosome format if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with matched chromosome format if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Detect the chromosome naming format of the current SNPObject
         fmt1 = self.detect_chromosome_format()
         if fmt1 == 'Unknown format':
             raise ValueError("The chromosome format of the current SNPObject is unrecognized.")
-        
+
         # Detect the chromosome naming format of the reference SNPObject
         fmt2 = snpobj.detect_chromosome_format()
         if fmt2 == 'Unknown format':
@@ -1453,29 +1453,29 @@ class SNPObject:
         """
         Replace chromosome values in `variants_chrom` using patterns or exact matches.
 
-        This method allows flexible chromosome replacements, using regex or exact matches, useful 
-        for non-standard chromosome formats. For standard conversions (e.g., 'chr1' to '1'), 
+        This method allows flexible chromosome replacements, using regex or exact matches, useful
+        for non-standard chromosome formats. For standard conversions (e.g., 'chr1' to '1'),
         consider `convert_chromosome_format`.
 
         Args:
-            to_replace (dict, str, or list of str): 
-                Pattern(s) or exact value(s) to be replaced in chromosome names. Default behavior 
-                transforms `<chrom_num>` to `chr<chrom_num>` or vice versa. Non-matching values 
+            to_replace (dict, str, or list of str):
+                Pattern(s) or exact value(s) to be replaced in chromosome names. Default behavior
+                transforms `<chrom_num>` to `chr<chrom_num>` or vice versa. Non-matching values
                 remain unchanged.
                 - If str or list of str: Matches will be replaced with `value`.
                 - If regex (bool), then any regex matches will be replaced with `value`.
                 - If dict: Keys defines values to replace, with corresponding replacements as values.
-            value (str or list of str, optional): 
-                Replacement value(s) if `to_replace` is a string or list. Ignored if `to_replace` 
+            value (str or list of str, optional):
+                Replacement value(s) if `to_replace` is a string or list. Ignored if `to_replace`
                 is a dictionary.
-            regex (bool, default=True): 
+            regex (bool, default=True):
                 If True, interprets `to_replace` keys as regex patterns.
-            inplace (bool, default=False): 
+            inplace (bool, default=False):
                 If True, modifies `self` in place. If False, returns a new `SNPObject` with the chromosomes
                 renamed. Default is False.
 
         Returns:
-            Optional[SNPObject]: A new `SNPObject` with the renamed chromosome format if `inplace=False`. 
+            Optional[SNPObject]: A new `SNPObject` with the renamed chromosome format if `inplace=False`.
             If `inplace=True`, modifies `self` in place and returns None.
         """
         # Standardize input format: convert `to_replace` and `value` to a dictionary if needed
@@ -1505,30 +1505,30 @@ class SNPObject:
             return snpobj
 
     def rename_missings(
-        self, 
-        before: Union[int, float, str] = -1, 
-        after: Union[int, float, str] = '.', 
+        self,
+        before: Union[int, float, str] = -1,
+        after: Union[int, float, str] = '.',
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
         Replace missing values in the `genotypes` attribute.
 
-        This method identifies missing values in 'genotypes' and replaces them with a specified 
+        This method identifies missing values in 'genotypes' and replaces them with a specified
         value. By default, it replaces occurrences of `-1` (often used to signify missing data) with `'.'`.
 
         Args:
-            before (int, float, or str, default=-1): 
+            before (int, float, or str, default=-1):
                 The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
-            after (int, float, or str, default='.'): 
+            after (int, float, or str, default='.'):
                 The value that will replace `before`. Default is '.'.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the applied 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the applied
                 replacements. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with the renamed missing values if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with the renamed missing values if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Rename missing values in the `genotypes` attribute based on inplace flag
@@ -1541,20 +1541,20 @@ class SNPObject:
             return snpobj
 
     def get_common_variants_intersection(
-        self, 
-        snpobj: 'SNPObject', 
+        self,
+        snpobj: 'SNPObject',
         index_by: str = 'pos'
     ) -> Tuple[List[str], np.ndarray, np.ndarray]:
         """
-        Identify common variants between `self` and the `snpobj` instance based on the specified `index_by` criterion, 
+        Identify common variants between `self` and the `snpobj` instance based on the specified `index_by` criterion,
         which may match based on chromosome and position (`variants_chrom`, `variants_pos`), ID (`variants_id`), or both.
 
         This method returns the identifiers of common variants and their corresponding indices in both objects.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-            index_by (str, default='pos'): 
+            index_by (str, default='pos'):
                 Criteria for matching variants. Options:
                 - `'pos'`: Matches by chromosome and position (`variants_chrom`, `variants_pos`), e.g., 'chr1-12345'.
                 - `'id'`: Matches by variant ID alone (`variants_id`), e.g., 'rs123'.
@@ -1594,20 +1594,20 @@ class SNPObject:
         return list(common_ids), np.array(query_idx), np.array(reference_idx)
 
     def get_common_markers_intersection(
-        self, 
+        self,
         snpobj: 'SNPObject'
     ) -> Tuple[List[str], np.ndarray, np.ndarray]:
         """
-        Identify common markers between between `self` and the `snpobj` instance. Common markers are identified 
-        based on matching chromosome (`variants_chrom`), position (`variants_pos`), reference (`variants_ref`), 
+        Identify common markers between between `self` and the `snpobj` instance. Common markers are identified
+        based on matching chromosome (`variants_chrom`), position (`variants_pos`), reference (`variants_ref`),
         and alternate (`variants_alt`) alleles.
 
         This method returns the identifiers of common markers and their corresponding indices in both objects.
-        
+
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-        
+
         Returns:
             Tuple containing:
             - list of str: A list of common variant identifiers (as strings).
@@ -1616,11 +1616,11 @@ class SNPObject:
         """
         # Generate unique identifiers based on chrom, pos, ref, and alt alleles
         query_identifiers = [
-            f"{chrom}-{pos}-{ref}-{alt}" for chrom, pos, ref, alt in 
+            f"{chrom}-{pos}-{ref}-{alt}" for chrom, pos, ref, alt in
             zip(self['variants_chrom'], self['variants_pos'], self['variants_ref'], self['variants_alt'])
         ]
         reference_identifiers = [
-            f"{chrom}-{pos}-{ref}-{alt}" for chrom, pos, ref, alt in 
+            f"{chrom}-{pos}-{ref}-{alt}" for chrom, pos, ref, alt in
             zip(snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_ref'], snpobj['variants_alt'])
         ]
 
@@ -1634,36 +1634,36 @@ class SNPObject:
         return list(common_ids), np.array(query_idx), np.array(reference_idx)
 
     def subset_to_common_variants(
-        self, 
-        snpobj: 'SNPObject', 
-        index_by: str = 'pos', 
+        self,
+        snpobj: 'SNPObject',
+        index_by: str = 'pos',
         common_variants_intersection: Optional[Tuple[np.ndarray, np.ndarray]] = None,
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
-        Subset `self` to include only the common variants with a reference `snpobj` based on 
-        the specified `index_by` criterion, which may match based on chromosome and position 
+        Subset `self` to include only the common variants with a reference `snpobj` based on
+        the specified `index_by` criterion, which may match based on chromosome and position
         (`variants_chrom`, `variants_pos`), ID (`variants_id`), or both.
-        
+
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-            index_by (str, default='pos'): 
+            index_by (str, default='pos'):
                 Criteria for matching variants. Options:
                 - `'pos'`: Matches by chromosome and position (`variants_chrom`, `variants_pos`), e.g., 'chr1-12345'.
                 - `'id'`: Matches by variant ID alone (`variants_id`), e.g., 'rs123'.
                 - `'pos+id'`: Matches by chromosome, position, and ID (`variants_chrom`, `variants_pos`, `variants_id`), e.g., 'chr1-12345-rs123'.
                 Default is 'pos'.
-            common_variants_intersection (Tuple[np.ndarray, np.ndarray], optional): 
-                Precomputed indices of common variants between `self` and `snpobj`. If None, intersection is 
+            common_variants_intersection (Tuple[np.ndarray, np.ndarray], optional):
+                Precomputed indices of common variants between `self` and `snpobj`. If None, intersection is
                 computed within the function.
-            inplace (bool, default=False): 
+            inplace (bool, default=False):
                 If True, modifies `self` in place. If False, returns a new `SNPObject` with the common variants
                 subsetted. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with the common variants subsetted if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with the common variants subsetted if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Get indices of common variants if not provided
@@ -1676,29 +1676,29 @@ class SNPObject:
         return self.filter_variants(indexes=query_idx, include=True, inplace=inplace)
 
     def subset_to_common_markers(
-        self, 
-        snpobj: 'SNPObject', 
+        self,
+        snpobj: 'SNPObject',
         common_markers_intersection: Optional[Tuple[np.ndarray, np.ndarray]] = None,
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
-        Subset `self` to include only the common markers with a reference `snpobj`. Common markers are identified 
-        based on matching chromosome (`variants_chrom`), position (`variants_pos`), reference (`variants_ref`), 
+        Subset `self` to include only the common markers with a reference `snpobj`. Common markers are identified
+        based on matching chromosome (`variants_chrom`), position (`variants_pos`), reference (`variants_ref`),
         and alternate (`variants_alt`) alleles.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-            common_markers_intersection (tuple of arrays, optional): 
-                Precomputed indices of common markers between `self` and `snpobj`. If None, intersection is 
+            common_markers_intersection (tuple of arrays, optional):
+                Precomputed indices of common markers between `self` and `snpobj`. If None, intersection is
                 computed within the function.
-            inplace (bool, default=False): 
+            inplace (bool, default=False):
                 If True, modifies `self` in place. If False, returns a new `SNPObject` with the common markers
                 subsetted. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with the common markers subsetted if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with the common markers subsetted if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Get indices of common markers if not provided
@@ -1711,31 +1711,31 @@ class SNPObject:
         return self.filter_variants(indexes=query_idx, include=True, inplace=inplace)
 
     def merge(
-            self, 
-            snpobj: 'SNPObject', 
-            force_samples: bool = False, 
-            prefix: str = '2', 
+            self,
+            snpobj: 'SNPObject',
+            force_samples: bool = False,
+            prefix: str = '2',
             inplace: bool = False
         ) -> Optional['SNPObject']:
         """
         Merge `self` with `snpobj` along the sample axis.
 
-        This method expects both SNPObjects to contain the same set of SNPs in the same order, 
-        then combines their genotype (`genotypes`) and LAI (`calldata_lai`) arrays by 
+        This method expects both SNPObjects to contain the same set of SNPs in the same order,
+        then combines their genotype (`genotypes`) and LAI (`calldata_lai`) arrays by
         concatenating the sample dimension. Samples from `snpobj` are appended to those in `self`.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The SNPObject to merge samples with.
-            force_samples (bool, default=False): 
-                If True, duplicate sample names are resolved by prepending the `prefix` to duplicate sample names in 
+            force_samples (bool, default=False):
+                If True, duplicate sample names are resolved by prepending the `prefix` to duplicate sample names in
                 `snpobj`. Otherwise, merging fails when duplicate sample names are found. Default is False.
-            prefix (str, default='2'): 
-                A string prepended to duplicate sample names in `snpobj` when `force_samples=True`. 
-                Duplicates are renamed from `<sample_name>` to `<prefix>:<sample_name>`. For instance, 
+            prefix (str, default='2'):
+                A string prepended to duplicate sample names in `snpobj` when `force_samples=True`.
+                Duplicates are renamed from `<sample_name>` to `<prefix>:<sample_name>`. For instance,
                 if `prefix='2'` and there is a conflict with a sample called "sample_1", it becomes "2:sample_1".
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the merged samples. 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the merged samples.
                 Default is False.
 
         Returns:
@@ -1868,26 +1868,26 @@ class SNPObject:
             calldata_gp=calldata_gp,
             ancestry_map=self.ancestry_map
         )
-    
+
     def concat(
         self,
-        snpobj: 'SNPObject', 
+        snpobj: 'SNPObject',
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
         Concatenate self with snpobj along the SNP axis.
 
-        This method expects both SNPObjects to contain the same set of samples in the same order, 
-        and that the chromosome(s) in snpobj follow (i.e. have higher numeric identifiers than) 
+        This method expects both SNPObjects to contain the same set of samples in the same order,
+        and that the chromosome(s) in snpobj follow (i.e. have higher numeric identifiers than)
         those in self.
 
         Args:
             snpobj (SNPObject):
                 The SNPObject to concatenate SNPs with.
             inplace (bool, default=False):
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the concatenated SNPs. 
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the concatenated SNPs.
                 Default is False.
-        
+
         Returns:
             Optional[SNPObject]: A new SNPObject containing the concatenated SNP data.
         """
@@ -1979,7 +1979,7 @@ class SNPObject:
             calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=0)
         else:
             calldata_gp = None
-        
+
         if inplace:
             self.genotypes = genotypes
             self.calldata_lai = calldata_lai
@@ -1988,7 +1988,7 @@ class SNPObject:
             for attr in attributes:
                 self[attr] = merged_attrs[attr]
             return self
-        
+
         # Create and return a new SNPObject containing the concatenated SNPs
         return SNPObject(
             genotypes=genotypes,
@@ -2025,17 +2025,17 @@ class SNPObject:
 
     def remove_strand_ambiguous_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
-        A strand-ambiguous variant has reference (`variants_ref`) and alternate (`variants_alt`) alleles 
-        in the pairs A/T, T/A, C/G, or G/C, where both alleles are complementary and thus indistinguishable 
+        A strand-ambiguous variant has reference (`variants_ref`) and alternate (`variants_alt`) alleles
+        in the pairs A/T, T/A, C/G, or G/C, where both alleles are complementary and thus indistinguishable
         in terms of strand orientation.
 
         Args:
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with the
                 strand-ambiguous variants removed. Default is False.
 
         Returns:
-            Optional[SNPObject]: A new `SNPObject` with non-ambiguous variants only if `inplace=False`. 
+            Optional[SNPObject]: A new `SNPObject` with non-ambiguous variants only if `inplace=False`.
             If `inplace=True`, modifies `self` in place and returns None.
         """
         # Identify strand-ambiguous SNPs using vectorized comparisons
@@ -2066,16 +2066,16 @@ class SNPObject:
         return self.filter_variants(indexes=non_ambiguous_idx, include=True, inplace=inplace)
 
     def correct_flipped_variants(
-        self, 
-        snpobj: 'SNPObject', 
-        check_complement: bool = True, 
-        index_by: str = 'pos', 
+        self,
+        snpobj: 'SNPObject',
+        check_complement: bool = True,
+        index_by: str = 'pos',
         common_variants_intersection: Optional[Tuple[np.ndarray, np.ndarray]] = None,
         log_stats: bool = True,
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
-        Correct flipped variants between between `self` and a reference `snpobj`, where reference (`variants_ref`) 
+        Correct flipped variants between between `self` and a reference `snpobj`, where reference (`variants_ref`)
         and alternate (`variants_alt`) alleles are swapped.
 
         Flip Detection Based on `check_complement`:
@@ -2091,34 +2091,34 @@ class SNPObject:
 
         Note: Variants where `self.variants_ref == self.variants_alt` are ignored as they are ambiguous.
 
-        Correction Process: 
+        Correction Process:
         - Swaps `variants_ref` and `variants_alt` alleles in `self` to align with `snpobj`.
         - Flips `genotypes` values (0 becomes 1, and 1 becomes 0) to match the updated allele configuration.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-            check_complement (bool, default=True): 
+            check_complement (bool, default=True):
                 If True, also checks for complementary base pairs (A/T, T/A, C/G, and G/C) when identifying swapped variants.
                 Default is True.
-            index_by (str, default='pos'): 
+            index_by (str, default='pos'):
                 Criteria for matching variants. Options:
                 - `'pos'`: Matches by chromosome and position (`variants_chrom`, `variants_pos`), e.g., 'chr1-12345'.
                 - `'id'`: Matches by variant ID alone (`variants_id`), e.g., 'rs123'.
                 - `'pos+id'`: Matches by chromosome, position, and ID (`variants_chrom`, `variants_pos`, `variants_id`), e.g., 'chr1-12345-rs123'.
                 Default is 'pos'.
-            common_variants_intersection (tuple of arrays, optional): 
-                Precomputed indices of common variants between `self` and `snpobj`. If None, intersection is 
+            common_variants_intersection (tuple of arrays, optional):
+                Precomputed indices of common variants between `self` and `snpobj`. If None, intersection is
                 computed within the function.
-            log_stats (bool, default=True): 
+            log_stats (bool, default=True):
                 If True, logs statistical information about matching and ambiguous alleles. Default is True.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with corrected 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with corrected
                 flips. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with corrected flips if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with corrected flips if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Define complement mappings for nucleotides
@@ -2188,35 +2188,35 @@ class SNPObject:
             return self if not inplace else None
 
     def remove_mismatching_variants(
-        self, 
-        snpobj: 'SNPObject', 
-        index_by: str = 'pos', 
+        self,
+        snpobj: 'SNPObject',
+        index_by: str = 'pos',
         common_variants_intersection: Optional[Tuple[np.ndarray, np.ndarray]] = None,
         inplace: bool = False
     ) -> Optional['SNPObject']:
         """
-        Remove variants from `self`, where reference (`variants_ref`) and/or alternate (`variants_alt`) alleles 
+        Remove variants from `self`, where reference (`variants_ref`) and/or alternate (`variants_alt`) alleles
         do not match with a reference `snpobj`.
 
         Args:
-            snpobj (SNPObject): 
+            snpobj (SNPObject):
                 The reference SNPObject to compare against.
-            index_by (str, default='pos'): 
+            index_by (str, default='pos'):
                 Criteria for matching variants. Options:
                 - `'pos'`: Matches by chromosome and position (`variants_chrom`, `variants_pos`), e.g., 'chr1-12345'.
                 - `'id'`: Matches by variant ID alone (`variants_id`), e.g., 'rs123'.
                 - `'pos+id'`: Matches by chromosome, position, and ID (`variants_chrom`, `variants_pos`, `variants_id`), e.g., 'chr1-12345-rs123'.
                 Default is 'pos'.
-            common_variants_intersection (tuple of arrays, optional): 
+            common_variants_intersection (tuple of arrays, optional):
                 Precomputed indices of common variants between `self` and the reference `snpobj`.
                 If None, the intersection is computed within the function.
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` without 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` without
                 mismatching variants. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` without mismatching variants if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` without mismatching variants if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Get common variant indices if not provided
@@ -2242,17 +2242,17 @@ class SNPObject:
 
     def shuffle_variants(self, inplace: bool = False) -> Optional['SNPObject']:
         """
-        Randomly shuffle the positions of variants in the SNPObject, ensuring that all associated 
+        Randomly shuffle the positions of variants in the SNPObject, ensuring that all associated
         data (e.g., `genotypes` and variant-specific attributes) remain aligned.
 
         Args:
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with
                 shuffled variants. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` without shuffled variant positions if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` without shuffled variant positions if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         # Generate a random permutation index for shuffling variant positions
@@ -2284,13 +2284,13 @@ class SNPObject:
         Replace empty strings `''` with missing values `'.'` in attributes of `self`.
 
         Args:
-            inplace (bool, default=False): 
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with empty 
+            inplace (bool, default=False):
+                If True, modifies `self` in place. If False, returns a new `SNPObject` with empty
                 strings `''` replaced by missing values `'.'`. Default is False.
 
         Returns:
-            Optional[SNPObject]: 
-                A new `SNPObject` with empty strings replaced if `inplace=False`. 
+            Optional[SNPObject]:
+                A new `SNPObject` with empty strings replaced if `inplace=False`.
                 If `inplace=True`, modifies `self` in place and returns None.
         """
         if inplace:
@@ -2341,7 +2341,7 @@ class SNPObject:
         laiobj: Optional['LocalAncestryObject'] = None
     ) -> 'LocalAncestryObject':
         """
-        Aggregate the `calldata_lai` attribute into genomic windows within a 
+        Aggregate the `calldata_lai` attribute into genomic windows within a
         `snputils.ancestry.genobj.LocalAncestryObject`.
 
         Window definitions are resolved in this precedence order: fixed window
@@ -2350,28 +2350,28 @@ class SNPObject:
         existing window metadata from ``laiobj``.
 
         Args:
-            window_size (int, optional): 
-                Number of SNPs in each window if defining fixed-size windows. If the total number of 
-                SNPs in a chromosome is not evenly divisible by the window size, the last window on that 
+            window_size (int, optional):
+                Number of SNPs in each window if defining fixed-size windows. If the total number of
+                SNPs in a chromosome is not evenly divisible by the window size, the last window on that
                 chromosome will include all remaining SNPs and therefore be larger than the specified size.
-            physical_pos (array of shape (n_windows, 2), optional): 
+            physical_pos (array of shape (n_windows, 2), optional):
                 A 2D array containing the start and end physical positions for each window.
-            chromosomes (array of shape (n_windows,), optional): 
+            chromosomes (array of shape (n_windows,), optional):
                 An array with chromosome numbers corresponding to each genomic window.
-            window_sizes (array of shape (n_windows,), optional): 
+            window_sizes (array of shape (n_windows,), optional):
                 An array specifying the number of SNPs in each genomic window.
-            laiobj (LocalAncestryObject, optional): 
+            laiobj (LocalAncestryObject, optional):
                 A reference `LocalAncestryObject` from which to copy existing window definitions.
 
         Returns:
-            LocalAncestryObject: 
+            LocalAncestryObject:
                 A LocalAncestryObject containing window-level ancestry data.
         """
         from snputils.ancestry.genobj.local import LocalAncestryObject
 
         if window_size is None and physical_pos is None and laiobj is None:
             raise ValueError("One of `window_size`, `physical_pos`, or `laiobj` must be provided.")
-        
+
         # Fixed window size
         if window_size is not None:
             physical_pos = []   # Boundaries [start, end] of each window
@@ -2384,7 +2384,7 @@ class SNPObject:
                 pos_chrom = self.variants_pos[mask_chrom]
                 # Number of SNPs for this chromosome
                 n_snps_chrom = pos_chrom.size
-                
+
                 # Initialize the start of the first window with the position of the first SNP
                 current_start = self.variants_pos[0]
 
@@ -2398,17 +2398,17 @@ class SNPObject:
                     chromosomes.append(chrom)
                     window_sizes.append(window_size)
                     current_start = self.variants_pos[(i+1) * window_size]
-                
+
                 # Build the last window
                 current_end = self.variants_pos[-1]
                 physical_pos.append([current_start, current_end])
                 chromosomes.append(chrom)
                 window_sizes.append(n_snps_chrom - ((n_full_windows - 1) * window_size))
-                
+
             physical_pos = np.array(physical_pos)
             chromosomes = np.array(chromosomes)
             window_sizes = np.array(window_sizes)
-        
+
         # Custom start and end positions
         elif physical_pos is not None:
             # Check if there is exactly one chromosome
@@ -2471,21 +2471,22 @@ class SNPObject:
         """
         Save the data stored in `self` to a specified file.
 
-        The format of the saved file is determined by the file extension provided in the `file` 
-        argument. 
-        
+        The format of the saved file is determined by the file extension provided in the `file`
+        argument.
+
         Supported formats:
-        
+
         - `.bed`: Binary PED (Plink) format.
         - `.bgen`: BGEN genotype probability format.
         - `.pgen`: Plink2 binary genotype format.
         - `.vcf`: Variant Call Format.
+        - `.bcf`: Binary Call Format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file where the data will be saved. The extension of the file determines the save format. 
-                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.pkl`.
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. The extension of the file determines the save format.
+                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.bcf`, `.pkl`.
         """
         ext = Path(file).suffix.lower()
         if ext == '.bed':
@@ -2496,6 +2497,8 @@ class SNPObject:
             self.save_pgen(file)
         elif ext == '.vcf':
             self.save_vcf(file)
+        elif ext == '.bcf':
+            self.save_bcf(file)
         elif ext == '.pkl':
             self.save_pickle(file)
         else:
@@ -2513,8 +2516,8 @@ class SNPObject:
         Save the data stored in `self` to a `.bed` file.
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file where the data will be saved. It should end with `.bed`. 
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.bed`.
                 If the provided path does not have this extension, it will be appended.
             rename_missing_values (bool, optional):
                 If True, renames potential missing values in `genotypes` before writing.
@@ -2539,8 +2542,8 @@ class SNPObject:
         Save the data stored in `self` to a `.pgen` file.
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file where the data will be saved. It should end with `.pgen`. 
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.pgen`.
                 If the provided path does not have this extension, it will be appended.
         """
         from snputils.snp.io.write.pgen import PGENWriter
@@ -2565,12 +2568,28 @@ class SNPObject:
         Save the data stored in `self` to a `.vcf` file.
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file where the data will be saved. It should end with `.vcf`. 
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.vcf`.
                 If the provided path does not have this extension, it will be appended.
         """
         from snputils.snp.io.write.vcf import VCFWriter
         writer = VCFWriter(snpobj=self, filename=file)
+        writer.write()
+
+    def save_bcf(self, file: Union[str, Path], phased: bool = False) -> None:
+        """
+        Save the data stored in `self` to a `.bcf` file.
+
+        Args:
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.bcf`.
+                If the provided path does not have this extension, it will be appended.
+            phased (bool, optional):
+                If True, genotype data is written in phased format.
+                If False, genotype data is written in unphased format. Defaults to False.
+        """
+        from snputils.snp.io.write.bcf import BCFWriter
+        writer = BCFWriter(snpobj=self, filename=file, phased=phased)
         writer.write()
 
     def save_pickle(self, file: Union[str, Path]) -> None:
@@ -2578,8 +2597,8 @@ class SNPObject:
         Save `self` in serialized form to a `.pkl` file.
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file where the data will be saved. It should end with `.pkl`. 
+            file (str or pathlib.Path):
+                Path to the file where the data will be saved. It should end with `.pkl`.
                 If the provided path does not have this extension, it will be appended.
         """
         import pickle
@@ -2593,17 +2612,17 @@ class SNPObject:
         and replace it with the corresponding value.
 
         Args:
-            val (str, int, or float): 
+            val (str, int, or float):
                 The value to be matched and potentially replaced.
-            dictionary (Dict): 
+            dictionary (Dict):
                 A dictionary containing keys and values for matching and replacement.
                 The keys should match the data type of `val`.
-            regex (bool): 
+            regex (bool):
                 If True, interprets keys in `dictionary` as regular expressions.
                 Default is True.
 
         Returns:
-            str, int, or float: 
+            str, int, or float:
                 The replacement value from `dictionary` if a match is found; otherwise, the original `val`.
         """
         if regex:
@@ -2626,13 +2645,13 @@ class SNPObject:
         Extracts the chromosome number from the given chromosome string.
 
         Args:
-            chrom_string (str): 
+            chrom_string (str):
                 The chromosome identifier.
 
         Returns:
-            int or str: 
-                The numeric representation of the chromosome if detected. 
-                Returns 10001 for 'X' or 'chrX', 10002 for 'Y' or 'chrY', 
+            int or str:
+                The numeric representation of the chromosome if detected.
+                Returns 10001 for 'X' or 'chrX', 10002 for 'Y' or 'chrY',
                 and the original `chrom_string` if unrecognized.
         """
         if chrom_string.isdigit():
@@ -2653,7 +2672,7 @@ class SNPObject:
         """
         Perform sanity checks to ensure LAI and ancestry map consistency.
 
-        This method checks that all unique ancestries in the LAI data are represented 
+        This method checks that all unique ancestries in the LAI data are represented
         in the ancestry map if it is provided.
         """
         if self.__calldata_lai is not None and self.__ancestry_map is not None:

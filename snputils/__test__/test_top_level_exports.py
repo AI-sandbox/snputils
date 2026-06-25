@@ -2,6 +2,9 @@ import snputils as su
 
 
 def test_top_level_analysis_exports(tmp_path):
+    assert su.BCFReader.__name__ == "BCFReader"
+    assert su.BCFWriter.__name__ == "BCFWriter"
+    assert su.read_bcf.__name__ == "read_bcf"
     assert su.PCA().backend == "sklearn"
     assert su.mdPCA.__name__ == "mdPCA"
     assert su.maasMDS.__name__ == "maasMDS"

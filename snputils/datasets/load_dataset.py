@@ -74,12 +74,19 @@ def _download_chromosome_files(
         path = output_dir / chrom_resource.filename(chrom)
         if path.exists() and path.stat().st_size > 0:
             paths.append(path)
-            continue
-        if not download:
+        elif not download:
             raise ValueError(
                 f"Dataset file {path} is missing. Enable downloading or provide local genotype_sources."
             )
-        paths.append(_download_dataset_file(chrom_resource.url(chrom), path, verbose=verbose))
+        else:
+            paths.append(_download_dataset_file(chrom_resource.url(chrom), path, verbose=verbose))
+
+        index_filename = chrom_resource.index_filename(chrom)
+        index_url = chrom_resource.index_url(chrom)
+        if index_filename is not None and index_url is not None:
+            index_path = output_dir / index_filename
+            if download and (not index_path.exists() or index_path.stat().st_size == 0):
+                _download_dataset_file(index_url, index_path, verbose=verbose)
     return paths
 
 
@@ -149,6 +156,8 @@ def load_dataset(
         variants_ids (List[str]): List of variant IDs to load.
         sample_ids (List[str]): List of sample IDs to load.
         resource (str): Optional dataset genotype resource name. If omitted, the dataset default is used.
+            For ``name="1kgp"``, available resources include ``"grch38_biallelic"``, ``"phase3"``,
+            and ``"high_coverage_2022"``.
         data_home (Path | str): Optional dataset cache directory root.
         output_dir (Path | str): Optional directory for downloaded source files and intermediate files.
         genotype_sources: Optional local paths or URLs to use instead of a registry chromosome resource.
@@ -174,12 +183,13 @@ def load_dataset(
 
     Returns:
         SNPObject: SNPObject containing the loaded dataset. If population metadata is used, population labels
-        are stored in ``sample_fid`` and sex labels are stored in ``sample_sex``.
+        are stored in ``sample_fid``, sex labels are stored in ``sample_sex``, and the aligned metadata table
+        is attached as ``sample_metadata``.
     """
     dataset = get_dataset_spec(name)
     chrom_resource = dataset.genotype_resource(resource)
     if chromosomes is None and genotype_sources is None:
-        chromosomes = list(chrom_resource.chromosomes)
+        chromosomes = list(chrom_resource.default_chromosome_list)
     chromosomes = [] if chromosomes is None else _normalize_chromosomes(chromosomes, resource=chrom_resource)
 
     data_path = Path(output_dir) if output_dir is not None else _dataset_data_dir(dataset.name, data_home)
@@ -189,14 +199,19 @@ def load_dataset(
     selected_samples = None
     selected_metadata_url = metadata_url or panel_url
     if populations is not None or metadata_path is not None or metadata_url is not None or panel_path is not None or panel_url is not None:
-        metadata_spec = dataset.population_metadata
+        metadata_spec = chrom_resource.population_metadata or dataset.population_metadata
         if selected_metadata_url is None and metadata_spec is not None:
             selected_metadata_url = metadata_spec.url
         selected_metadata_path = metadata_path or panel_path
         if selected_metadata_path is None and selected_metadata_url is not None:
-            selected_metadata_path = data_path / Path(selected_metadata_url).name
+            selected_metadata_path = (
+                data_path / metadata_spec.default_filename
+                if metadata_spec is not None
+                else data_path / Path(selected_metadata_url).name
+            )
         population_metadata = _load_population_metadata(
             dataset.name,
+            resource=chrom_resource.name,
             metadata_path=selected_metadata_path,
             metadata_url=selected_metadata_url,
             verbose=verbose,
@@ -241,8 +256,7 @@ def load_dataset(
             snv_only=snv_only,
         )
         if sample_metadata is not None and snpobj.samples is not None:
-            snpobj.sample_fid = _population_labels_for_samples(sample_metadata, snpobj.samples)
-            snpobj.sample_sex = _sex_labels_for_samples(sample_metadata, snpobj.samples)
+            _attach_sample_metadata(snpobj, sample_metadata)
         return snpobj
 
     if variants_ids is not None:
@@ -287,8 +301,7 @@ def load_dataset(
     log.info("Reading PGEN fileset...")
     snpobj = PGENReader(data_path / dataset.name).read(**read_kwargs)
     if sample_metadata is not None and snpobj.samples is not None:
-        snpobj.sample_fid = _population_labels_for_samples(sample_metadata, snpobj.samples)
-        snpobj.sample_sex = _sex_labels_for_samples(sample_metadata, snpobj.samples)
+        _attach_sample_metadata(snpobj, sample_metadata)
 
     if variants_ids is not None:
         variants_ids_txt.close()
@@ -500,6 +513,7 @@ def _read_population_metadata_file(
 def _load_population_metadata(
     name: str = "1kgp",
     *,
+    resource: Optional[str] = None,
     data_home: Optional[Union[Path, str]] = None,
     metadata_path: Optional[Union[Path, str]] = None,
     metadata_url: Optional[str] = None,
@@ -514,7 +528,12 @@ def _load_population_metadata(
     with older 1000 Genomes-specific call sites.
     """
     spec = get_dataset_spec(name)
-    metadata_spec = spec.population_metadata
+    chrom_resource = spec.genotype_resource(resource) if resource is not None else None
+    metadata_spec = (
+        chrom_resource.population_metadata
+        if chrom_resource is not None and chrom_resource.population_metadata is not None
+        else spec.population_metadata
+    )
     path = metadata_path or panel_path
     if metadata_spec is None and metadata_url is None and panel_url is None and path is None:
         raise NotImplementedError(f"Population metadata for dataset {name!r} is not implemented.")
@@ -617,6 +636,22 @@ def _sex_labels_for_samples(
         return [default] * len(samples)
     aligned = _metadata_for_samples(metadata, samples, sample_col=sample_col)
     return aligned[sex_col].fillna(default).astype(str).tolist()
+
+
+def _attach_sample_metadata(snpobj: SNPObject, metadata: pd.DataFrame) -> None:
+    """
+    Attach population labels, sex labels, and the aligned sample metadata table to a loaded SNPObject.
+    """
+    if snpobj.samples is None:
+        return
+    aligned = _metadata_for_samples(metadata, snpobj.samples)
+    snpobj.sample_fid = aligned["population"].astype(str).tolist()
+    snpobj.sample_sex = (
+        aligned["sex"].fillna("U").astype(str).tolist()
+        if "sex" in aligned.columns
+        else ["U"] * len(aligned)
+    )
+    snpobj.sample_metadata = aligned.reset_index(drop=True)
 
 
 # Keep the generated module-style path usable even when package-level

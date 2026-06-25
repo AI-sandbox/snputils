@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from snputils.snp.io.read import SNPReader, VCFReader, read_vcf
+from snputils.snp.io.read import BCFReader, SNPReader, VCFReader, read_vcf
 
 
 def test_auto_reader(data_path, snpobj_pgen):
@@ -16,6 +16,12 @@ def test_auto_reader_uses_default_vcf_backend(data_path):
     reader = SNPReader(data_path + "/vcf/subset.vcf")
 
     assert isinstance(reader, VCFReader)
+
+
+def test_auto_reader_detects_bcf(data_path):
+    reader = SNPReader(data_path + "/bcf/subset.bcf")
+
+    assert isinstance(reader, BCFReader)
 
 
 def test_read_vcf_uses_default_backend(tmp_path: Path):

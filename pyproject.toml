@@ -95,5 +95,6 @@ passenv =
 extras =
     tests
     torch
+    grg
 commands = python -m pytest -vv --color=yes --cov=snputils --cov-report=xml
 """

@@ -13,6 +13,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "PGENReader": (".io", "PGENReader"),
     "VCFReader": (".io", "VCFReader"),
     "BEDWriter": (".io", "BEDWriter"),
+    "BCFWriter": (".io", "BCFWriter"),
     "BGENWriter": (".io", "BGENWriter"),
     "PGENWriter": (".io", "PGENWriter"),
     "VCFWriter": (".io", "VCFWriter"),

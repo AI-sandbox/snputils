@@ -1,9 +1,9 @@
 from .read import SNPReader, BEDReader, BCFReader, BGENReader, PGENReader, VCFReader, read_snp, read_bcf, read_bed, read_bgen, read_pgen, read_vcf, read_grg
-from .write import BEDWriter, BGENWriter, PGENWriter, VCFWriter, vcf_to_grg, vcf_to_igd
+from .write import BEDWriter, BGENWriter, PGENWriter, VCFWriter, BCFWriter, vcf_to_grg, vcf_to_igd
 
 __all__ = ['read_snp', 'read_bcf', 'read_bed', 'read_bgen', 'read_pgen', 'read_vcf', 'read_grg',
            'SNPReader', 'BEDReader', 'BCFReader', 'BGENReader', 'PGENReader', 'VCFReader',
-           'BEDWriter', 'BGENWriter', 'PGENWriter', 'VCFWriter', 'GRGWriter', 'GRGReader',
+           'BEDWriter', 'BGENWriter', 'PGENWriter', 'VCFWriter', 'BCFWriter', 'GRGWriter', 'GRGReader',
            'vcf_to_grg', 'vcf_to_igd']
 
 

@@ -109,6 +109,11 @@ Objects, readers, writers, and convenience functions for genotype data.
 ```
 
 ```{eval-rst}
+.. autoclass:: snputils.BCFWriter
+   :members:
+```
+
+```{eval-rst}
 .. autoclass:: snputils.GRGWriter
    :members:
 ```

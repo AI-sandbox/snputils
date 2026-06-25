@@ -2573,6 +2573,22 @@ class SNPObject:
         writer = VCFWriter(snpobj=self, filename=file)
         writer.write()
 
+    def save_bcf(self, file: Union[str, Path], phased: bool = False) -> None:
+        """
+        Save the data stored in `self` to a `.bcf` file.
+
+        Args:
+            file (str or pathlib.Path): 
+                Path to the file where the data will be saved. It should end with `.bcf`. 
+                If the provided path does not have this extension, it will be appended.
+            phased (bool, optional):
+                If True, genotype data is written in phased format.
+                If False, genotype data is written in unphased format. Defaults to False.
+        """
+        from snputils.snp.io.write.bcf import BCFWriter
+        writer = BCFWriter(snpobj=self, filename=file, phased=phased)
+        writer.write()
+
     def save_pickle(self, file: Union[str, Path]) -> None:
         """
         Save `self` in serialized form to a `.pkl` file.

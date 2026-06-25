@@ -15,7 +15,7 @@ snpobj = su.read_snp("cohort.vcf.gz")   # auto-detects format
 | PLINK BED (`.bed/.bim/.fam`) | `read_bed` / `BEDReader` | `BEDWriter` |
 | PLINK2 PGEN (`.pgen/.psam/.pvar`) | `read_pgen` / `PGENReader` | `PGENWriter` |
 | VCF / VCF.gz | `read_vcf` / `VCFReader` | `VCFWriter` |
-| BCF (`.bcf`) | `read_bcf` / `BCFReader` | — |
+| BCF (`.bcf`) | `read_bcf` / `BCFReader` | `BCFWriter` |
 | BGEN | `read_bgen` / `BGENReader` | `BGENWriter` |
 | GRG | `read_grg` / `GRGReader` | `GRGWriter` |
 
@@ -61,11 +61,14 @@ bcf = BCFReader("cohort.bcf").read(
 **Writer options:**
 
 ```python
-from snputils import BEDWriter, PGENWriter, VCFWriter, BGENWriter
+from snputils import BEDWriter, PGENWriter, VCFWriter, BCFWriter, BGENWriter
 
 BEDWriter(snpobj, "out.bed").write()
 PGENWriter(snpobj, "out.pgen").write(vzs=True)              # compressed .pvar.zst
 VCFWriter(snpobj, "out.vcf", phased=True).write(
+    chrom_partition=True                                     # one file per chromosome
+)
+BCFWriter(snpobj, "out.bcf", phased=True).write(
     chrom_partition=True                                     # one file per chromosome
 )
 BGENWriter(snpobj, "out.bgen").write(

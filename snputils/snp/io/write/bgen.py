@@ -84,8 +84,9 @@ class BGENWriter:
                 alleles = self._alleles(variants_ref[idx], variants_alt[idx])
                 variant_probabilities = self._trim_trailing_nan_probability_columns(variant_probabilities)
                 variant_phased = self._variant_phased(variant_probabilities, alleles, phased)
-                ploidy = self._infer_ploidy(variant_probabilities, alleles, variant_phased)
-                self._validate_probability_width(variant_probabilities, alleles, variant_phased)
+                ploidy = self._common_case_ploidy(variant_probabilities, alleles, variant_phased)
+                if ploidy is None:
+                    ploidy = self._infer_ploidy(variant_probabilities, alleles, variant_phased)
                 bfile.add_variant(
                     varid=str(variants_id[idx]),
                     rsid=str(variants_id[idx]),
@@ -167,6 +168,12 @@ class BGENWriter:
             return bool(phased)
 
         n_alleles = len(alleles)
+        if n_alleles == 2:
+            if probabilities.shape[1] == 3:
+                return False
+            if probabilities.shape[1] == 4 and not np.isnan(probabilities[:, 3]).all():
+                return True
+
         counts = BGENWriter._nonmissing_probability_counts(probabilities)
         counts = counts[counts > 0]
         if counts.size == 0:
@@ -192,6 +199,28 @@ class BGENWriter:
         if probabilities.shape[1] == 4 and n_alleles == 2 and not np.isnan(probabilities[:, 3]).all():
             return True
         return False
+
+    @staticmethod
+    def _common_case_ploidy(
+        probabilities: np.ndarray,
+        alleles: list[str],
+        phased: bool,
+    ) -> Optional[int]:
+        if len(alleles) != 2:
+            return None
+
+        expected_width = 4 if phased else 3
+        if probabilities.shape[1] != expected_width:
+            return None
+
+        finite = np.isfinite(probabilities)
+        if finite.all():
+            return 2
+
+        row_missing = ~finite.any(axis=1)
+        if np.all(row_missing | finite.all(axis=1)):
+            return 2
+        return None
 
     @staticmethod
     def _trim_trailing_nan_probability_columns(probabilities: np.ndarray) -> np.ndarray:
@@ -282,10 +311,6 @@ class BGENWriter:
         if np.all(ploidies == ploidies[0]):
             return int(ploidies[0])
         return ploidies
-
-    @staticmethod
-    def _validate_probability_width(probabilities: np.ndarray, alleles: list[str], phased: bool) -> None:
-        BGENWriter._nonmissing_probability_counts(probabilities)
 
     @staticmethod
     def _alleles(ref: Union[str, bytes], alt: Union[str, bytes]) -> list[str]:

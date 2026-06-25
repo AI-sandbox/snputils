@@ -45,6 +45,16 @@ def test_bgen_reader_sample_and_variant_selection(data_path):
     assert snpobj.calldata_gp.shape[2] in (3, 4)
 
 
+def test_bgen_reader_preserves_requested_variant_order(data_path):
+    reader = BGENReader(data_path + "/bgen/subset.bgen")
+    forward = reader.read(fields=["ID", "POS"], variant_idxs=[0, 2])
+    reverse = reader.read(fields=["ID", "POS"], variant_idxs=[2, 0])
+
+    assert reverse.calldata_gp is None
+    np.testing.assert_array_equal(reverse.variants_pos, forward.variants_pos[::-1])
+    np.testing.assert_array_equal(reverse.variants_id, forward.variants_id[::-1])
+
+
 def test_bgen_reader_does_not_hard_call(data_path):
     with pytest.raises(NotImplementedError, match="does not hard-call"):
         BGENReader(data_path + "/bgen/subset.bgen").read(fields=["GT"])

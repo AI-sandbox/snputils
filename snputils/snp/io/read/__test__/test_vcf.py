@@ -212,3 +212,29 @@ def test_vcf_reader_iter_read_yields_sampleless_metadata_only_chunks(tmp_path: P
         np.array(["A", "C", "G"]),
     )
     assert all(chunk.genotypes.size == 0 for chunk in chunks)
+
+
+def test_vcf_reader_reads_variant_annotations_without_samples_or_genotypes_by_default(tmp_path: Path):
+    vcf_path = tmp_path / "annotations_only.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##INFO=<ID=ANN,Number=.,Type=String,Description=\"Annotation\">\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "1\t100\trs1\tA\tG\t.\tPASS\tANN=missense_variant\n"
+        "1\t200\trs2\tC\tT\t.\tPASS\tANN=synonymous_variant\n"
+    )
+
+    snpobj = VCFReader(vcf_path).read()
+
+    np.testing.assert_array_equal(snpobj.samples, np.array([]))
+    assert snpobj.genotypes.shape == (2, 0, 2)
+    assert snpobj.genotypes.size == 0
+    assert snpobj.n_samples == 0
+    assert snpobj.n_snps == 2
+    np.testing.assert_array_equal(snpobj.variants_chrom.astype(str), np.array(["1", "1"]))
+    np.testing.assert_array_equal(snpobj.variants_pos, np.array([100, 200]))
+    np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs1", "rs2"]))
+    np.testing.assert_array_equal(
+        snpobj.variants_info.astype(str),
+        np.array(["ANN=missense_variant", "ANN=synonymous_variant"]),
+    )

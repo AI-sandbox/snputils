@@ -10,6 +10,61 @@ from snputils.snp.genobj import SNPObject
 log = logging.getLogger(__name__)
 
 
+def _normalize_info_values(
+    data: SNPObject,
+    variants_info: Optional[Sequence[str]],
+) -> np.ndarray:
+    if variants_info is not None:
+        values = np.asarray(variants_info, dtype=object)
+    elif data.variants_info is not None and len(np.asarray(data.variants_info)) == data.n_snps:
+        values = np.asarray(data.variants_info, dtype=object)
+    else:
+        values = np.full(data.n_snps, ".", dtype=object)
+
+    if values.shape[0] != data.n_snps:
+        raise ValueError("variants_info length must match the number of variants.")
+
+    return np.asarray(
+        ["." if value is None or str(value) == "" else str(value) for value in values],
+        dtype=object,
+    )
+
+
+def _normalize_qual_values(data: SNPObject) -> np.ndarray:
+    values = data.variants_qual
+    if values is None or len(np.asarray(values)) != data.n_snps:
+        return np.full(data.n_snps, ".", dtype=object)
+    out = []
+    for value in np.asarray(values, dtype=object):
+        if value is None:
+            out.append(".")
+        elif isinstance(value, (float, np.floating)) and np.isnan(value):
+            out.append(".")
+        else:
+            text = str(value)
+            out.append("." if text == "" else text)
+    return np.asarray(out, dtype=object)
+
+
+def _normalize_filter_values(data: SNPObject) -> np.ndarray:
+    values = data.variants_filter_pass
+    if values is None or len(np.asarray(values)) != data.n_snps:
+        return np.full(data.n_snps, "PASS", dtype=object)
+
+    arr = np.asarray(values)
+    if arr.dtype == np.bool_:
+        return np.where(arr, "PASS", ".").astype(object)
+
+    out = []
+    for value in np.asarray(values, dtype=object):
+        if value is None:
+            out.append(".")
+        else:
+            text = str(value)
+            out.append("." if text == "" else text)
+    return np.asarray(out, dtype=object)
+
+
 class VCFWriter:
     """
     A writer class for exporting SNP data from a `snputils.snp.genobj.SNPObject` 
@@ -110,8 +165,19 @@ class VCFWriter:
             data_chrom: The SNPObject instance containing the data for the chromosome.
             variants_info: Optional per-variant INFO strings; length must match variant count.
         """
-        npy3 = data_chrom.genotypes
-        n_windows, n_samples, _ = npy3.shape
+        genotypes = np.asarray(data_chrom.genotypes)
+        n_windows = data_chrom.n_snps
+        n_samples = data_chrom.n_samples
+        has_samples = n_samples > 0
+        if has_samples:
+            if genotypes.ndim != 3 or genotypes.shape[2] != 2:
+                raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
+        elif genotypes.ndim not in (2, 3):
+            raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
+
+        info_values = _normalize_info_values(data_chrom, variants_info)
+        qual_values = _normalize_qual_values(data_chrom)
+        filter_values = _normalize_filter_values(data_chrom)
 
         if chrom == "All":
             file = self.__filename.with_suffix(self.__file_extension)
@@ -123,12 +189,15 @@ class VCFWriter:
         else:
             out = open(file, "w")
         out.write("##fileformat=VCFv4.1\n")
-        out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n')
-        if variants_info is not None and any("END=" in s for s in variants_info):
+        if has_samples:
+            out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n')
+        if any("END=" in s for s in info_values):
             out.write('##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the segment">\n')
         for c in set(data_chrom.variants_chrom):
             out.write(f"##contig=<ID={c}>\n")
-        cols = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT"] + list(data_chrom.samples)
+        cols = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO"]
+        if has_samples:
+            cols += ["FORMAT"] + list(data_chrom.samples)
         out.write("\t".join(cols) + "\n")
 
         sep = "|" if self.__phased else "/"
@@ -138,15 +207,23 @@ class VCFWriter:
             vid = data_chrom.variants_id[i]
             ref = data_chrom.variants_ref[i]
             alt = data_chrom.variants_alt[i]
-            info_str = variants_info[i] if variants_info is not None else "."
-            row = npy3[i]
-            genotypes = [
-                f"{row[s,0]}{sep}{row[s,1]}"
-                for s in range(n_samples)
+            fields = [
+                str(chrom_val),
+                str(pos),
+                str(vid),
+                str(ref),
+                str(alt),
+                str(qual_values[i]),
+                str(filter_values[i]),
+                str(info_values[i]),
             ]
-            line = "\t".join([
-                str(chrom_val), str(pos), vid, ref, alt,
-                ".", "PASS", info_str, "GT", *genotypes
-            ])
+            if has_samples:
+                row = genotypes[i]
+                sample_fields = [
+                    f"{row[s,0]}{sep}{row[s,1]}"
+                    for s in range(n_samples)
+                ]
+                fields.extend(["GT", *sample_fields])
+            line = "\t".join(fields)
             out.write(line + "\n")
         out.close()

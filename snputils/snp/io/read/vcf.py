@@ -222,6 +222,12 @@ def _normalize_vcf_filter_pass(values: np.ndarray) -> np.ndarray:
     return np.fromiter((_vcf_value_to_str(value) == "PASS" for value in arr), dtype=bool, count=arr.size)
 
 
+def _empty_genotype_array(n_variants: int, n_samples: int, sum_strands: bool) -> np.ndarray:
+    if sum_strands:
+        return np.empty((n_variants, n_samples), dtype=np.int8)
+    return np.empty((n_variants, n_samples, 2), dtype=np.int8)
+
+
 def _parse_vcf_qual_raw(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
     lengths = ends - starts
     if starts.size == 0:
@@ -263,8 +269,16 @@ def _resolve_fast_vcf_columns(
     exclude_fields: Optional[list[str]],
     samples: Optional[Sequence[Union[str, int]]],
 ) -> tuple[list[str], list[str], np.ndarray]:
+    first_sample_idx = next(
+        (i for i, col in enumerate(names) if col not in ['#CHROM', 'CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']),
+        len(names),
+    )
+    has_sample_columns = first_sample_idx < len(names)
+
     if fields is None:
         fields = list(_FAST_DEFAULT_FIELDS)
+        if not has_sample_columns and "INFO" in names:
+            fields.append("INFO")
         if exclude_fields is not None:
             excluded = set(exclude_fields)
             if "CHROM" in excluded or "#CHROM" in excluded:
@@ -277,10 +291,6 @@ def _resolve_fast_vcf_columns(
         fields,
         exclude_fields,
         None if samples is None else list(samples),
-    )
-    first_sample_idx = next(
-        (i for i, col in enumerate(names) if col not in ['#CHROM', 'CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT']),
-        len(names),
     )
     all_samples = names[first_sample_idx:]
     sample_to_idx = {sample: idx for idx, sample in enumerate(all_samples)}
@@ -648,9 +658,8 @@ class VCFReader(SNPBaseReader):
                 body_starts, body_ends = _vcf_body_bounds(raw)
                 n_records = int(body_starts.size)
                 if n_records == 0:
-                    gt_shape = (0, len(sample_columns)) if sum_strands else (0, len(sample_columns), 2)
                     return self._make_snpobject(
-                        genotypes=np.empty(gt_shape, dtype=np.int8) if sample_columns else np.array([], dtype=np.int8),
+                        genotypes=_empty_genotype_array(0, len(sample_columns), sum_strands),
                         sample_columns=sample_columns,
                         arrays={},
                     )
@@ -665,12 +674,7 @@ class VCFReader(SNPBaseReader):
                     raise ValueError("The memory-mapped fast path requires GT-only sample fields.")
 
                 n_selected = len(sample_columns)
-                if n_selected == 0:
-                    genotypes = np.array([], dtype=np.int8)
-                elif sum_strands:
-                    genotypes = np.empty((n_records, n_selected), dtype=np.int8)
-                else:
-                    genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
+                genotypes = _empty_genotype_array(n_records, n_selected, sum_strands)
 
                 arrays: dict[str, np.ndarray] = {}
                 dynamic_arrays: dict[str, Optional[np.ndarray]] = {}
@@ -949,7 +953,9 @@ class VCFReader(SNPBaseReader):
                     break
 
         if n_selected == 0:
-            genotypes = np.array([], dtype=np.int8)
+            first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
+            n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
+            genotypes = _empty_genotype_array(n_records, 0, sum_strands)
         elif gt_chunks:
             genotypes = np.concatenate(gt_chunks, axis=0)
         elif sum_strands:
@@ -1125,7 +1131,9 @@ class VCFReader(SNPBaseReader):
                     break
 
         if n_selected == 0:
-            genotypes = np.array([], dtype=np.int8)
+            first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
+            n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
+            genotypes = _empty_genotype_array(n_records, 0, sum_strands)
         elif gt_chunks:
             genotypes = np.concatenate(gt_chunks, axis=0)
         elif sum_strands:
@@ -1161,12 +1169,7 @@ class VCFReader(SNPBaseReader):
         include = set(field_columns)
         n_records = _count_vcf_records(self._filename, region_filter=region_filter, separator="\t")
         n_selected = len(sample_columns)
-        if n_selected == 0:
-            genotypes = np.array([], dtype=np.int8)
-        elif sum_strands:
-            genotypes = np.empty((n_records, n_selected), dtype=np.int8)
-        else:
-            genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
+        genotypes = _empty_genotype_array(n_records, n_selected, sum_strands)
 
         if n_records == 0:
             return self._make_snpobject(
@@ -1428,12 +1431,7 @@ class VCFReader(SNPBaseReader):
             arrays[field] = np.empty(n_records, dtype=np.int32 if field == "POS" else object)
 
         n_selected = len(sample_columns)
-        if n_selected == 0:
-            genotypes = np.array([], dtype=np.int8)
-        elif sum_strands:
-            genotypes = np.empty((n_records, n_selected), dtype=np.int8)
-        else:
-            genotypes = np.empty((n_records, n_selected, 2), dtype=np.int8)
+        genotypes = _empty_genotype_array(n_records, n_selected, sum_strands)
 
         filter_columns = []
         if region_filter is not None:
@@ -1903,7 +1901,7 @@ class VCFReaderPolars(SNPBaseReader):
         sum_strands: bool,
     ) -> np.ndarray:
         if not sample_columns:
-            return np.array([])
+            return _empty_genotype_array(vcf.height, 0, sum_strands)
 
         # Process maternal strand:
         # Extract the first position from genotype, e.g., 0|1 -> 0.

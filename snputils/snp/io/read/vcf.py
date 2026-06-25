@@ -603,6 +603,10 @@ class VCFReader(SNPBaseReader):
     By default it reads the core variant fields ``CHROM``, ``POS``, ``ID``,
     ``REF``, ``ALT``, ``QUAL``, and ``FILTER``; pass ``fields="*"`` or include
     ``"INFO"`` when the INFO column is required.
+
+    Supports reading sampleless (annotation-only) VCF files. In this case, 
+    the returned `SNPObject` will have an empty `genotypes` array with a 
+    variant axis (shape `(n_snps, 0)` or `(n_snps, 0, 2)`).
     """
 
     def __init__(self, filename: Union[str, pathlib.Path]):

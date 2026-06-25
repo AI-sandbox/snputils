@@ -15,12 +15,14 @@ snpobj = su.read_snp("cohort.vcf.gz")   # auto-detects format
 | PLINK BED (`.bed/.bim/.fam`) | `read_bed` / `BEDReader` | `BEDWriter` |
 | PLINK2 PGEN (`.pgen/.psam/.pvar`) | `read_pgen` / `PGENReader` | `PGENWriter` |
 | VCF / VCF.gz | `read_vcf` / `VCFReader` | `VCFWriter` |
+| BCF (`.bcf`) | `read_bcf` / `BCFReader` | — |
 | BGEN | `read_bgen` / `BGENReader` | `BGENWriter` |
 | GRG | `read_grg` / `GRGReader` | `GRGWriter` |
 
 ```python
-from snputils import read_bed, read_bgen, read_pgen, read_vcf
+from snputils import read_bcf, read_bed, read_bgen, read_pgen, read_vcf
 
+bcf  = read_bcf("cohort.bcf")
 bed  = read_bed("cohort.bed")
 bgen = read_bgen("cohort.bgen")
 pgen = read_pgen("cohort.pgen")
@@ -30,7 +32,7 @@ vcf  = read_vcf("cohort.vcf.gz")
 **Reader options:**
 
 ```python
-from snputils import PGENReader, BGENReader, VCFReader
+from snputils import BCFReader, PGENReader, BGENReader, VCFReader
 
 # PGEN: read only specific samples or chromosomes
 pgen = PGENReader("cohort.pgen").read(
@@ -44,7 +46,15 @@ vcf = VCFReader("cohort.vcf.gz").read(
     region="chr1:1000000-2000000",
     sum_strands=False,
 )
+
+# BCF: read only specific samples and variants
+bcf = BCFReader("cohort.bcf").read(
+    sample_ids=["sample1", "sample2"],
+    variant_ids=["chr1:1000000", "rs123"],
+)
 ```
+
+**BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 
 **BGEN notes:** Genotype probabilities are stored on `SNPObject.calldata_gp` with shape `(n_snps, n_samples, n_probs)`. Hard calls are not inferred during reads. Mixed-width BGEN records are padded with `NaN` columns.
 

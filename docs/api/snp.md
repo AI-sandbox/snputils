@@ -27,6 +27,11 @@ Objects, readers, writers, and convenience functions for genotype data.
 ```
 
 ```{eval-rst}
+.. autoclass:: snputils.BCFReader
+   :members:
+```
+
+```{eval-rst}
 .. autoclass:: snputils.BGENReader
    :members:
 ```
@@ -59,6 +64,10 @@ Objects, readers, writers, and convenience functions for genotype data.
 
 ```{eval-rst}
 .. autofunction:: snputils.read_bed
+```
+
+```{eval-rst}
+.. autofunction:: snputils.read_bcf
 ```
 
 ```{eval-rst}

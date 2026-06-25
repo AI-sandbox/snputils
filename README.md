@@ -30,7 +30,7 @@ Developed in collaboration between Stanford University's Department of Biomedica
 ```python
 import snputils as su
 
-snp = su.read_snp("cohort.vcf.gz")                    # VCF, BGEN, BED, PGEN
+snp = su.read_snp("cohort.vcf.gz")                    # VCF, BCF, BGEN, BED, PGEN
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                               # convert to PGEN
 
@@ -75,6 +75,7 @@ Optional extras:
 **snputils** provides high-level dispatchers like `read_snp`, `read_lai`, `read_admixture`, `read_pheno`, and `read_ibd`, plus explicit reader and writer classes when you need finer control.
 
 - **VCF**: Support for `.vcf` and `.vcf.gz` files
+- **BCF**: Read support for `.bcf` files
 - **BGEN**: Support for `.bgen` files
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets

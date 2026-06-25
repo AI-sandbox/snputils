@@ -1,18 +1,21 @@
 from .auto import SNPReader
 from .bed import BEDReader
+from .bcf import BCFReader
 from .bgen import BGENReader
 from .pgen import PGENReader
 from .vcf import VCFReader
-from .functional import read_bed, read_bgen, read_grg, read_pgen, read_snp, read_vcf
+from .functional import read_bcf, read_bed, read_bgen, read_grg, read_pgen, read_snp, read_vcf
 
 __all__ = [
     "SNPReader",
     "BEDReader",
+    "BCFReader",
     "BGENReader",
     "PGENReader",
     "VCFReader",
     "GRGReader",
     "read_snp",
+    "read_bcf",
     "read_bed",
     "read_bgen",
     "read_pgen",

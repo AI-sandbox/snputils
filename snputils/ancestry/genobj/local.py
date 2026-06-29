@@ -875,6 +875,9 @@ class LocalAncestryObject(AncestryObject):
 
         By default this also writes matching `.pvar` and `.psam` sidecars so a
         subsequent `.lanc` read can reconstruct SNP coordinates and sample IDs.
+
+        Note: ``ancestry_map`` is not part of the ``.lanc`` format and will not
+        be preserved.
         """
         from snputils.ancestry.io.local.write import LANCWriter
 

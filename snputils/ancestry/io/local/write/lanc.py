@@ -14,10 +14,11 @@ class LANCWriter(LAIBaseWriter):
     """
     Writer for admix-kit `.lanc` local ancestry files.
 
-    The `.lanc` stream stores SNP-level diploid local ancestry only. To make
-    snputils round-trips self-contained, the writer emits matching `.psam` and
-    `.pvar` sidecars by default when enough metadata is available on the
-    `LocalAncestryObject`.
+    The ``.lanc`` stream itself stores only the SNP-level diploid LAI matrix.
+    By default the writer also emits ``.psam`` and ``.pvar`` sidecar files
+    alongside it, preserving sample IDs, chromosomes, and positions for
+    round-trip fidelity.  Ancestry labels (``ancestry_map``) are not part of
+    the ``.lanc`` format nor of any sidecar and are therefore not preserved.
     """
 
     def __init__(

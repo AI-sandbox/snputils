@@ -816,6 +816,7 @@ class LocalAncestryObject(AncestryObject):
 
         - `.msp`: Text-based MSP format.
         - `.msp.tsv`: Text-based MSP format with TSV extension.
+        - `.lanc`: admix-kit local ancestry change-point format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
         FLARE `.anc.vcf` / `.anc.vcf.gz` output requires genotype data and
@@ -824,13 +825,15 @@ class LocalAncestryObject(AncestryObject):
         Args:
             file (str or pathlib.Path): 
                 Path to the file where the data will be saved. The extension of the file determines the save format. 
-                Supported extensions: `.msp`, `.msp.tsv`, `.pkl`.
+                Supported extensions: `.msp`, `.msp.tsv`, `.lanc`, `.pkl`.
         """
         path = Path(file)
         suffixes = [suffix.lower() for suffix in path.suffixes]
 
         if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
             self.save_msp(file)
+        elif suffixes[-1] == '.lanc':
+            self.save_lanc(file)
         elif suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
             raise ValueError(
                 "FLARE output requires genotype data. Use "
@@ -841,7 +844,7 @@ class LocalAncestryObject(AncestryObject):
         else:
             raise ValueError(
                 f"Unsupported file extension: {suffixes[-1]}"
-                "Supported extensions are: .msp, .msp.tsv, .pkl. "
+                "Supported extensions are: .msp, .msp.tsv, .lanc, .pkl. "
                 "Use save_flare(...) for .anc.vcf/.anc.vcf.gz output."
             )
 
@@ -858,6 +861,18 @@ class LocalAncestryObject(AncestryObject):
         from snputils.ancestry.io.local.write import MSPWriter
 
         MSPWriter(self, file).write()
+
+    def save_lanc(self, file: Union[str, Path]) -> None:
+        """
+        Save the data stored in `self` to an admix-kit `.lanc` file.
+
+        `.lanc` stores only SNP-level diploid ancestry states. Sample IDs,
+        ancestry labels, chromosomes, and positions are not encoded in the
+        output file.
+        """
+        from snputils.ancestry.io.local.write import LANCWriter
+
+        LANCWriter(self, file).write()
 
     def save_flare(
         self,

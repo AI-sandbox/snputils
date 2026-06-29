@@ -82,16 +82,34 @@ BGENWriter(snpobj, "out.bgen").write(
 |--------|------|-------|
 | MSP (`.msp`, `.msp.tsv`) | `read_msp` / `MSPReader` | `MSPWriter` |
 | FLARE (`.anc.vcf[.gz]`) | `read_flare` / `FLAREReader` | `FLAREWriter` |
+| admix-kit LANC (`.lanc`) | `read_lanc` / `LANCReader` | `LANCWriter` |
 
 ```python
 msp   = su.read_lai("local_ancestry.msp")
 flare = su.read_lai("flare.out.anc.vcf.gz")
+lanc  = su.read_lai("cohort.lanc")
 
 su.MSPWriter(laiobj, "out.msp").write()
+su.LANCWriter(laiobj, "out.lanc").write()
 
 # FLARE VCF output requires matching SNP data (GT + variant metadata)
 su.FLAREWriter(laiobj, "out.anc.vcf", snpobj=snpobj).write()
 ```
+
+`.lanc` stores only the SNP-level diploid ancestry matrix in run-length encoded form. By default, `read_lanc(...)` and `read_lai(...)` look for sibling `.pvar`/`.pvar.zst` and `.psam` files with the same prefix as the `.lanc` file and use them to reconstruct SNP coordinates and sample IDs.
+
+```python
+lanc = su.read_lanc("cohort.lanc")  # expects cohort.pvar[.zst] and cohort.psam
+
+# or point at sidecars elsewhere
+lanc = su.read_lanc(
+    "cohort.lanc",
+    pvar_file="metadata/chr1.pvar",
+    psam_file="metadata/cohort.psam",
+)
+```
+
+If the sidecars are missing, snputils warns and falls back to loading the LAI calls alone: it generates sample and haplotype IDs (`sample_0`, `sample_0.0`, ...), sets `window_sizes` to one SNP per row, and leaves unavailable coordinate metadata unset.
 
 ## Global Ancestry / ADMIXTURE
 

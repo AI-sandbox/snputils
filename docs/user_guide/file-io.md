@@ -96,7 +96,17 @@ su.LANCWriter(laiobj, "out.lanc").write()
 su.FLAREWriter(laiobj, "out.anc.vcf", snpobj=snpobj).write()
 ```
 
-`.lanc` stores only the SNP-level diploid ancestry matrix in run-length encoded form. By default, `read_lanc(...)` and `read_lai(...)` look for sibling `.pvar`/`.pvar.zst` and `.psam` files with the same prefix as the `.lanc` file and use them to reconstruct SNP coordinates and sample IDs.
+`.lanc` stores only the SNP-level diploid ancestry matrix in run-length encoded form. To keep snputils round-trips self-contained, `LANCWriter(...).write()` and `LocalAncestryObject.save_lanc(...)` write sibling `.pvar` and `.psam` sidecars by default when the necessary metadata is present on the object.
+
+```python
+su.LANCWriter(laiobj, "out.lanc").write()           # also writes out.pvar + out.psam
+laiobj.save_lanc("out.lanc")                        # same default behavior
+
+# sparse stream only
+su.LANCWriter(laiobj, "out.lanc", write_sidecars=False).write()
+```
+
+On reads, `read_lanc(...)` and `read_lai(...)` look for sibling `.pvar`/`.pvar.zst` and `.psam` files with the same prefix as the `.lanc` file and use them to reconstruct SNP coordinates and sample IDs.
 
 ```python
 lanc = su.read_lanc("cohort.lanc")  # expects cohort.pvar[.zst] and cohort.psam

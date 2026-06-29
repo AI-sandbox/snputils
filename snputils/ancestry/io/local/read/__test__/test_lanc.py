@@ -211,16 +211,63 @@ def test_lanc_writer_roundtrips_matrix_and_save_dispatch(tmp_path: Path):
 
     direct_path = tmp_path / "direct.lanc"
     LANCWriter(laiobj, direct_path).write()
-    with pytest.warns(UserWarning, match="Please specify pvar_file, psam_file"):
-        roundtrip_direct = read_lanc(direct_path)
+    assert direct_path.with_suffix(".psam").exists()
+    assert direct_path.with_suffix(".pvar").exists()
+    roundtrip_direct = read_lanc(direct_path)
     np.testing.assert_array_equal(roundtrip_direct.lai, lai_matrix)
-    assert roundtrip_direct.samples == ["sample_0", "sample_1"]
+    assert roundtrip_direct.samples == ["S1", "S2"]
+    np.testing.assert_array_equal(roundtrip_direct.chromosomes, laiobj.chromosomes)
+    np.testing.assert_array_equal(roundtrip_direct.physical_pos, laiobj.physical_pos)
 
     save_path = tmp_path / "saved"
     laiobj.save(save_path.with_suffix(".lanc"))
-    with pytest.warns(UserWarning, match="Please specify pvar_file, psam_file"):
-        roundtrip_saved = read_lanc(save_path.with_suffix(".lanc"))
+    assert save_path.with_suffix(".psam").exists()
+    assert save_path.with_suffix(".pvar").exists()
+    roundtrip_saved = read_lanc(save_path.with_suffix(".lanc"))
     np.testing.assert_array_equal(roundtrip_saved.lai, lai_matrix)
+    assert roundtrip_saved.samples == ["S1", "S2"]
+    np.testing.assert_array_equal(roundtrip_saved.chromosomes, laiobj.chromosomes)
+    np.testing.assert_array_equal(roundtrip_saved.physical_pos, laiobj.physical_pos)
+
+
+def test_lanc_writer_can_disable_sidecars(tmp_path: Path):
+    laiobj = LocalAncestryObject(
+        haplotypes=["S1.0", "S1.1"],
+        samples=["S1"],
+        chromosomes=np.array(["1"], dtype=object),
+        physical_pos=np.array([[42, 42]], dtype=np.int64),
+        lai=np.array([[0, 1]], dtype=np.uint8),
+    )
+
+    out_path = tmp_path / "nosidecars.lanc"
+    LANCWriter(laiobj, out_path, write_sidecars=False).write()
+
+    assert out_path.exists()
+    assert not out_path.with_suffix(".psam").exists()
+    assert not out_path.with_suffix(".pvar").exists()
+    with pytest.warns(UserWarning, match="Please specify pvar_file, psam_file"):
+        loaded = read_lanc(out_path)
+    assert loaded.samples == ["sample_0"]
+
+
+def test_lanc_writer_warns_and_skips_pvar_when_coordinates_missing(tmp_path: Path):
+    laiobj = LocalAncestryObject(
+        haplotypes=["S1.0", "S1.1"],
+        samples=["S1"],
+        lai=np.array([[0, 1], [1, 1]], dtype=np.uint8),
+    )
+
+    out_path = tmp_path / "partial.lanc"
+    with pytest.warns(UserWarning, match="could not emit a .pvar sidecar"):
+        LANCWriter(laiobj, out_path).write()
+
+    assert out_path.exists()
+    assert out_path.with_suffix(".psam").exists()
+    assert not out_path.with_suffix(".pvar").exists()
+    with pytest.warns(UserWarning, match="Please specify pvar_file"):
+        loaded = read_lanc(out_path)
+    assert loaded.samples == ["S1"]
+    assert loaded.physical_pos is None
 
 
 def test_lanc_writer_rejects_multi_digit_ancestry_codes(tmp_path: Path):

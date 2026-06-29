@@ -862,17 +862,29 @@ class LocalAncestryObject(AncestryObject):
 
         MSPWriter(self, file).write()
 
-    def save_lanc(self, file: Union[str, Path]) -> None:
+    def save_lanc(
+        self,
+        file: Union[str, Path],
+        *,
+        write_sidecars: bool = True,
+        pvar_file: Optional[Union[str, Path]] = None,
+        psam_file: Optional[Union[str, Path]] = None,
+    ) -> None:
         """
         Save the data stored in `self` to an admix-kit `.lanc` file.
 
-        `.lanc` stores only SNP-level diploid ancestry states. Sample IDs,
-        ancestry labels, chromosomes, and positions are not encoded in the
-        output file.
+        By default this also writes matching `.pvar` and `.psam` sidecars so a
+        subsequent `.lanc` read can reconstruct SNP coordinates and sample IDs.
         """
         from snputils.ancestry.io.local.write import LANCWriter
 
-        LANCWriter(self, file).write()
+        LANCWriter(
+            self,
+            file,
+            write_sidecars=write_sidecars,
+            pvar_file=pvar_file,
+            psam_file=psam_file,
+        ).write()
 
     def save_flare(
         self,

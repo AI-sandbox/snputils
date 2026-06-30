@@ -11,6 +11,11 @@ def create_benchmark_test(
     memory_profile,
     sum_strands=True,
     ref_reader_func=None,
+    assert_allclose=False,
+    rtol=1e-7,
+    atol=0.0,
+    equal_nan=False,
+    verify=True,
 ):
     timed_reader = functools.partial(reader_func, file_path, sum_strands=sum_strands)
 
@@ -56,9 +61,20 @@ def create_benchmark_test(
         )
         benchmark.extra_info['max_memory_mb'] = None
 
-    # Verify output (not timed)
-    if ref_array is None:
-        if ref_reader_func is None:
-            raise ValueError("ref_reader_func is required when ref_array is None.")
-        ref_array = ref_reader_func(file_path, sum_strands=sum_strands)
-    assert np.array_equal(result, ref_array), f"Output does not match reference for {name}"
+    if verify:
+        # Verify output (not timed)
+        if ref_array is None:
+            if ref_reader_func is None:
+                raise ValueError("ref_reader_func is required when ref_array is None.")
+            ref_array = ref_reader_func(file_path, sum_strands=sum_strands)
+        if assert_allclose:
+            np.testing.assert_allclose(
+                result,
+                ref_array,
+                rtol=rtol,
+                atol=atol,
+                equal_nan=equal_nan,
+                err_msg=f"Output does not match reference for {name}",
+            )
+        else:
+            assert np.array_equal(result, ref_array), f"Output does not match reference for {name}"

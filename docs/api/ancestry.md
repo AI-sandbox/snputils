@@ -27,6 +27,11 @@ Objects, readers, and writers for local and global ancestry data.
 ```
 
 ```{eval-rst}
+.. autoclass:: snputils.LANCReader
+   :members:
+```
+
+```{eval-rst}
 .. autoclass:: snputils.AdmixtureReader
    :members:
 ```
@@ -46,6 +51,10 @@ Objects, readers, and writers for local and global ancestry data.
 ```
 
 ```{eval-rst}
+.. autofunction:: snputils.read_lanc
+```
+
+```{eval-rst}
 .. autofunction:: snputils.read_adm
 ```
 
@@ -62,6 +71,11 @@ Objects, readers, and writers for local and global ancestry data.
 
 ```{eval-rst}
 .. autoclass:: snputils.FLAREWriter
+   :members:
+```
+
+```{eval-rst}
+.. autoclass:: snputils.LANCWriter
    :members:
 ```
 

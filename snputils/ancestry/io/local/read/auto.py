@@ -19,6 +19,7 @@ class LAIReader:
         - `.msp`: Text-based MSP format.
         - `.msp.tsv`: Text-based MSP format with TSV extension.
         - `.anc.vcf` / `.anc.vcf.gz`: FLARE local ancestry VCF output.
+        - `.lanc`: admix-kit local ancestry change-point format.
 
         Args:
             file (str or pathlib.Path): 
@@ -30,12 +31,19 @@ class LAIReader:
         file = Path(file)
         suffixes = [suffix.lower() for suffix in file.suffixes]
         if not suffixes:
-            raise ValueError("The file must have an extension. Supported extensions are: .msp, .msp.tsv, .anc.vcf, .anc.vcf.gz.")
+            raise ValueError(
+                "The file must have an extension. Supported extensions are: "
+                ".msp, .msp.tsv, .anc.vcf, .anc.vcf.gz, .lanc."
+            )
 
         if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
             from snputils.ancestry.io.local.read.msp import MSPReader
 
             return MSPReader(file)
+        if suffixes[-1] == '.lanc':
+            from snputils.ancestry.io.local.read.lanc import LANCReader
+
+            return LANCReader(file)
         if suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
             if not _looks_like_flare_vcf(file):
                 raise ValueError(
@@ -48,7 +56,7 @@ class LAIReader:
         else:
             raise ValueError(
                 f"Unsupported file extension: {suffixes[-1]}. "
-                "Supported extensions are: .msp, .msp.tsv, .anc.vcf, .anc.vcf.gz."
+                "Supported extensions are: .msp, .msp.tsv, .anc.vcf, .anc.vcf.gz, .lanc."
             )
 
 

@@ -260,7 +260,7 @@ def _chunk_changepoints(cp_mask, window_size):
 class OnlineSimulator:
     """
     A refactored 'OnlineSimulator' for haplotype simulation with window-based SNP data.
-    -------------------------------------------------------------------------------
+
     Core Functionality:
       - Simulates admixed haplotypes.
       - Supports:
@@ -268,13 +268,16 @@ class OnlineSimulator:
          (b) lat/lon (converted to n-vectors) stored per window of SNPs.
 
     Example usage:
-    -------------
+
+    .. code-block:: python
+
         sim = OnlineSimulator(
             snp_data=my_snpobj,
             meta=metadata_df,
             genetic_map=genetic_map_df,  # optional
             ...
         )
+
         # Then to simulate:
         snps, labels_discrete, labels_continuous, changepoints = sim.simulate(batch_size=32)
     """

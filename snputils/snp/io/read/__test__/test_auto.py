@@ -34,4 +34,4 @@ def test_read_vcf_uses_default_backend(tmp_path: Path):
 
     snpobj = read_vcf(vcf_path)
 
-    assert snpobj.genotypes.shape == (1, 2, 2)
+    assert snpobj.genotypes.shape == (1, 2)

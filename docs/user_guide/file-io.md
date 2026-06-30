@@ -34,18 +34,19 @@ vcf  = read_vcf("cohort.vcf.gz")
 ```python
 from snputils import BCFReader, PGENReader, BGENReader, VCFReader
 
-# PGEN: read only specific samples or chromosomes
+# PGEN: read only specific samples or variants as dosages
 pgen = PGENReader("cohort.pgen").read(
-    samples=["sample1", "sample2"],
-    variants_chrom=["1", "2"],
-    sum_strands=False,
+    sample_ids=["sample1", "sample2"],
+    variant_ids=["rs1", "rs2"],
 )
 
-# VCF: read only phased GT, specific region
+# VCF: read a specific region as dosages
 vcf = VCFReader("cohort.vcf.gz").read(
     region="chr1:1000000-2000000",
-    sum_strands=False,
 )
+
+# Explicit phased reads can keep alleles separate.
+phased = VCFReader("phased.vcf.gz").read(sum_strands=False)
 
 # BCF: read only specific samples and variants
 bcf = BCFReader("cohort.bcf").read(
@@ -53,6 +54,12 @@ bcf = BCFReader("cohort.bcf").read(
     variant_ids=["chr1:1000000", "rs123"],
 )
 ```
+
+`sum_strands=True` is the default for genotype readers and returns one dosage
+per sample (`0`, `1`, `2`, or the reader's missing value). `sum_strands=False`
+returns separate allele columns only for data with phase information. Unphased
+VCF/BCF GT calls and PLINK BED/BIM/FAM hardcalls are rejected in that mode
+because their allele order is not meaningful.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

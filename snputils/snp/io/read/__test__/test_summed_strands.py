@@ -10,7 +10,7 @@ def test_vcf_summed_strands(snpobj_vcf, data_path):
 
 def test_bed_summed_strands(snpobj_bed, data_path):
     snpojb_bed_summed_strands = BEDReader(data_path + "/bed/subset").read(sum_strands=True)
-    assert np.array_equal(snpobj_bed.genotypes.sum(axis=2, dtype=np.int8), snpojb_bed_summed_strands.genotypes)
+    assert np.array_equal(snpobj_bed.genotypes, snpojb_bed_summed_strands.genotypes)
 
 
 def test_pgen_summed_strands(snpobj_pgen, data_path):

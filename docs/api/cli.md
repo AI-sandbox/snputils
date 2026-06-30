@@ -34,6 +34,9 @@ snputils pca \
     --plot pca.pdf
 ```
 
+PCA reads summed genotype dosages by default. Use `--separate-strands` only
+with phased genotype inputs when you want haplotypes kept separate.
+
 **mdPCA** — ancestry-specific embedding with optional plot:
 
 ```bash

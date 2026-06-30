@@ -26,7 +26,7 @@ class BEDReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = False,
+        sum_strands: bool = True,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -43,9 +43,9 @@ class BEDReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            sum_strands: If True, maternal and paternal strands are combined into a single `int8` array with values `{0, 1, 2`}. 
-                If False, strands are stored separately as an `int8` array with values `{0, 1}` for each strand. 
-                Note: With the pgenlib backend, `False` uses a temporary `int32` allele buffer.
+            sum_strands: If True, read genotype dosages in a single `int8`
+                array with values `{0, 1, 2}`. PLINK BED/BIM/FAM does not
+                store phase, so `False` is not supported.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -68,6 +68,11 @@ class BEDReader(SNPBaseReader):
         fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
+        if "GT" in fields and not sum_strands:
+            raise ValueError(
+                "PLINK BED/BIM/FAM does not store phase, so `sum_strands=False` is not supported. "
+                "Use `sum_strands=True` to load 0/1/2 genotype dosages."
+            )
         only_read_bed = fields == ["GT"] and variant_idxs is None and sample_idxs is None
 
         filename_noext = str(self.filename)
@@ -289,7 +294,7 @@ class BEDReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = False,
+        sum_strands: bool = True,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:

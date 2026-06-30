@@ -25,6 +25,7 @@ def test_bcf_auto_reader_and_function(data_path):
 
 def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        sum_strands=False,
         sample_ids=["HG00100", "HG00096"],
         variant_idxs=[0, 2],
     )
@@ -35,6 +36,7 @@ def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
 
 def test_bcf_reader_supports_region_filtering(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        sum_strands=False,
         region="22:10526445-10526445",
         sample_idxs=[0],
     )

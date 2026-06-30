@@ -468,7 +468,28 @@ def _resolve_variant_request(
     return n_records, None, [selected_by_row[row] for row in requested_variant_idxs if row in selected_by_row]
 
 
-def _decode_gt_array(data: bytes, offset: int, n_samples: int, n_vals: int, type_size: int) -> np.ndarray:
+def _raise_if_unphased_bcf_gt(raw: np.ndarray, decoded: np.ndarray) -> None:
+    if raw.shape[1] < 2:
+        return
+    second_allele_called = decoded[:, 1] >= 0
+    second_allele_phased = (raw[:, 1] & 1) != 0
+    if np.any(second_allele_called & ~second_allele_phased):
+        raise ValueError(
+            "Cannot read unphased BCF genotypes with `sum_strands=False`; "
+            "use `sum_strands=True` to load 0/1/2 genotype dosages."
+        )
+
+
+def _decode_gt_array(
+    data: bytes,
+    offset: int,
+    n_samples: int,
+    n_vals: int,
+    type_size: int,
+    *,
+    require_phase: bool = False,
+    phase_sample_idxs: Optional[np.ndarray] = None,
+) -> np.ndarray:
     if type_size not in _INT_UNSIGNED_DTYPES:
         raise ValueError(f"Unsupported GT integer width in BCF FORMAT/GT: {type_size}")
     if n_vals < 1:
@@ -486,6 +507,10 @@ def _decode_gt_array(data: bytes, offset: int, n_samples: int, n_vals: int, type
         return padded
     if n_vals != 2:
         raise ValueError("BCFReader currently supports haploid or diploid GT fields only.")
+    if require_phase:
+        phase_raw = raw if phase_sample_idxs is None else raw[phase_sample_idxs]
+        phase_decoded = decoded if phase_sample_idxs is None else decoded[phase_sample_idxs]
+        _raise_if_unphased_bcf_gt(phase_raw, phase_decoded)
     return decoded.astype(np.int8, copy=False)
 
 
@@ -694,6 +719,16 @@ def _batch_decode_gt(
         padded[:, :, 0] = decoded[:, :, 0].astype(np.int8, copy=False)
         selected = padded[:, sample_index_array, :]
     elif n_vals == 2:
+        if not sum_strands:
+            selected_raw = raw[:, sample_index_array, :]
+            selected_decoded = decoded[:, sample_index_array, :]
+            second_allele_called = selected_decoded[:, :, 1] >= 0
+            second_allele_phased = (selected_raw[:, :, 1] & 1) != 0
+            if np.any(second_allele_called & ~second_allele_phased):
+                raise ValueError(
+                    "Cannot read unphased BCF genotypes with `sum_strands=False`; "
+                    "use `sum_strands=True` to load 0/1/2 genotype dosages."
+                )
         selected = decoded[:, sample_index_array, :].astype(np.int8, copy=False)
     else:
         raise ValueError("BCFReader currently supports haploid or diploid GT fields only.")
@@ -750,7 +785,7 @@ class BCFReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         region: Optional[str] = None,
-        sum_strands: bool = False,
+        sum_strands: bool = True,
     ) -> SNPObject:
         """
         Read a BCF file into a SNPObject.
@@ -773,7 +808,8 @@ class BCFReader(SNPBaseReader):
                 ``"22:100000-200000"``.
             sum_strands: If True, sum the two diploid alleles per sample and
                 return dosages in ``genotypes``. If False, keep the two allele
-                columns separate.
+                columns separate; unphased GT calls are rejected because their
+                allele order is not meaningful.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant
@@ -886,7 +922,15 @@ class BCFReader(SNPBaseReader):
                     if cur_gt_layout is None:
                         raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
                     rel_off, nv, ts, _ = cur_gt_layout
-                    gt = _decode_gt_array(data, cur_indiv + rel_off, n_file_samples, nv, ts)
+                    gt = _decode_gt_array(
+                        data,
+                        cur_indiv + rel_off,
+                        n_file_samples,
+                        nv,
+                        ts,
+                        require_phase=not sum_strands,
+                        phase_sample_idxs=sample_index_array,
+                    )
                     gt = gt[sample_index_array]
                     if sum_strands:
                         genotypes[i] = gt.sum(axis=1, dtype=np.int8)
@@ -1292,7 +1336,15 @@ class BCFReader(SNPBaseReader):
                 values_nbytes = n_samples * n_vals * type_size
 
                 if key == "GT" and need_gt:
-                    gt = _decode_gt_array(data, values_offset, n_samples, n_vals, type_size)
+                    gt = _decode_gt_array(
+                        data,
+                        values_offset,
+                        n_samples,
+                        n_vals,
+                        type_size,
+                        require_phase=not sum_strands,
+                        phase_sample_idxs=sample_index_array,
+                    )
                     gt = gt[sample_index_array]
                     if sum_strands:
                         genotypes[out_idx] = gt.sum(axis=1, dtype=np.int8)

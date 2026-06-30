@@ -83,7 +83,15 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         dest="sum_strands",
         required=False,
         action="store_true",
+        default=True,
         help="Read diploid genotypes as per-individual summed strand counts.",
+    )
+    parser.add_argument(
+        "--separate-strands",
+        dest="sum_strands",
+        required=False,
+        action="store_false",
+        help="Read phased genotype alleles as separate strands.",
     )
     parser.add_argument(
         "--vcf-backend",

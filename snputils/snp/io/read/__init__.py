@@ -32,8 +32,7 @@ def __getattr__(name):
             if exc.name == "pygrgl":
                 raise ImportError(
                     "GRG support requires the optional dependency 'pygrgl'. "
-                    "Install pygrgl separately: "
-                    "https://github.com/aprilweilab/grgl#installing-from-pip"
+                    "Install it with: pip install 'snputils[grg]'"
                 ) from exc
             raise
         return GRGReader

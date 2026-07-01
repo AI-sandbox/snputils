@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from snputils import BGENReader, read_bgen, read_snp
+from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 
 
@@ -11,7 +12,7 @@ def test_bgen_reader_preserves_probabilities(snpobj_bgen, snpobj_vcf):
     assert snpobj_bgen.calldata_gp.shape[:2] == (100, snpobj_vcf.n_samples)
     assert snpobj_bgen.calldata_gp.shape[2] in (3, 4)
 
-    expected_dosage = snpobj_vcf.genotypes[:100].sum(axis=2, dtype=np.int16)
+    expected_dosage = sum_diploid_genotypes(snpobj_vcf.genotypes[:100], dtype=np.int16)
     np.testing.assert_allclose(snpobj_bgen.dosage(), expected_dosage, atol=1 / 255)
 
 

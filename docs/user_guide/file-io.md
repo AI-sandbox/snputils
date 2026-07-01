@@ -34,19 +34,19 @@ vcf  = read_vcf("cohort.vcf.gz")
 ```python
 from snputils import BCFReader, PGENReader, BGENReader, VCFReader
 
-# PGEN: read only specific samples or variants as dosages
+# PGEN: read specific samples/variants (phased by default)
 pgen = PGENReader("cohort.pgen").read(
     sample_ids=["sample1", "sample2"],
     variant_ids=["rs1", "rs2"],
 )
 
-# VCF: read a specific region as dosages
+# VCF: read a specific region (phased by default)
 vcf = VCFReader("cohort.vcf.gz").read(
     region="chr1:1000000-2000000",
 )
 
-# Explicit phased reads can keep alleles separate.
-phased = VCFReader("phased.vcf.gz").read(sum_strands=False)
+# Summed dosages can be requested explicitly.
+dosages = VCFReader("cohort.vcf.gz").read(sum_strands=True)
 
 # BCF: read only specific samples and variants
 bcf = BCFReader("cohort.bcf").read(
@@ -55,11 +55,13 @@ bcf = BCFReader("cohort.bcf").read(
 )
 ```
 
-`sum_strands=True` is the default for genotype readers and returns one dosage
-per sample (`0`, `1`, `2`, or the reader's missing value). `sum_strands=False`
-returns separate allele columns only for data with phase information. Unphased
-VCF/BCF GT calls and PLINK BED/BIM/FAM hardcalls are rejected in that mode
-because their allele order is not meaningful.
+Phase-capable formats (`VCFReader`, `VCFReaderPolars`, `BCFReader`, `PGENReader`)
+default to `sum_strands=False`, preserving phased haplotype structure with shape
+`(n_variants, n_samples, 2)`. Use `sum_strands=True` to get per-sample dosages
+(`0`, `1`, `2`). `BEDReader` defaults to `sum_strands=True` because PLINK
+BED/BIM/FAM does not store phase. Unphased VCF/BCF GT calls and unphased PGEN
+hardcalls are rejected with `sum_strands=False` because their allele order is
+not meaningful—pass `sum_strands=True` to load them as dosages.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

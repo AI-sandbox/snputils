@@ -58,6 +58,21 @@ def test_vcf_phased_gt_allows_separate_strands(tmp_path: Path):
     )
 
 
+def test_vcf_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
+    vcf_path = tmp_path / "missing.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\ts3\n"
+        "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t./.\t1|1\n"
+    )
+
+    snpobj = VCFReader(vcf_path).read()
+    np.testing.assert_array_equal(
+        snpobj.genotypes,
+        np.array([[-1, -1, 2]], dtype=np.int8),
+    )
+
+
 def test_bed_rejects_separate_strands():
     with pytest.raises(ValueError, match="BED/BIM/FAM does not store phase"):
         BEDReader("cohort.bed").read(sum_strands=False)

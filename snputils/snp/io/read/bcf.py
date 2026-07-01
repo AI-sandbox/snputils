@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read.vcf import _parse_vcf_region, _vcf_region_matches
@@ -734,7 +735,7 @@ def _batch_decode_gt(
         raise ValueError("BCFReader currently supports haploid or diploid GT fields only.")
 
     if sum_strands:
-        return selected.sum(axis=2, dtype=np.int8)
+        return sum_diploid_genotypes(selected)
     return selected
 
 
@@ -785,7 +786,7 @@ class BCFReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         region: Optional[str] = None,
-        sum_strands: bool = True,
+        sum_strands: bool = False,
     ) -> SNPObject:
         """
         Read a BCF file into a SNPObject.
@@ -933,7 +934,7 @@ class BCFReader(SNPBaseReader):
                     )
                     gt = gt[sample_index_array]
                     if sum_strands:
-                        genotypes[i] = gt.sum(axis=1, dtype=np.int8)
+                        genotypes[i] = sum_diploid_genotypes(gt)
                     else:
                         genotypes[i] = gt
 
@@ -1347,7 +1348,7 @@ class BCFReader(SNPBaseReader):
                     )
                     gt = gt[sample_index_array]
                     if sum_strands:
-                        genotypes[out_idx] = gt.sum(axis=1, dtype=np.int8)
+                        genotypes[out_idx] = sum_diploid_genotypes(gt)
                     else:
                         genotypes[out_idx] = gt
                     gt_seen = True

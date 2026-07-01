@@ -7,6 +7,7 @@ import mmap
 
 import numpy as np
 import polars as pl
+from snputils._utils.genotypes import sum_diploid_alleles, sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 import pathlib 
@@ -495,7 +496,7 @@ def _parse_gt_sample_bytes(
         maternal = _ascii_gt_to_int(maternal)
         paternal = _ascii_gt_to_int(paternal)
         if sum_strands:
-            return maternal + paternal
+            return sum_diploid_alleles(maternal, paternal)
         return np.stack((maternal, paternal), axis=1)
 
     gt_index = 0 if format_value is None else _format_gt_index(format_value)
@@ -505,7 +506,7 @@ def _parse_gt_sample_bytes(
         value = _sample_gt_token(sample_fields[int(sample_idx)], gt_index)
         genotype[out_idx] = _parse_simple_gt_token(value, require_phase=not sum_strands)
     if sum_strands:
-        return genotype.sum(axis=1, dtype=np.int8)
+        return sum_diploid_genotypes(genotype)
     return genotype
 
 
@@ -579,7 +580,7 @@ def _parse_gt_sample_matrix(
         paternal = _ascii_gt_to_int(raw_gt[:, :, 2])
         paternal[(raw_gt[:, :, 1] == ord(":")) | (raw_gt[:, :, 1] == 0)] = -1
         if sum_strands:
-            return maternal + paternal
+            return sum_diploid_alleles(maternal, paternal)
         _raise_if_unphased_vcf_gt_separator(raw_gt[:, :, 1])
         genotype = np.empty((height, n_selected, 2), dtype=np.int8)
         genotype[:, :, 0] = maternal
@@ -595,7 +596,7 @@ def _parse_gt_sample_matrix(
                 require_phase=not sum_strands,
             )
     if sum_strands:
-        return genotype.sum(axis=2, dtype=np.int8)
+        return sum_diploid_genotypes(genotype)
     return genotype
 
 
@@ -738,7 +739,7 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            genotypes[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = sum_diploid_alleles(maternal, paternal)
                         else:
                             _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             genotypes[lo:hi, :, 0] = maternal
@@ -948,7 +949,7 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            gt_chunks.append(maternal + paternal)
+                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
                         else:
                             _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             gt = np.empty((height, n_selected, 2), dtype=np.int8)
@@ -1127,7 +1128,7 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[sample_starts + gt_offset])
                         paternal = _ascii_gt_to_int(raw[sample_starts + gt_offset + 2])
                         if sum_strands:
-                            gt_chunks.append(maternal + paternal)
+                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
                         else:
                             _raise_if_unphased_vcf_gt_separator(sep)
                             gt = np.empty((height, n_selected, 2), dtype=np.int8)
@@ -1326,7 +1327,7 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            genotypes[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = sum_diploid_alleles(maternal, paternal)
                         else:
                             _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             genotypes[lo:hi, :, 0] = maternal
@@ -1523,7 +1524,7 @@ class VCFReader(SNPBaseReader):
         exclude_fields: Optional[List[str]] = None,
         region: Optional[str] = None,
         samples: Optional[Sequence[Union[str, int]]] = None,
-        sum_strands: bool = True,
+        sum_strands: bool = False,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -1532,11 +1533,12 @@ class VCFReader(SNPBaseReader):
         By default, the reader loads the core VCF variant columns ``CHROM``,
         ``POS``, ``ID``, ``REF``, ``ALT``, ``QUAL``, and ``FILTER``, plus all
         sample genotype columns. Genotypes are read from the ``GT`` FORMAT
-        field and returned as an ``int8`` array. With ``sum_strands=True``,
+        field and returned as an ``int8`` array. With ``sum_strands=False``
+        (the default), phased genotypes are kept separate with shape
+        ``(n_variants, n_samples, 2)``. With ``sum_strands=True``,
         the two alleles are summed into shape ``(n_variants, n_samples)``.
-        With ``sum_strands=False``, phased genotypes are kept separate with
-        shape ``(n_variants, n_samples, 2)``; unphased ``/`` GT calls are
-        rejected because their allele order is not meaningful.
+        Unphased ``/`` GT calls are rejected when ``sum_strands=False``
+        because their allele order is not meaningful.
 
         Args:
             fields: VCF fixed columns to include, such as ``["CHROM", "POS",
@@ -1655,7 +1657,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = True,
+        sum_strands: bool = False,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
@@ -1965,7 +1967,7 @@ class VCFReaderPolars(SNPBaseReader):
 
         genotypes = np.dstack((genotype_maternal, genotype_paternal))
         if sum_strands:
-            genotypes = genotypes.sum(axis=2, dtype=np.int8)
+            genotypes = sum_diploid_genotypes(genotypes)
 
         return genotypes
 
@@ -2007,7 +2009,7 @@ class VCFReaderPolars(SNPBaseReader):
              exclude_fields: Optional[List[str]] = None,
              region: Optional[str] = None,
              samples: Optional[List[str]] = None,
-             sum_strands: Optional[bool] = True,
+             sum_strands: Optional[bool] = False,
              separator: Optional[str] = None
              ) -> SNPObject:
         """
@@ -2103,7 +2105,7 @@ class VCFReaderPolars(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: Optional[bool] = True,
+        sum_strands: Optional[bool] = False,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:

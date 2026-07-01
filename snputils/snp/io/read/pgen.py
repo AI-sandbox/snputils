@@ -39,7 +39,7 @@ class PGENReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = True,
+        sum_strands: bool = False,
         separator: str = None,
     ) -> SNPObject:
         """
@@ -276,6 +276,7 @@ class PGENReader(SNPBaseReader):
                 else:
                     genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                     pgen_reader.read_list(variant_idxs, genotypes)
+                    genotypes[genotypes < 0] = -1
             finally:
                 pgen_reader.close()
         else:
@@ -409,7 +410,7 @@ class PGENReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = True,
+        sum_strands: bool = False,
         separator: str = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:

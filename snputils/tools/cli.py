@@ -264,14 +264,15 @@ def _add_pca_arguments(parser: argparse.ArgumentParser) -> None:
             "lowrank approximate (sklearn randomized / torch svd_lowrank)."
         ),
     )
-    parser.add_argument(
+    parser.set_defaults(sum_strands=True)
+    strand_group = parser.add_mutually_exclusive_group()
+    strand_group.add_argument(
         "--sum-strands",
         dest="sum_strands",
         action="store_true",
-        default=True,
         help="Read diploid genotypes as per-individual summed strand counts.",
     )
-    parser.add_argument(
+    strand_group.add_argument(
         "--separate-strands",
         dest="sum_strands",
         action="store_false",

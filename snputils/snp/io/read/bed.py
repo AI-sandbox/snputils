@@ -202,6 +202,7 @@ class BEDReader(SNPBaseReader):
             else:
                 genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                 pgen_reader.read_list(variant_idxs, genotypes)
+                genotypes[genotypes < 0] = -1
             pgen_reader.close()
         else:
             genotypes = None

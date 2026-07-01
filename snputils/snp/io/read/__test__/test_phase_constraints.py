@@ -21,7 +21,7 @@ def _toy_snpobj(genotypes: np.ndarray) -> SNPObject:
     )
 
 
-def test_vcf_unphased_gt_defaults_to_dosage_and_rejects_separate_strands(tmp_path: Path):
+def test_vcf_unphased_gt_rejects_default_and_allows_summed(tmp_path: Path):
     vcf_path = tmp_path / "unphased.vcf"
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n"
@@ -30,17 +30,19 @@ def test_vcf_unphased_gt_defaults_to_dosage_and_rejects_separate_strands(tmp_pat
         "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t0/0\t1/1\n"
     )
 
-    snpobj = VCFReader(vcf_path).read()
+    # Default (sum_strands=False) rejects unphased GT
+    with pytest.raises(ValueError, match="unphased VCF genotypes"):
+        VCFReader(vcf_path).read()
+
+    with pytest.raises(ValueError, match="unphased VCF genotypes"):
+        VCFReaderPolars(vcf_path).read()
+
+    # Explicit sum_strands=True loads dosages
+    snpobj = VCFReader(vcf_path).read(sum_strands=True)
     np.testing.assert_array_equal(
         snpobj.genotypes,
         np.array([[1, 1], [0, 2]], dtype=np.int8),
     )
-
-    with pytest.raises(ValueError, match="unphased VCF genotypes"):
-        VCFReader(vcf_path).read(sum_strands=False)
-
-    with pytest.raises(ValueError, match="unphased VCF genotypes"):
-        VCFReaderPolars(vcf_path).read(sum_strands=False)
 
 
 def test_vcf_phased_gt_allows_separate_strands(tmp_path: Path):
@@ -66,7 +68,7 @@ def test_vcf_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
         "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t./.\t1|1\n"
     )
 
-    snpobj = VCFReader(vcf_path).read()
+    snpobj = VCFReader(vcf_path).read(sum_strands=True)
     np.testing.assert_array_equal(
         snpobj.genotypes,
         np.array([[-1, -1, 2]], dtype=np.int8),
@@ -91,7 +93,7 @@ def test_pgen_unphased_hardcalls_reject_separate_strands(tmp_path: Path):
     )
     PGENWriter(snpobj, str(prefix)).write()
 
-    observed = PGENReader(prefix).read()
+    observed = PGENReader(prefix).read(sum_strands=True)
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
 
     with pytest.raises(ValueError, match="hardcall phase information"):

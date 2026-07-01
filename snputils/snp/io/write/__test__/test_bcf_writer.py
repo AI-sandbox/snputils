@@ -28,9 +28,9 @@ def test_bcf_writer_roundtrip(tmp_path):
     BCFWriter(snpobj, str(output_path), phased=False).write()
 
     # 3. Read it back
-    observed = BCFReader(str(output_path)).read()
+    observed = BCFReader(str(output_path)).read(sum_strands=True)
 
-    # 4. Verify default reads return unphased dosages
+    # 4. Verify reads return unphased dosages
     np.testing.assert_array_equal(observed.genotypes, sum_diploid_genotypes(snpobj.genotypes))
     with pytest.raises(ValueError, match="unphased BCF genotypes"):
         BCFReader(str(output_path)).read(sum_strands=False)
@@ -92,12 +92,12 @@ def test_bcf_writer_chrom_partition(tmp_path):
     assert (tmp_path / "partitioned_2.bcf").exists()
 
     # Read partition 1
-    observed_1 = BCFReader(str(tmp_path / "partitioned_1.bcf")).read()
+    observed_1 = BCFReader(str(tmp_path / "partitioned_1.bcf")).read(sum_strands=True)
     np.testing.assert_array_equal(observed_1.variants_chrom, np.array(["1"], dtype=object))
     np.testing.assert_array_equal(observed_1.genotypes, sum_diploid_genotypes(snpobj.genotypes[[0]]))
 
     # Read partition 2
-    observed_2 = BCFReader(str(tmp_path / "partitioned_2.bcf")).read()
+    observed_2 = BCFReader(str(tmp_path / "partitioned_2.bcf")).read(sum_strands=True)
     np.testing.assert_array_equal(observed_2.variants_chrom, np.array(["2"], dtype=object))
     np.testing.assert_array_equal(observed_2.genotypes, sum_diploid_genotypes(snpobj.genotypes[[1]]))
 
@@ -141,5 +141,5 @@ def test_snpobj_save_bcf(tmp_path):
     snpobj.save(output_path)
     assert output_path.exists()
 
-    observed = BCFReader(str(output_path)).read()
+    observed = BCFReader(str(output_path)).read(sum_strands=True)
     np.testing.assert_array_equal(observed.genotypes, sum_diploid_genotypes(snpobj.genotypes))

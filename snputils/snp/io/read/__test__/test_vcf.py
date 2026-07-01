@@ -227,7 +227,7 @@ def test_vcf_reader_reads_variant_annotations_without_samples_or_genotypes_by_de
     snpobj = VCFReader(vcf_path).read()
 
     np.testing.assert_array_equal(snpobj.samples, np.array([]))
-    assert snpobj.genotypes.shape == (2, 0)
+    assert snpobj.genotypes.shape == (2, 0, 2)
     assert snpobj.genotypes.size == 0
     assert snpobj.n_samples == 0
     assert snpobj.n_snps == 2

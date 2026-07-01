@@ -31,7 +31,7 @@ def test_vcf_writer_roundtrips_sampleless_annotation_only_vcf(tmp_path):
 
     observed = VCFReader(path).read(fields="*")
 
-    assert observed.genotypes.shape == (2, 0)
+    assert observed.genotypes.shape == (2, 0, 2)
     np.testing.assert_array_equal(observed.samples, np.array([], dtype=object))
     np.testing.assert_array_equal(observed.variants_chrom.astype(str), snpobj.variants_chrom.astype(str))
     np.testing.assert_array_equal(observed.variants_pos, snpobj.variants_pos)

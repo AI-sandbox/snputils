@@ -45,6 +45,7 @@ def _aggregate_2d_integer_genotypes(
     pops: np.ndarray,
     *,
     pseudohaploid: Union[bool, int] = False,
+    force_diploid: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[Any]]:
     """
     Fast path for 2D integer dosage/haploid calls.
@@ -60,7 +61,7 @@ def _aggregate_2d_integer_genotypes(
     max_val = gt.max(initial=0)
     has_missing = min_val < 0
 
-    if max_val <= 1:
+    if max_val <= 1 and not force_diploid:
         ploidy_per_sample = np.ones(n_samples, dtype=float)
         alt_weights = None
     else:
@@ -128,6 +129,7 @@ def aggregate_pop_allele_freq(
     ancestry: Optional[Union[str, int]] = None,
     calldata_lai: Optional[np.ndarray] = None,
     pseudohaploid: Union[bool, int] = False,
+    force_diploid_2d: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[Any]]:
     """
     Aggregate sample-level genotypes into per-population allele frequencies.
@@ -168,7 +170,13 @@ def aggregate_pop_allele_freq(
         gt[~mask] = np.nan
 
     if ancestry is None and gt.ndim == 2 and np.issubdtype(gt.dtype, np.integer):
-        return _aggregate_2d_integer_genotypes(gt, pop_indices, pops, pseudohaploid=pseudohaploid)
+        return _aggregate_2d_integer_genotypes(
+            gt,
+            pop_indices,
+            pops,
+            pseudohaploid=pseudohaploid,
+            force_diploid=force_diploid_2d,
+        )
 
     # Compute alt allele counts and haplotype counts per SNP and sample
     if gt.ndim == 3:
@@ -196,7 +204,7 @@ def aggregate_pop_allele_freq(
         if all_nan:
             hap_count_per_sample = np.zeros_like(g)
             alt_counts_per_sample = np.zeros_like(g)
-        elif max_val <= 1:
+        elif max_val <= 1 and not force_diploid_2d:
             # Haploid-style 2D calls
             hap_count_per_sample = np.where(np.isnan(g), 0.0, 1.0)
             alt_counts_per_sample = np.where(np.isnan(g), 0.0, g)

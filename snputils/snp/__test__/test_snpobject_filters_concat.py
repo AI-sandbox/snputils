@@ -80,6 +80,21 @@ def test_filter_samples_by_index_works_without_sample_ids():
     np.testing.assert_array_equal(filtered.genotypes, genotypes[:, [0, 2], :])
 
 
+def test_sum_strands_and_dosage_preserve_one_missing_sentinel():
+    genotypes = np.array(
+        [
+            [[0, 1], [0, -1], [-1, -1]],
+            [[1, 1], [0, 0], [1, 0]],
+        ],
+        dtype=np.int8,
+    )
+    snpobj = SNPObject(genotypes=genotypes)
+
+    expected = np.array([[1, -1, -1], [2, 0, 1]], dtype=np.int8)
+    np.testing.assert_array_equal(snpobj.sum_strands().genotypes, expected)
+    np.testing.assert_array_equal(snpobj.dosage(), expected.astype(np.float32))
+
+
 def test_concat_variants_preserves_sample_metadata_and_validates_order():
     left = _toy_snpobj().filter_variants(indexes=[0, 1])
     right = _toy_snpobj().filter_variants(indexes=[2, 3])

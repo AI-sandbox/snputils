@@ -47,5 +47,5 @@ def test_bed_only_gt(data_path, snpobj_bed):
 
 
 def test_pgen_only_gt(data_path, snpobj_pgen):
-    snpobj_pgen_only_gt = PGENReader(data_path + "/pgen/subset").read(fields=["GT"])
+    snpobj_pgen_only_gt = PGENReader(data_path + "/pgen/subset").read(fields=["GT"], sum_strands=False)
     assert np.array_equal(snpobj_pgen_only_gt.genotypes, snpobj_pgen.genotypes)

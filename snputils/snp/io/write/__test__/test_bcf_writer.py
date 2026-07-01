@@ -28,7 +28,7 @@ def test_bcf_writer_roundtrip(tmp_path):
     BCFWriter(snpobj, str(output_path), phased=False).write()
 
     # 3. Read it back
-    observed = BCFReader(str(output_path)).read(sum_strands=True)
+    observed = BCFReader(str(output_path)).read()
 
     # 4. Verify reads return unphased dosages
     np.testing.assert_array_equal(observed.genotypes, sum_diploid_genotypes(snpobj.genotypes))
@@ -63,7 +63,7 @@ def test_bcf_writer_phased(tmp_path):
     # Write phased BCF
     BCFWriter(snpobj, str(output_path), phased=True).write()
 
-    observed = BCFReader(str(output_path)).read(sum_strands=False)
+    observed = BCFReader(str(output_path)).read()
 
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
     np.testing.assert_array_equal(observed.variants_id, np.array([".", "rs3"], dtype=object))

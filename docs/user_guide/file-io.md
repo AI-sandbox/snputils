@@ -56,12 +56,13 @@ bcf = BCFReader("cohort.bcf").read(
 ```
 
 Phase-capable formats (`VCFReader`, `VCFReaderPolars`, `BCFReader`, `PGENReader`)
-default to `sum_strands=False`, preserving phased haplotype structure with shape
-`(n_variants, n_samples, 2)`. Use `sum_strands=True` to get per-sample dosages
-(`0`, `1`, `2`). `BEDReader` defaults to `sum_strands=True` because PLINK
-BED/BIM/FAM does not store phase. Unphased VCF/BCF GT calls and unphased PGEN
-hardcalls are rejected with `sum_strands=False` because their allele order is
-not meaningful—pass `sum_strands=True` to load them as dosages.
+default to `sum_strands=None`: phased genotypes are preserved with shape
+`(n_variants, n_samples, 2)`, while unphased hardcalls fall back to per-sample
+dosages (`0`, `1`, `2`, or missing). Use `sum_strands=True` to always get
+dosages. Use `sum_strands=False` to require phased separate-strand output and
+reject unphased hardcalls because their allele order is not meaningful.
+`BEDReader` defaults to `sum_strands=True` because PLINK BED/BIM/FAM does not
+store phase.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

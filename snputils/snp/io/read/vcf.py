@@ -1524,7 +1524,7 @@ class VCFReader(SNPBaseReader):
         exclude_fields: Optional[List[str]] = None,
         region: Optional[str] = None,
         samples: Optional[Sequence[Union[str, int]]] = None,
-        sum_strands: bool = False,
+        sum_strands: Optional[bool] = None,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -1533,12 +1533,13 @@ class VCFReader(SNPBaseReader):
         By default, the reader loads the core VCF variant columns ``CHROM``,
         ``POS``, ``ID``, ``REF``, ``ALT``, ``QUAL``, and ``FILTER``, plus all
         sample genotype columns. Genotypes are read from the ``GT`` FORMAT
-        field and returned as an ``int8`` array. With ``sum_strands=False``
-        (the default), phased genotypes are kept separate with shape
-        ``(n_variants, n_samples, 2)``. With ``sum_strands=True``,
-        the two alleles are summed into shape ``(n_variants, n_samples)``.
-        Unphased ``/`` GT calls are rejected when ``sum_strands=False``
-        because their allele order is not meaningful.
+        field and returned as an ``int8`` array. By default
+        (``sum_strands=None``), phased genotypes are kept separate with shape
+        ``(n_variants, n_samples, 2)`` and unphased GT calls fall back to
+        summed dosages with shape ``(n_variants, n_samples)``. With
+        ``sum_strands=True``, the two alleles are always summed. With
+        ``sum_strands=False``, unphased ``/`` GT calls are rejected because
+        their allele order is not meaningful.
 
         Args:
             fields: VCF fixed columns to include, such as ``["CHROM", "POS",
@@ -1557,7 +1558,9 @@ class VCFReader(SNPBaseReader):
                 sequence to read variant metadata without genotypes.
             sum_strands: If ``True``, sum the two diploid alleles per sample and
                 return dosages in ``genotypes``. If ``False``, keep phased
-                allele columns separate and reject unphased GT calls.
+                allele columns separate and reject unphased GT calls. If
+                ``None`` (default), preserve phased GT calls and fall back to
+                dosages for unphased GT calls.
             separator: Optional column separator. If omitted, the separator is
                 detected from the VCF header. Tab-delimited files use optimized
                 byte parsers when possible; other separators use the pandas
@@ -1567,6 +1570,28 @@ class VCFReader(SNPBaseReader):
             SNPObject: Object containing selected genotype, sample, and variant
             fields.
         """
+        if sum_strands is None:
+            try:
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=False,
+                    separator=separator,
+                )
+            except ValueError as exc:
+                if _UNPHASED_VCF_SEPARATE_STRANDS_ERROR not in str(exc):
+                    raise
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=True,
+                    separator=separator,
+                )
+
         region_filter = _parse_vcf_region(region)
         names, detected_separator = _get_vcf_col_names_and_sep(
             str(self._filename),
@@ -2009,7 +2034,7 @@ class VCFReaderPolars(SNPBaseReader):
              exclude_fields: Optional[List[str]] = None,
              region: Optional[str] = None,
              samples: Optional[List[str]] = None,
-             sum_strands: Optional[bool] = False,
+             sum_strands: Optional[bool] = None,
              separator: Optional[str] = None
              ) -> SNPObject:
         """
@@ -2032,8 +2057,9 @@ class VCFReaderPolars(SNPBaseReader):
                 integers giving indices of selected samples.  If an empty list is provided,
                 no samples are extracted.
             sum_strands: True if the two alleles are to be summed together.
-                False if phased alleles are to be stored separately; unphased
-                GT calls are rejected.
+                False if phased alleles are to be stored separately and
+                unphased GT calls should be rejected. None preserves phased GT
+                calls and falls back to dosages for unphased GT calls.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -2042,6 +2068,27 @@ class VCFReaderPolars(SNPBaseReader):
                 of this object depend on the specified parameters and the content of the VCF file.
         """
         # TODO: add support for excluding GT
+        if sum_strands is None:
+            try:
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=False,
+                    separator=separator,
+                )
+            except ValueError as exc:
+                if _UNPHASED_VCF_SEPARATE_STRANDS_ERROR not in str(exc):
+                    raise
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=True,
+                    separator=separator,
+                )
 
         log.info(f"Reading {self._filename}")
 

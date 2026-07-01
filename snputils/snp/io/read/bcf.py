@@ -786,7 +786,7 @@ class BCFReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         region: Optional[str] = None,
-        sum_strands: bool = False,
+        sum_strands: Optional[bool] = None,
     ) -> SNPObject:
         """
         Read a BCF file into a SNPObject.
@@ -810,7 +810,8 @@ class BCFReader(SNPBaseReader):
             sum_strands: If True, sum the two diploid alleles per sample and
                 return dosages in ``genotypes``. If False, keep the two allele
                 columns separate; unphased GT calls are rejected because their
-                allele order is not meaningful.
+                allele order is not meaningful. If None, preserve phased GT
+                calls and fall back to dosages for unphased GT calls.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant
@@ -820,6 +821,32 @@ class BCFReader(SNPBaseReader):
             raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
         if variant_idxs is not None and variant_ids is not None:
             raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
+
+        if sum_strands is None:
+            try:
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    sample_ids=sample_ids,
+                    sample_idxs=sample_idxs,
+                    variant_ids=variant_ids,
+                    variant_idxs=variant_idxs,
+                    region=region,
+                    sum_strands=False,
+                )
+            except ValueError as exc:
+                if "Cannot read unphased BCF genotypes" not in str(exc):
+                    raise
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    sample_ids=sample_ids,
+                    sample_idxs=sample_idxs,
+                    variant_ids=variant_ids,
+                    variant_idxs=variant_idxs,
+                    region=region,
+                    sum_strands=True,
+                )
 
         selected_fields = _normalize_fields(fields, exclude_fields)
         region_filter = _parse_vcf_region(region)

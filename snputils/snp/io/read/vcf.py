@@ -7,10 +7,22 @@ import mmap
 
 import numpy as np
 import polars as pl
+from snputils._utils.genotypes import sum_diploid_alleles, sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 import pathlib 
 log = logging.getLogger(__name__)
+
+
+_UNPHASED_VCF_SEPARATE_STRANDS_ERROR = (
+    "Cannot read unphased VCF genotypes with `sum_strands=False`; "
+    "use `sum_strands=True` to load 0/1/2 genotype dosages."
+)
+
+
+def _raise_if_unphased_vcf_gt_separator(separators: np.ndarray) -> None:
+    if np.any(separators == ord("/")):
+        raise ValueError(_UNPHASED_VCF_SEPARATE_STRANDS_ERROR)
 
 
 def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):
@@ -473,14 +485,18 @@ def _parse_gt_sample_bytes(
     if (format_value is None or format_value == b"GT") and len(sample_bytes) == expected_gt_only_len:
         raw = np.frombuffer(sample_bytes, dtype=np.uint8)
         maternal = raw[0::4]
+        separators = raw[1::4]
         paternal = raw[2::4]
         if sample_idxs.size != n_samples_total:
             maternal = maternal[sample_idxs]
+            separators = separators[sample_idxs]
             paternal = paternal[sample_idxs]
+        if not sum_strands:
+            _raise_if_unphased_vcf_gt_separator(separators)
         maternal = _ascii_gt_to_int(maternal)
         paternal = _ascii_gt_to_int(paternal)
         if sum_strands:
-            return maternal + paternal
+            return sum_diploid_alleles(maternal, paternal)
         return np.stack((maternal, paternal), axis=1)
 
     gt_index = 0 if format_value is None else _format_gt_index(format_value)
@@ -488,9 +504,9 @@ def _parse_gt_sample_bytes(
     genotype = np.empty((n_selected, 2), dtype=np.int8)
     for out_idx, sample_idx in enumerate(sample_idxs):
         value = _sample_gt_token(sample_fields[int(sample_idx)], gt_index)
-        genotype[out_idx] = _parse_simple_gt_token(value)
+        genotype[out_idx] = _parse_simple_gt_token(value, require_phase=not sum_strands)
     if sum_strands:
-        return genotype.sum(axis=1, dtype=np.int8)
+        return sum_diploid_genotypes(genotype)
     return genotype
 
 
@@ -522,8 +538,10 @@ def _sample_gt_token(sample_field: Union[str, bytes], gt_index: int) -> Union[st
     return fields[gt_index]
 
 
-def _parse_simple_gt_token(value: Union[str, bytes]) -> tuple[int, int]:
+def _parse_simple_gt_token(value: Union[str, bytes], *, require_phase: bool = False) -> tuple[int, int]:
     if isinstance(value, bytes):
+        if require_phase and len(value) > 1 and value[1] == ord("/"):
+            raise ValueError(_UNPHASED_VCF_SEPARATE_STRANDS_ERROR)
         if len(value) == 0 or value[0] in b".-":
             first = -1
         else:
@@ -535,6 +553,8 @@ def _parse_simple_gt_token(value: Union[str, bytes]) -> tuple[int, int]:
         return first, second
 
     value = str(value)
+    if require_phase and len(value) > 1 and value[1] == "/":
+        raise ValueError(_UNPHASED_VCF_SEPARATE_STRANDS_ERROR)
     if len(value) == 0 or value[0] in ".-":
         first = -1
     else:
@@ -560,7 +580,8 @@ def _parse_gt_sample_matrix(
         paternal = _ascii_gt_to_int(raw_gt[:, :, 2])
         paternal[(raw_gt[:, :, 1] == ord(":")) | (raw_gt[:, :, 1] == 0)] = -1
         if sum_strands:
-            return maternal + paternal
+            return sum_diploid_alleles(maternal, paternal)
+        _raise_if_unphased_vcf_gt_separator(raw_gt[:, :, 1])
         genotype = np.empty((height, n_selected, 2), dtype=np.int8)
         genotype[:, :, 0] = maternal
         genotype[:, :, 1] = paternal
@@ -570,9 +591,12 @@ def _parse_gt_sample_matrix(
     for row_idx, format_value in enumerate(format_values):
         gt_index = _format_gt_index(format_value)
         for col_idx, sample_field in enumerate(sample_values[row_idx]):
-            genotype[row_idx, col_idx] = _parse_simple_gt_token(_sample_gt_token(sample_field, gt_index))
+            genotype[row_idx, col_idx] = _parse_simple_gt_token(
+                _sample_gt_token(sample_field, gt_index),
+                require_phase=not sum_strands,
+            )
     if sum_strands:
-        return genotype.sum(axis=2, dtype=np.int8)
+        return sum_diploid_genotypes(genotype)
     return genotype
 
 
@@ -719,8 +743,9 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            genotypes[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = sum_diploid_alleles(maternal, paternal)
                         else:
+                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             genotypes[lo:hi, :, 0] = maternal
                             genotypes[lo:hi, :, 1] = paternal
 
@@ -928,8 +953,9 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            gt_chunks.append(maternal + paternal)
+                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
                         else:
+                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             gt = np.empty((height, n_selected, 2), dtype=np.int8)
                             gt[:, :, 0] = maternal
                             gt[:, :, 1] = paternal
@@ -1106,8 +1132,9 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[sample_starts + gt_offset])
                         paternal = _ascii_gt_to_int(raw[sample_starts + gt_offset + 2])
                         if sum_strands:
-                            gt_chunks.append(maternal + paternal)
+                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
                         else:
+                            _raise_if_unphased_vcf_gt_separator(sep)
                             gt = np.empty((height, n_selected, 2), dtype=np.int8)
                             gt[:, :, 0] = maternal
                             gt[:, :, 1] = paternal
@@ -1304,8 +1331,9 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            genotypes[lo:hi] = maternal + paternal
+                            genotypes[lo:hi] = sum_diploid_alleles(maternal, paternal)
                         else:
+                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
                             genotypes[lo:hi, :, 0] = maternal
                             genotypes[lo:hi, :, 1] = paternal
 
@@ -1500,7 +1528,7 @@ class VCFReader(SNPBaseReader):
         exclude_fields: Optional[List[str]] = None,
         region: Optional[str] = None,
         samples: Optional[Sequence[Union[str, int]]] = None,
-        sum_strands: bool = False,
+        sum_strands: Optional[bool] = None,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -1509,10 +1537,13 @@ class VCFReader(SNPBaseReader):
         By default, the reader loads the core VCF variant columns ``CHROM``,
         ``POS``, ``ID``, ``REF``, ``ALT``, ``QUAL``, and ``FILTER``, plus all
         sample genotype columns. Genotypes are read from the ``GT`` FORMAT
-        field and returned as an ``int8`` array. With ``sum_strands=False``,
-        ``genotypes`` has shape ``(n_variants, n_samples, 2)``; with
-        ``sum_strands=True``, the two alleles are summed into shape
-        ``(n_variants, n_samples)``.
+        field and returned as an ``int8`` array. By default
+        (``sum_strands=None``), phased genotypes are kept separate with shape
+        ``(n_variants, n_samples, 2)`` and unphased GT calls fall back to
+        summed dosages with shape ``(n_variants, n_samples)``. With
+        ``sum_strands=True``, the two alleles are always summed. With
+        ``sum_strands=False``, unphased ``/`` GT calls are rejected because
+        their allele order is not meaningful.
 
         Args:
             fields: VCF fixed columns to include, such as ``["CHROM", "POS",
@@ -1530,8 +1561,10 @@ class VCFReader(SNPBaseReader):
                 sample indexes. If omitted, all samples are read; pass an empty
                 sequence to read variant metadata without genotypes.
             sum_strands: If ``True``, sum the two diploid alleles per sample and
-                return dosages in ``genotypes``. If ``False``, keep the two
-                allele columns separate.
+                return dosages in ``genotypes``. If ``False``, keep phased
+                allele columns separate and reject unphased GT calls. If
+                ``None`` (default), preserve phased GT calls and fall back to
+                dosages for unphased GT calls.
             separator: Optional column separator. If omitted, the separator is
                 detected from the VCF header. Tab-delimited files use optimized
                 byte parsers when possible; other separators use the pandas
@@ -1541,6 +1574,28 @@ class VCFReader(SNPBaseReader):
             SNPObject: Object containing selected genotype, sample, and variant
             fields.
         """
+        if sum_strands is None:
+            try:
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=False,
+                    separator=separator,
+                )
+            except ValueError as exc:
+                if _UNPHASED_VCF_SEPARATE_STRANDS_ERROR not in str(exc):
+                    raise
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=True,
+                    separator=separator,
+                )
+
         region_filter = _parse_vcf_region(region)
         names, detected_separator = _get_vcf_col_names_and_sep(
             str(self._filename),
@@ -1907,6 +1962,15 @@ class VCFReaderPolars(SNPBaseReader):
         if not sample_columns:
             return _empty_genotype_array(vcf.height, 0, sum_strands)
 
+        if not sum_strands:
+            unphased = (
+                vcf[sample_columns]
+                .select(pl.all().str.contains("/").any())
+                .to_numpy()
+            )
+            if bool(np.any(unphased)):
+                raise ValueError(_UNPHASED_VCF_SEPARATE_STRANDS_ERROR)
+
         # Process maternal strand:
         # Extract the first position from genotype, e.g., 0|1 -> 0.
         # Replace missing values codified as ".", "-", or "" with -1 for integer casting.
@@ -1932,7 +1996,7 @@ class VCFReaderPolars(SNPBaseReader):
 
         genotypes = np.dstack((genotype_maternal, genotype_paternal))
         if sum_strands:
-            genotypes = genotypes.sum(axis=2, dtype=np.int8)
+            genotypes = sum_diploid_genotypes(genotypes)
 
         return genotypes
 
@@ -1974,7 +2038,7 @@ class VCFReaderPolars(SNPBaseReader):
              exclude_fields: Optional[List[str]] = None,
              region: Optional[str] = None,
              samples: Optional[List[str]] = None,
-             sum_strands: Optional[bool] = False,
+             sum_strands: Optional[bool] = None,
              separator: Optional[str] = None
              ) -> SNPObject:
         """
@@ -1996,8 +2060,10 @@ class VCFReaderPolars(SNPBaseReader):
                 a list of strings giving sample identifiers. May also be a list of
                 integers giving indices of selected samples.  If an empty list is provided,
                 no samples are extracted.
-            sum_strands: True if the maternal and paternal strands are to be summed together,
-                False if the strands are to be stored separately.
+            sum_strands: True if the two alleles are to be summed together.
+                False if phased alleles are to be stored separately and
+                unphased GT calls should be rejected. None preserves phased GT
+                calls and falls back to dosages for unphased GT calls.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -2006,6 +2072,27 @@ class VCFReaderPolars(SNPBaseReader):
                 of this object depend on the specified parameters and the content of the VCF file.
         """
         # TODO: add support for excluding GT
+        if sum_strands is None:
+            try:
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=False,
+                    separator=separator,
+                )
+            except ValueError as exc:
+                if _UNPHASED_VCF_SEPARATE_STRANDS_ERROR not in str(exc):
+                    raise
+                return self.read(
+                    fields=fields,
+                    exclude_fields=exclude_fields,
+                    region=region,
+                    samples=samples,
+                    sum_strands=True,
+                    separator=separator,
+                )
 
         log.info(f"Reading {self._filename}")
 

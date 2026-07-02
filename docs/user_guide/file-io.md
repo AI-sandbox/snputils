@@ -34,18 +34,19 @@ vcf  = read_vcf("cohort.vcf.gz")
 ```python
 from snputils import BCFReader, PGENReader, BGENReader, VCFReader
 
-# PGEN: read only specific samples or chromosomes
+# PGEN: read specific samples/variants (phased by default)
 pgen = PGENReader("cohort.pgen").read(
-    samples=["sample1", "sample2"],
-    variants_chrom=["1", "2"],
-    sum_strands=False,
+    sample_ids=["sample1", "sample2"],
+    variant_ids=["rs1", "rs2"],
 )
 
-# VCF: read only phased GT, specific region
+# VCF: read a specific region (phased by default)
 vcf = VCFReader("cohort.vcf.gz").read(
     region="chr1:1000000-2000000",
-    sum_strands=False,
 )
+
+# Summed dosages can be requested explicitly.
+dosages = VCFReader("cohort.vcf.gz").read(sum_strands=True)
 
 # BCF: read only specific samples and variants
 bcf = BCFReader("cohort.bcf").read(
@@ -53,6 +54,15 @@ bcf = BCFReader("cohort.bcf").read(
     variant_ids=["chr1:1000000", "rs123"],
 )
 ```
+
+Phase-capable formats (`VCFReader`, `VCFReaderPolars`, `BCFReader`, `PGENReader`)
+default to `sum_strands=None`: phased genotypes are preserved with shape
+`(n_variants, n_samples, 2)`, while unphased hardcalls fall back to per-sample
+dosages (`0`, `1`, `2`, or missing). Use `sum_strands=True` to always get
+dosages. Use `sum_strands=False` to require phased separate-strand output and
+reject unphased hardcalls because their allele order is not meaningful.
+`BEDReader` defaults to `sum_strands=True` because PLINK BED/BIM/FAM does not
+store phase.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

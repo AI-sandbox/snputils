@@ -39,7 +39,7 @@ class PGENReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = False,
+        sum_strands: Optional[bool] = None,
         separator: str = None,
     ) -> SNPObject:
         """
@@ -56,9 +56,11 @@ class PGENReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            sum_strands: If True, maternal and paternal strands are combined into a single `int8` array with values `{0, 1, 2}`.
-                If False, strands are stored separately as an `int8` array with values `{0, 1}` for each strand.
-                Note: With the pgenlib backend, `False` uses a temporary `int32` allele buffer.
+            sum_strands: If True, read genotype dosages in a single `int8`
+                array with values `{0, 1, 2}`. If False, read phased alleles
+                separately; this requires PGEN hardcall phase information. If
+                None, preserve phased hardcalls when possible and fall back to
+                dosages for unphased hardcalls.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -242,32 +244,57 @@ class PGENReader(SNPBaseReader):
                 sample_subset=sample_idxs,
             )
 
-            if only_read_pgen:
-                num_samples = pgen_reader.get_raw_sample_ct()
-                num_variants = pgen_reader.get_variant_ct()
-                variant_idxs = np.arange(num_variants, dtype=np.uint32)
+            try:
+                if only_read_pgen:
+                    num_samples = pgen_reader.get_raw_sample_ct()
+                    num_variants = pgen_reader.get_variant_ct()
+                    variant_idxs = np.arange(num_variants, dtype=np.uint32)
 
-            # required arrays: variant_idxs + sample_idxs + genotypes
-            if not sum_strands:
-                required_ram = (
-                    (num_samples + num_variants) * 4
-                    + estimate_separate_strands_peak_bytes(num_variants, num_samples)
-                )
-            else:
-                required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
-            log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
+                auto_sum_strands = sum_strands is None
+                effective_sum_strands = bool(sum_strands)
+                if auto_sum_strands:
+                    effective_sum_strands = not pgen_reader.hardcall_phase_present()
+                elif not effective_sum_strands and not pgen_reader.hardcall_phase_present():
+                    raise ValueError(
+                        "This PGEN file does not contain hardcall phase information, so "
+                        "`sum_strands=False` is not supported. Use `sum_strands=True` "
+                        "to load 0/1/2 genotype dosages."
+                    )
 
-            if not sum_strands:
-                genotypes = read_separate_strands(
-                    pgen_reader,
-                    variant_idxs,
-                    num_variants,
-                    num_samples,
-                )
-            else:
-                genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
-                pgen_reader.read_list(variant_idxs, genotypes)
-            pgen_reader.close()
+                # required arrays: variant_idxs + sample_idxs + genotypes
+                if not effective_sum_strands:
+                    required_ram = (
+                        (num_samples + num_variants) * 4
+                        + estimate_separate_strands_peak_bytes(num_variants, num_samples)
+                    )
+                else:
+                    required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
+                log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
+
+                if not effective_sum_strands:
+                    try:
+                        genotypes = read_separate_strands(
+                            pgen_reader,
+                            variant_idxs,
+                            num_variants,
+                            num_samples,
+                            require_phase=True,
+                        )
+                    except ValueError as exc:
+                        if (
+                            not auto_sum_strands
+                            or "Cannot read unphased heterozygous PGEN genotypes" not in str(exc)
+                        ):
+                            raise
+                        genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+                        pgen_reader.read_list(variant_idxs, genotypes)
+                        genotypes[genotypes < 0] = -1
+                else:
+                    genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+                    pgen_reader.read_list(variant_idxs, genotypes)
+                    genotypes[genotypes < 0] = -1
+            finally:
+                pgen_reader.close()
         else:
             genotypes = None
 

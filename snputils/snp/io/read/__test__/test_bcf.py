@@ -1,6 +1,7 @@
 import numpy as np
 
 from snputils import BCFReader, read_bcf, read_snp
+from snputils._utils.genotypes import sum_diploid_genotypes
 
 
 def test_bcf_reader_matches_vcf_genotypes_and_metadata(snpobj_bcf, snpobj_vcf):
@@ -25,6 +26,7 @@ def test_bcf_auto_reader_and_function(data_path):
 
 def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        sum_strands=False,
         sample_ids=["HG00100", "HG00096"],
         variant_idxs=[0, 2],
     )
@@ -35,6 +37,7 @@ def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
 
 def test_bcf_reader_supports_region_filtering(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        sum_strands=False,
         region="22:10526445-10526445",
         sample_idxs=[0],
     )
@@ -47,7 +50,7 @@ def test_bcf_reader_supports_region_filtering(data_path, snpobj_vcf):
 def test_bcf_reader_supports_summed_strands(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(sum_strands=True, variant_idxs=[0, 1, 2])
 
-    np.testing.assert_array_equal(snpobj.genotypes, snpobj_vcf.genotypes[:3].sum(axis=2, dtype=np.int8))
+    np.testing.assert_array_equal(snpobj.genotypes, sum_diploid_genotypes(snpobj_vcf.genotypes[:3]))
 
 
 def test_bcf_reader_reads_info_qual_and_filter_when_requested(data_path):

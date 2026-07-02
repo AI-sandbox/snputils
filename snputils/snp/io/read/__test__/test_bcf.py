@@ -50,6 +50,33 @@ def test_bcf_reader_supports_summed_strands(data_path, snpobj_vcf):
     np.testing.assert_array_equal(snpobj.genotypes, snpobj_vcf.genotypes[:3].sum(axis=2, dtype=np.int8))
 
 
+def test_bcf_reader_gt_only_sample_selection(data_path, snpobj_vcf):
+    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        sum_strands=True,
+    )
+
+    expected = snpobj_vcf.genotypes[:, [3, 0], :].sum(axis=2, dtype=np.int8)
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
+    assert snpobj.samples is None
+
+
+def test_bcf_reader_core_field_subset(data_path, snpobj_vcf):
+    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+        fields=["GT", "POS", "ID"],
+        sample_idxs=[3, 0],
+        sum_strands=True,
+    )
+
+    expected_gt = snpobj_vcf.genotypes[:, [3, 0], :].sum(axis=2, dtype=np.int8)
+    np.testing.assert_array_equal(snpobj.genotypes, expected_gt)
+    np.testing.assert_array_equal(snpobj.variants_pos, snpobj_vcf.variants_pos)
+    np.testing.assert_array_equal(snpobj.variants_id, snpobj_vcf.variants_id)
+    assert snpobj.samples is None
+    assert snpobj.variants_ref is None
+
+
 def test_bcf_reader_reads_info_qual_and_filter_when_requested(data_path):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
         fields=["ID", "QUAL", "FILTER", "INFO"],

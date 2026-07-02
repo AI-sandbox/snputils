@@ -71,6 +71,11 @@ snputils = "snputils.tools.cli:main"
 where = ["."]
 include = ["snputils*"]
 
+[[tool.setuptools.ext-modules]]
+name = "snputils.snp.io.read._bcf"
+sources = ["snputils/snp/io/read/_bcf.c"]
+optional = true
+
 [tool.setuptools_scm]
 
 [tool.mypy]

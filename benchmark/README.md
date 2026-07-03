@@ -7,8 +7,8 @@ On the chromosome 22 of the 1000 Genomes Project dataset:
 ![Benchmark results](readers_benchmark.png)
 
 **Legend: `sum_strands`**:
-🟦 `True`: ALT dosage (`0|0 -> 0`, `0|1 -> 1`, `1|0 -> 1`, `1|1 -> 2`)
-🟧 `False`: allele codes (`0|0 -> [0, 0]`, `0|1 -> [0, 1]`, `1|0 -> [1, 0]`, `1|1 -> [1, 1]`)
+- 🟦 `True`: ALT dosage (`0|0 -> 0`, `0|1 -> 1`, `1|0 -> 1`, `1|1 -> 2`)
+- 🟧 `False`: allele codes (`0|0 -> [0, 0]`, `0|1 -> [0, 1]`, `1|0 -> [1, 0]`, `1|1 -> [1, 1]`)
 
 ## Methodology
 

@@ -429,6 +429,8 @@ def _build_indiv_offsets(data: bytes, body_offset: int) -> Tuple[np.ndarray, boo
     end = len(data)
     if offset >= end:
         return np.empty(0, dtype=np.int64), True
+    if offset + 8 > end:
+        raise ValueError("Malformed BCF: record header is truncated.")
 
     indiv_offsets = []
     append_offset = indiv_offsets.append
@@ -440,6 +442,8 @@ def _build_indiv_offsets(data: bytes, body_offset: int) -> Tuple[np.ndarray, boo
     offset += 8 + l_shared + first_l_indiv
 
     while offset < end:
+        if offset + 8 > end:
+            raise ValueError("Malformed BCF: record header is truncated.")
         l_shared, l_indiv = unpack(data, offset)
         append_offset(offset + 8 + l_shared)
         if l_indiv != first_l_indiv:

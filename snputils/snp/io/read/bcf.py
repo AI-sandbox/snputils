@@ -325,6 +325,8 @@ def _read_float_list(data: bytes, offset: int) -> Tuple[List[float], int]:
 
 
 def _render_info_value(value: Any) -> str:
+    if value is None:
+        return "."
     if isinstance(value, list):
         rendered = []
         for item in value:
@@ -670,13 +672,21 @@ def _decode_gt_array(data: bytes, offset: int, n_samples: int, n_vals: int, type
 def _decode_gp_array(data: bytes, offset: int, n_samples: int, n_vals: int) -> np.ndarray:
     if n_vals < 1:
         return np.empty((n_samples, 0), dtype=np.float32)
-    return np.frombuffer(
+    raw = np.frombuffer(
         data,
-        dtype=np.dtype("<f4"),
+        dtype=np.dtype("<u4"),
         count=n_samples * n_vals,
         offset=offset,
-    ).reshape(n_samples, n_vals).copy()
+    ).reshape(n_samples, n_vals)
+    values = np.frombuffer(raw.tobytes(), dtype=np.dtype("<f4")).reshape(n_samples, n_vals).copy()
+    values[raw == _FLOAT_MISSING] = np.nan
+    return values
 
+
+def _decode_gp_raw(raw: np.ndarray) -> np.ndarray:
+    values = np.frombuffer(raw.tobytes(), dtype=np.dtype("<f4")).reshape(raw.shape).copy()
+    values[raw == _FLOAT_MISSING] = np.nan
+    return values
 
 def _parse_filter_pass(
     data: bytes,
@@ -684,6 +694,8 @@ def _parse_filter_pass(
     header: _BCFHeader,
 ) -> Tuple[bool, int]:
     filter_ids, offset = _read_int_list(data, offset)
+    if any(idx is None for idx in filter_ids):
+        return False, offset
     filter_names = [header.filters.get(int(idx), str(idx)) for idx in filter_ids if idx is not None]
     if not filter_names:
         return True, offset
@@ -933,8 +945,9 @@ def _batch_decode_gp(
     raw_bytes = np.frombuffer(data, dtype=np.uint8)
     gathered = raw_bytes[all_byte_offsets.ravel()]
 
-    raw = np.frombuffer(gathered.tobytes(), dtype=np.dtype("<f4")).reshape(n_records, n_samples, n_vals)
-    return raw[:, sample_index_array, :].copy()
+    raw = np.frombuffer(gathered.tobytes(), dtype=np.dtype("<u4")).reshape(n_records, n_samples, n_vals)
+    values = _decode_gp_raw(raw)
+    return values[:, sample_index_array, :]
 
 
 def _vectorized_qual(qual_raw: np.ndarray) -> np.ndarray:
@@ -1085,42 +1098,48 @@ class BCFReader(SNPBaseReader):
 
         # Batch GT decode
         if need_gt and n_records > 0:
-            # Probe the first record to determine GT layout
-            first_n_fmt = int(n_fmt_arr[0])
-            first_indiv_offset = int(indiv_offsets[0])
-            gt_layout = _probe_gt_layout(data, first_indiv_offset, first_n_fmt, n_file_samples, header)
-            if gt_layout is None:
-                raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
-
-            gt_data_rel_offset, gt_n_vals, gt_type_size, _ = gt_layout
-
-            # Check if all records have uniform l_indiv (same FORMAT layout)
-            uniform_indiv = np.all(l_indiv == l_indiv[0])
-
-            if uniform_indiv:
-                genotypes = _batch_decode_gt(
-                    data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
-                    n_file_samples, n_records, sample_index_array, sum_strands,
-                )
-            else:
-                # Fallback: per-record GT decode
+            if n_file_samples == 0 and np.all(n_fmt_arr == 0):
                 if sum_strands:
-                    genotypes = np.empty((n_records, n_selected_samples), dtype=np.int8)
+                    genotypes = np.empty((n_records, 0), dtype=np.int8)
                 else:
-                    genotypes = np.empty((n_records, n_selected_samples, 2), dtype=np.int8)
-                for i in range(n_records):
-                    cur_indiv = int(indiv_offsets[i])
-                    cur_n_fmt = int(n_fmt_arr[i])
-                    cur_gt_layout = _probe_gt_layout(data, cur_indiv, cur_n_fmt, n_file_samples, header)
-                    if cur_gt_layout is None:
-                        raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
-                    rel_off, nv, ts, _ = cur_gt_layout
-                    gt = _decode_gt_array(data, cur_indiv + rel_off, n_file_samples, nv, ts)
-                    gt = gt[sample_index_array]
+                    genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
+            else:
+                # Probe the first record to determine GT layout
+                first_n_fmt = int(n_fmt_arr[0])
+                first_indiv_offset = int(indiv_offsets[0])
+                gt_layout = _probe_gt_layout(data, first_indiv_offset, first_n_fmt, n_file_samples, header)
+                if gt_layout is None:
+                    raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+
+                gt_data_rel_offset, gt_n_vals, gt_type_size, _ = gt_layout
+
+                # Check if all records have uniform l_indiv (same FORMAT layout)
+                uniform_indiv = np.all(l_indiv == l_indiv[0])
+
+                if uniform_indiv:
+                    genotypes = _batch_decode_gt(
+                        data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
+                        n_file_samples, n_records, sample_index_array, sum_strands,
+                    )
+                else:
+                    # Fallback: per-record GT decode
                     if sum_strands:
-                        genotypes[i] = gt.sum(axis=1, dtype=np.int8)
+                        genotypes = np.empty((n_records, n_selected_samples), dtype=np.int8)
                     else:
-                        genotypes[i] = gt
+                        genotypes = np.empty((n_records, n_selected_samples, 2), dtype=np.int8)
+                    for i in range(n_records):
+                        cur_indiv = int(indiv_offsets[i])
+                        cur_n_fmt = int(n_fmt_arr[i])
+                        cur_gt_layout = _probe_gt_layout(data, cur_indiv, cur_n_fmt, n_file_samples, header)
+                        if cur_gt_layout is None:
+                            raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+                        rel_off, nv, ts, _ = cur_gt_layout
+                        gt = _decode_gt_array(data, cur_indiv + rel_off, n_file_samples, nv, ts)
+                        gt = gt[sample_index_array]
+                        if sum_strands:
+                            genotypes[i] = gt.sum(axis=1, dtype=np.int8)
+                        else:
+                            genotypes[i] = gt
 
         # Batch GP decode
         if need_gp and n_records > 0:
@@ -1273,7 +1292,9 @@ class BCFReader(SNPBaseReader):
                     elif n_vals == 1 and type_code == 1:
                         val = data[offset]
                         offset += 1
-                        if val == 128 or val == 129:
+                        if val == 128:
+                            filter_pass = False
+                        elif val == 129:
                             filter_pass = True
                         else:
                             filter_name = filters_dict.get(val, str(val))
@@ -1329,6 +1350,13 @@ class BCFReader(SNPBaseReader):
                 f"BCF record sample count ({n_samples}) does not match header sample count "
                 f"({len(file_samples)})."
             )
+        if n_samples == 0 and n_fmt == 0:
+            n_records = _count_records(data, body_offset)
+            if sum_strands:
+                genotypes = np.empty((n_records, 0), dtype=np.int8)
+            else:
+                genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
+            return SNPObject(genotypes=genotypes)
 
         first_indiv_offset = body_offset + 8 + first_l_shared
         gt_layout = _probe_gt_layout(data, first_indiv_offset, n_fmt, n_samples, header)
@@ -1398,6 +1426,8 @@ class BCFReader(SNPBaseReader):
                 f"BCF record sample count ({n_samples}) does not match header sample count "
                 f"({len(file_samples)})."
             )
+        if n_samples == 0 and n_fmt == 0:
+            return None
 
         first_indiv_offset = body_offset + 8 + first_l_shared
         gt_layout = _probe_gt_layout(data, first_indiv_offset, n_fmt, n_samples, header)
@@ -1672,7 +1702,9 @@ class BCFReader(SNPBaseReader):
                     elif n_vals == 1 and type_code == 1:
                         val = data[offset]
                         offset += 1
-                        if val == 128 or val == 129:
+                        if val == 128:
+                            filter_pass = False
+                        elif val == 129:
                             filter_pass = True
                         else:
                             filter_name = filters_dict.get(val, str(val))
@@ -1687,7 +1719,11 @@ class BCFReader(SNPBaseReader):
                 if need_info:
                     variants_info[out_idx] = _parse_info_string(data, offset, n_info, header)
 
-            if not (need_gt or need_gp) or l_indiv == 0:
+            if not (need_gt or need_gp):
+                continue
+            if l_indiv == 0:
+                if need_gt and n_samples > 0:
+                    raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
                 continue
 
             format_offset = indiv_offset

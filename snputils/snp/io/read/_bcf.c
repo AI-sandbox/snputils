@@ -330,6 +330,7 @@ parse_filter_pass(
     uint32_t missing;
     uint32_t vector_end;
     int n_filters = 0;
+    int saw_missing = 0;
     uint32_t last_filter = 0;
 
     if (read_typed_descriptor(data, data_len, offset, &n_vals, &type_code, &type_size) < 0) {
@@ -357,13 +358,14 @@ parse_filter_pass(
             break;
         }
         if (raw == missing) {
+            saw_missing = 1;
             continue;
         }
         n_filters++;
         last_filter = raw;
     }
     *offset += n_vals * type_size;
-    *out_pass = (unsigned char)(n_filters == 0 || (n_filters == 1 && (int)last_filter == pass_filter_id));
+    *out_pass = (unsigned char)(!saw_missing && (n_filters == 0 || (n_filters == 1 && (int)last_filter == pass_filter_id)));
     return 0;
 }
 

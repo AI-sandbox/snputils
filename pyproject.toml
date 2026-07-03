@@ -76,6 +76,12 @@ name = "snputils.snp.io.read._bcf"
 sources = ["snputils/snp/io/read/_bcf.c"]
 optional = true
 
+[[tool.setuptools.ext-modules]]
+name = "snputils.snp.io.write._bcf"
+sources = ["snputils/snp/io/write/_bcf.c"]
+libraries = ["z"]
+optional = true
+
 [tool.setuptools_scm]
 
 [tool.mypy]

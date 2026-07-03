@@ -1,6 +1,11 @@
+import struct
+
 import numpy as np
+import pytest
 
 from snputils import BCFReader, read_bcf, read_snp
+from snputils.snp.io.read.bcf import _batch_decode_gt, _build_indiv_offsets, _read_bgzf_or_gzip
+from snputils.snp.io.write.bcf import _encode_typed_int_list, _encode_typed_string
 
 
 def test_bcf_reader_matches_vcf_genotypes_and_metadata(snpobj_bcf, snpobj_vcf):
@@ -95,3 +100,80 @@ def test_bcf_reader_reads_samples_without_genotypes(data_path, snpobj_vcf):
 
     assert snpobj.genotypes is None
     np.testing.assert_array_equal(snpobj.samples, snpobj_vcf.samples)
+
+
+def test_bgzf_extra_subfield_length_cannot_exceed_xlen(tmp_path):
+    path = tmp_path / "malformed.bcf"
+    xlen = 4
+    header = b"\x1f\x8b\x08\x04" + b"\x00\x00\x00\x00" + b"\x00\xff" + xlen.to_bytes(2, "little")
+    path.write_bytes(header + b"ZZ" + (10).to_bytes(2, "little"))
+
+    with pytest.raises(ValueError, match="subfield length extends beyond XLEN"):
+        _read_bgzf_or_gzip(path)
+
+
+def test_build_indiv_offsets_rejects_truncated_record_headers():
+    with pytest.raises(ValueError, match="record header is truncated"):
+        _build_indiv_offsets(b"\x00" * 7, 0)
+
+    one_empty_record_then_truncated_header = struct.pack("<II", 0, 0) + b"\x00" * 7
+    with pytest.raises(ValueError, match="record header is truncated"):
+        _build_indiv_offsets(one_empty_record_then_truncated_header, 0)
+
+
+def test_batch_decode_haploid_sum_strands_preserves_dosage_values():
+    data = bytes([2, 4, 0])
+    observed = _batch_decode_gt(
+        data=data,
+        indiv_offsets=np.array([0], dtype=np.int64),
+        gt_data_rel_offset=0,
+        n_vals=1,
+        type_size=1,
+        n_samples=3,
+        n_records=1,
+        sample_index_array=np.array([0, 1, 2], dtype=int),
+        sum_strands=True,
+    )
+
+    np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+
+
+def test_c_decode_gt_haploid_sum_strands_preserves_dosage_values():
+    _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
+    data = struct.pack("<II", 0, 3) + bytes([2, 4, 0])
+
+    gt_buffer, n_records = _bcf.decode_gt(data, 0, 0, 3, 1, 1, 3, None, True)
+    observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 3)
+
+    np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+
+
+def test_c_decode_core_haploid_sum_strands_and_missing_pass_fallback():
+    _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
+    gt_values = bytes([2, 4, 0])
+    indiv = _encode_typed_int_list([1]) + b"\x11" + gt_values
+    shared = (
+        struct.pack("<iiIfII", 0, 9, 1, 12.5, (2 << 16), (1 << 24) | 3)
+        + _encode_typed_string("")
+        + _encode_typed_string("A")
+        + _encode_typed_string("C")
+        + _encode_typed_int_list([0])
+    )
+    data = struct.pack("<II", len(shared), len(indiv)) + shared + indiv
+    gt_rel_offset = len(_encode_typed_int_list([1])) + 1
+
+    (
+        gt_buffer,
+        _chrom_buffer,
+        _pos_buffer,
+        _qual_buffer,
+        filter_buffer,
+        _ids,
+        _refs,
+        _alts,
+        n_records,
+    ) = _bcf.decode_core(data, 0, gt_rel_offset, 3, 1, 1, len(indiv), None, True, -1)
+    observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 3)
+
+    np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+    np.testing.assert_array_equal(np.frombuffer(filter_buffer, dtype=np.bool_), np.array([False]))

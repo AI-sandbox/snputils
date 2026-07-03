@@ -557,9 +557,7 @@ decode_gt(PyObject *self, PyObject *args)
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
-                int first = decode_gt_value(gt, type_size);
-                int value = (n_vals == 1) ? (first - 1) : (first + decode_gt_value(gt + type_size, type_size));
-                row[out_sample] = (char)value;
+                int value = (n_vals == 1) ? first : (first + decode_gt_value(gt + type_size, type_size));
             }
         } else {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {

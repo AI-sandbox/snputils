@@ -186,6 +186,8 @@ def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
             block_size = None
             while extra_offset + 4 <= xlen:
                 subfield_len = int.from_bytes(extra[extra_offset + 2:extra_offset + 4], "little")
+                if extra_offset + 4 + subfield_len > xlen:
+                    raise ValueError("Malformed BGZF extra header: subfield length extends beyond XLEN.")
                 if extra[extra_offset:extra_offset + 2] == b"BC" and subfield_len == 2:
                     block_size = int.from_bytes(extra[extra_offset + 4:extra_offset + 6], "little") + 1
                     break

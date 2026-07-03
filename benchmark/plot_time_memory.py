@@ -154,6 +154,18 @@ def _draw_grouped_bars(
         if idx % 2 == 0:
             ax.axvspan(idx - 0.5, idx + 0.5, color="#f2f2f2", alpha=0.45, linewidth=0, zorder=0)
 
+    marker_y = y_top * 0.06
+    unsupported_names = set()
+    if show_false:
+        unsupported_names = {
+            name
+            for name in names
+            if true_values.get(name) is None and false_values.get(name) is None
+        }
+        for idx, name in enumerate(names):
+            if name in unsupported_names:
+                ax.plot(x[idx], marker_y, "x", color=marker_color, markersize=9, mew=2.5)
+
     series = (
         (-width / 2, true_values, "sum_strands=True", colors["true"]),
         (width / 2, false_values, "sum_strands=False", colors["false"]),
@@ -165,7 +177,8 @@ def _draw_grouped_bars(
             entry = values.get(name)
             xpos = x[idx] + offset
             if entry is None:
-                ax.plot(xpos, y_top * 0.06, "x", color=marker_color, markersize=9, mew=2.5)
+                if name not in unsupported_names:
+                    ax.plot(xpos, marker_y, "x", color=marker_color, markersize=9, mew=2.5)
                 continue
 
             raw_value, raw_std = entry

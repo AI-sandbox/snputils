@@ -1411,7 +1411,7 @@ class BCFReader(SNPBaseReader):
 
         gt_data_rel_offset, gt_n_vals, gt_type_size, _total_indiv_bytes = gt_layout
         sample_arg = None if _all_samples_selected(sample_index_array, n_samples) else sample_index_array.tolist()
-        pass_filter_id = next((idx for idx, name in header.filters.items() if name == "PASS"), 0)
+        pass_filter_id = next((idx for idx, name in header.filters.items() if name == "PASS"), -1)
         decoded = _bcf.decode_core(
             data,
             body_offset,

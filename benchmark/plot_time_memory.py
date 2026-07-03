@@ -9,7 +9,7 @@ from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 
-DEFAULT_FORMATS = ("bed", "pgen", "vcf")
+DEFAULT_FORMATS = ("bed", "pgen", "vcf", "bcf")
 DEFAULT_TIME_NAMES = (
     "snputils",
     "pgenlib",
@@ -35,13 +35,20 @@ DEFAULT_MEMORY_NAMES = (
 )
 
 
-def _load_values(results_dir: Path, fmt: str, metric: str) -> dict[str, tuple[float, float]]:
-    path = results_dir / f"{fmt}_chr22.json"
-    with path.open() as handle:
-        data = json.load(handle)
+def _iter_benchmarks(results_dir: Path, fmt: str):
+    merged_path = results_dir / f"{fmt}_chr22.json"
+    paths = [merged_path] if merged_path.exists() else sorted(results_dir.glob(f"{fmt}_*.json"))
+    for path in paths:
+        if path.stat().st_size == 0:
+            continue
+        with path.open() as handle:
+            data = json.load(handle)
+        yield from data.get("benchmarks", [])
 
+
+def _load_values(results_dir: Path, fmt: str, metric: str) -> dict[str, tuple[float, float]]:
     values = {}
-    for bench in data.get("benchmarks", []):
+    for bench in _iter_benchmarks(results_dir, fmt):
         name = bench.get("params", {}).get("name")
         if not name:
             continue
@@ -119,16 +126,18 @@ def _draw_grouped_bars(
     title: str,
     y_cap: float | None = None,
     axis_top: float | None = None,
+    show_false: bool = True,
 ) -> None:
     x = np.arange(len(names))
-    width = 0.36
+    width = 0.36 if show_false else 0.42
     colors = {"true": "#4C72B0", "false": "#DD8452"}
     marker_color = "#C44E52"
     value_rotation = 90
     value_fontsize = 14
+    value_sets = (true_values, false_values) if show_false else (true_values,)
     all_values = [
         _plot_value(values.get(name)[0], metric)
-        for values in (true_values, false_values)
+        for values in value_sets
         for name in names
         if values.get(name) is not None
     ]
@@ -145,10 +154,13 @@ def _draw_grouped_bars(
         if idx % 2 == 0:
             ax.axvspan(idx - 0.5, idx + 0.5, color="#f2f2f2", alpha=0.45, linewidth=0, zorder=0)
 
-    for offset, values, label, color in (
+    series = (
         (-width / 2, true_values, "sum_strands=True", colors["true"]),
         (width / 2, false_values, "sum_strands=False", colors["false"]),
-    ):
+    ) if show_false else (
+        (0.0, true_values, "sum_strands=True", colors["true"]),
+    )
+    for offset, values, label, color in series:
         for idx, name in enumerate(names):
             entry = values.get(name)
             xpos = x[idx] + offset
@@ -232,7 +244,7 @@ def plot_time_memory(
     fig, axs = plt.subplots(
         len(DEFAULT_FORMATS),
         2,
-        figsize=(17.75, 9.65),
+        figsize=(17.75, 12.4),
         sharex="col",
         gridspec_kw={"width_ratios": [1.35, 1.0]},
     )
@@ -253,6 +265,7 @@ def plot_time_memory(
             "time",
             f"{title} time",
             axis_top=600 if fmt == "vcf" else None,
+            show_false=fmt != "bed",
         )
         _draw_grouped_bars(
             axs[row, 1],
@@ -262,6 +275,7 @@ def plot_time_memory(
             "memory",
             f"{title} peak memory",
             y_cap=memory_y_cap,
+            show_false=fmt != "bed",
         )
         axs[row, 0].set_ylabel("Time (seconds)")
         axs[row, 1].set_ylabel("Peak memory (GiB)")
@@ -272,29 +286,6 @@ def plot_time_memory(
         ax.get_xticklabels()[0].set_fontweight("bold")
 
     fig.tight_layout(rect=(0.02, 0, 1, 0.99))
-    handles, _ = axs[0, 0].get_legend_handles_labels()
-    top_left = axs[0, 0].get_position()
-    legend_x = top_left.x0
-    fig.text(
-        legend_x,
-        top_left.y1 + 0.022,
-        "sum_strands",
-        ha="left",
-        va="center",
-        fontsize=16,
-    )
-    fig.legend(
-        handles,
-        ("True", "False"),
-        loc="center left",
-        bbox_to_anchor=(legend_x + 0.08, top_left.y1 + 0.022),
-        ncol=2,
-        frameon=False,
-        prop={"size": 16},
-        handlelength=1.0,
-        handletextpad=0.3,
-        columnspacing=0.45,
-    )
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=170)
     if pdf_output is None and output.suffix.lower() != ".pdf":

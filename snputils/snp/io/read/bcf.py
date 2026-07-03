@@ -896,7 +896,7 @@ def _batch_decode_gt(
 
         if n_vals == 1:
             if sum_strands:
-                out[start:stop] = decoded[:, :, 0].astype(np.int8, copy=False) - 1
+                out[start:stop] = decoded[:, :, 0].astype(np.int8, copy=False)
             else:
                 chunk = out[start:stop]
                 chunk[:, :, 0] = decoded[:, :, 0].astype(np.int8, copy=False)

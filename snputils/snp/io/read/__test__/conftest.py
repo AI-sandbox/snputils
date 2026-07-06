@@ -197,7 +197,7 @@ def snpobj_vcf(data_path):
 
 @pytest.fixture(scope="module")
 def snpobj_bed(data_path):
-    return BEDReader(data_path + "/bed/subset").read(sum_strands=False)
+    return BEDReader(data_path + "/bed/subset").read(sum_strands=True)
 
 
 @pytest.fixture(scope="module")
@@ -209,7 +209,7 @@ def snpobj_bgen(data_path):
 def snpobj_bcf(data_path):
     from snputils.snp.io.read.bcf import BCFReader
 
-    return BCFReader(data_path + "/bcf/subset.bcf").read(variant_idxs=np.arange(100))
+    return BCFReader(data_path + "/bcf/subset.bcf").read(sum_strands=False, variant_idxs=np.arange(100))
 
 
 @pytest.fixture(scope="module")

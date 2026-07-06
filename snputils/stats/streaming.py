@@ -357,6 +357,8 @@ def allele_freq_stream(
     else:
         chunk_iter = iter(data)
 
+    force_diploid_2d = bool(iter_kwargs.get("sum_strands", False))
+
     lai_object = None
     lai_window_mapper: Optional[_IterWindowsLAIMapper] = None
     if ancestry is not None and laiobj is not None:
@@ -430,6 +432,7 @@ def allele_freq_stream(
             ancestry=ancestry,
             calldata_lai=calldata_lai,
             pseudohaploid=pseudohaploid,
+            force_diploid_2d=force_diploid_2d,
         )
 
         if pops_ref is None:

@@ -21,7 +21,7 @@ def test_vcf_polars_reads_sample_names_for_both_chrom_headers(tmp_path: Path, ch
     vcf_path = tmp_path / f"tiny_{chrom_header.replace('#', 'hash_')}.vcf"
     _write_tiny_vcf(vcf_path, chrom_header)
 
-    snpobj = VCFReaderPolars(str(vcf_path)).read(samples=["HG00096"])
+    snpobj = VCFReaderPolars(str(vcf_path)).read(samples=["HG00096"], sum_strands=False)
 
     expected = np.array([[[0, 1]], [[1, 1]]], dtype=np.int8)
     assert np.array_equal(snpobj.samples, np.array(["HG00096"]))

@@ -9,6 +9,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
+from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils._utils.printing import array_shape, format_repr
 
 if TYPE_CHECKING:
@@ -671,7 +672,7 @@ class SNPObject:
         if gt.ndim == 2:
             return gt.astype(np.float32, copy=True)
         if gt.ndim == 3:
-            return gt.sum(axis=2, dtype=np.float32)
+            return sum_diploid_genotypes(gt, dtype=np.float32, missing_value=-1.0)
         raise ValueError("`genotypes` must be a 2D dosage array or 3D allele-call array.")
 
     def to_dosage(self, inplace: bool = False) -> Optional['SNPObject']:
@@ -887,11 +888,11 @@ class SNPObject:
             return self if inplace else self.copy()
 
         if inplace:
-            self.genotypes = self.genotypes.sum(axis=2, dtype=np.int8)
+            self.genotypes = sum_diploid_genotypes(self.genotypes)
             return self
         else:
             snpobj = self.copy()
-            snpobj.genotypes = self.genotypes.sum(axis=2, dtype=np.int8)
+            snpobj.genotypes = sum_diploid_genotypes(self.genotypes)
             return snpobj
 
     def filter_variants(

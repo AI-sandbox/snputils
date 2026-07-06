@@ -318,6 +318,30 @@ read_int_value_unsigned(const unsigned char *ptr, Py_ssize_t type_size)
 }
 
 static int
+sum_diploid_gt_values(int first, int second)
+{
+    if (first < 0 || second < 0) {
+        return -1;
+    }
+    return first + second;
+}
+
+static int
+reject_unphased_second_allele(const unsigned char *gt, Py_ssize_t type_size)
+{
+    uint32_t second_raw = read_int_value_unsigned(gt + type_size, type_size);
+    int second = (int)(second_raw >> 1) - 1;
+    if (second >= 0 && (second_raw & 1u) == 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Cannot read unphased BCF genotypes with `sum_strands=False`; "
+            "use `sum_strands=True` to load 0/1/2 genotype dosages.");
+        return -1;
+    }
+    return 0;
+}
+
+static int
 parse_filter_pass(
     const unsigned char *data,
     Py_ssize_t data_len,
@@ -560,13 +584,19 @@ decode_gt(PyObject *self, PyObject *args)
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
                 int first = decode_gt_value(gt, type_size);
-                int value = (n_vals == 1) ? first : (first + decode_gt_value(gt + type_size, type_size));
+                int value = (n_vals == 1) ? first : sum_diploid_gt_values(first, decode_gt_value(gt + type_size, type_size));
                 row[out_sample] = (char)value;
             }
         } else {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
+                if (n_vals == 2 && reject_unphased_second_allele(gt, type_size) < 0) {
+                    Py_DECREF(out);
+                    PyBuffer_Release(&data_view);
+                    PyMem_Free(sample_indices);
+                    return NULL;
+                }
                 row[out_sample * 2] = (char)decode_gt_value(gt, type_size);
                 row[out_sample * 2 + 1] = (n_vals == 1) ? (char)-1 : (char)decode_gt_value(gt + type_size, type_size);
             }
@@ -910,13 +940,19 @@ decode_core(PyObject *self, PyObject *args)
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
                 int first = decode_gt_value(gt, type_size);
-                int value = (n_vals == 1) ? first : (first + decode_gt_value(gt + type_size, type_size));
+                int value = (n_vals == 1) ? first : sum_diploid_gt_values(first, decode_gt_value(gt + type_size, type_size));
                 gt_row[out_sample] = (char)value;
             }
         } else {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
+                if (n_vals == 2 && reject_unphased_second_allele(gt, type_size) < 0) {
+                    Py_DECREF(variant_id);
+                    Py_DECREF(ref);
+                    Py_DECREF(alt);
+                    goto error;
+                }
                 gt_row[out_sample * 2] = (char)decode_gt_value(gt, type_size);
                 gt_row[out_sample * 2 + 1] = (n_vals == 1) ? (char)-1 : (char)decode_gt_value(gt + type_size, type_size);
             }

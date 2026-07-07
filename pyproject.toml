@@ -96,6 +96,7 @@ python =
     3.9: py39
     3.14: py314
 [testenv]
+changedir = {envtmpdir}
 passenv =
     CI
     GITHUB_ACTIONS
@@ -105,5 +106,5 @@ extras =
     grg
 commands =
     python -c "import snputils.snp.io.read._bcf; import snputils.snp.io.write._bcf"
-    python -m pytest -vv --color=yes --cov=snputils --cov-report=xml
+    python -m pytest -vv --color=yes --cov=snputils --cov-report=xml:{toxinidir}/coverage.xml --pyargs snputils
 """

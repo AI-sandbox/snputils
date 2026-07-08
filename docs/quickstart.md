@@ -9,7 +9,7 @@ snp = su.read_snp("cohort.vcf.gz")                   # VCF, BCF, BGEN, BED, PGEN
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                              # convert VCF -> PLINK2
 
-lai = su.read_lai("local_ancestry.msp")              # MSP or FLARE local ancestry
+lai = su.read_lai("local_ancestry.msp")              # MSP, FLARE, or .lanc local ancestry
 adm = su.read_admixture("admixture")                 # global ancestry (ADMIXTURE)
 labels = su.read_labels("labels.tsv")                # sample metadata for plots
 pheno = su.read_pheno("phenotypes.tsv", col="trait")

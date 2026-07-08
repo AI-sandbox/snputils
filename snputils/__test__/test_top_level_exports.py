@@ -12,6 +12,9 @@ def test_top_level_analysis_exports(tmp_path):
     assert su.FLAREReader.__name__ == "FLAREReader"
     assert su.FLAREWriter.__name__ == "FLAREWriter"
     assert su.read_flare.__name__ == "read_flare"
+    assert su.LANCReader.__name__ == "LANCReader"
+    assert su.LANCWriter.__name__ == "LANCWriter"
+    assert su.read_lanc.__name__ == "read_lanc"
 
     labels_path = tmp_path / "labels.tsv"
     labels_path.write_text("indID\tlabel\nHG001\tEUR\n", encoding="utf-8")

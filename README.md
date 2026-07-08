@@ -34,7 +34,7 @@ snp = su.read_snp("cohort.vcf.gz")                    # VCF, BCF, BGEN, BED, PGE
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                               # convert to PGEN
 
-lai = su.read_lai("local_ancestry.msp")               # MSP or FLARE local ancestry
+lai = su.read_lai("local_ancestry.msp")               # MSP, FLARE, or .lanc local ancestry
 adm = su.read_admixture("admixture_prefix")           # ADMIXTURE-style global ancestry
 pheno = su.read_pheno("phenotypes.tsv", col="trait")
 ibd = su.read_ibd("segments.hapibd")
@@ -80,7 +80,7 @@ Optional extras:
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets
 - **GRG**: Read and write graph-based genome representation files
-- **Local Ancestry**: Handle `.msp` and FLARE `.anc.vcf.gz` local ancestry formats
+- **Local Ancestry**: Handle `.msp`, FLARE `.anc.vcf.gz`, and admix-kit `.lanc` local ancestry formats
 - **Global Ancestry / ADMIXTURE**: Read and write `.Q` and `.P` files
 - **IBD**: Read `hap-IBD` and `ancIBD` outputs into a unified object
 

@@ -381,6 +381,110 @@ def test_ld_prune_rejects_invalid_genotype_encodings():
         allele_snpobj.ld_prune_mask(window_size=2, step_size=1)
 
 
+def test_sample_heterozygosity_and_inbreeding_from_2d_hard_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, 2.0, 1.0],
+                [0.0, 0.0, 2.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [np.nan, 0.0, -1.0, 2.0],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+
+    heterozygosity = snpobj.sample_heterozygosity()
+    inbreeding = snpobj.sample_inbreeding_coefficient()
+    heterozygosity_df = snpobj.sample_heterozygosity(samples=["s2", "s4"], as_dataframe=True)
+
+    np.testing.assert_allclose(heterozygosity, np.array([1.0 / 3.0, 0.5, 1.0 / 3.0, 0.75]))
+    np.testing.assert_allclose(
+        inbreeding,
+        np.array([0.3191489361702128, -0.015873015873015817, 0.3191489361702128, -0.5238095238095237]),
+    )
+    assert heterozygosity_df.columns.tolist() == ["sample_index", "sample", "heterozygosity"]
+    assert heterozygosity_df["sample"].tolist() == ["s2", "s4"]
+    np.testing.assert_allclose(heterozygosity_df["heterozygosity"], np.array([0.5, 0.75]))
+
+
+def test_sample_heterozygosity_from_3d_calls_treats_partial_missing_as_missing():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1], [1, 1], [-1, -1]],
+                [[0, 1], [0, -1], [1, 1], [np.nan, 0]],
+            ]
+        )
+    )
+
+    heterozygosity = snpobj.sample_heterozygosity()
+
+    np.testing.assert_allclose(heterozygosity, np.array([0.5, 1.0, 0.0, np.nan]), equal_nan=True)
+
+
+def test_flag_heterozygosity_outliers_returns_sample_qc_report():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0, 0, 0, 0, 0, 1],
+                [0, 0, 0, 0, 0, 1],
+                [0, 0, 0, 0, 0, 1],
+                [0, 0, 0, 0, 0, 1],
+                [0, 0, 0, 0, 0, 1],
+                [0, 0, 0, 0, 0, 1],
+            ],
+            dtype=float,
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4", "s5", "s6"], dtype=object),
+    )
+
+    report = snpobj.flag_heterozygosity_outliers(n_sd=2)
+
+    assert report.columns.tolist() == [
+        "sample_index",
+        "sample",
+        "called_genotypes",
+        "observed_heterozygotes",
+        "expected_heterozygotes",
+        "heterozygosity",
+        "inbreeding_coefficient",
+        "heterozygosity_z",
+        "heterozygosity_outlier",
+    ]
+    assert report["sample"].tolist() == ["s1", "s2", "s3", "s4", "s5", "s6"]
+    np.testing.assert_allclose(report["heterozygosity"], np.array([0, 0, 0, 0, 0, 1], dtype=float))
+    assert report["heterozygosity_outlier"].tolist() == [False, False, False, False, False, True]
+
+
+def test_sample_inbreeding_is_nan_when_expected_heterozygosity_is_zero():
+    snpobj = SNPObject(genotypes=np.array([[0, 0, 0], [2, 2, 2]], dtype=float))
+
+    np.testing.assert_allclose(
+        snpobj.sample_inbreeding_coefficient(),
+        np.array([np.nan, np.nan, np.nan]),
+        equal_nan=True,
+    )
+
+
+def test_sample_heterozygosity_rejects_invalid_hard_calls():
+    dosage_snpobj = SNPObject(genotypes=np.array([[0.0, 0.5, 2.0]]))
+    allele_snpobj = SNPObject(genotypes=np.array([[[0, 0], [0, 2], [1, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="hard-call dosages"):
+        dosage_snpobj.sample_heterozygosity()
+    with pytest.raises(ValueError, match="0/1 alleles"):
+        allele_snpobj.sample_heterozygosity()
+
+
+@pytest.mark.parametrize("n_sd", [-1, np.nan, "not-a-number"])
+def test_flag_heterozygosity_outliers_validates_n_sd(n_sd):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="n_sd"):
+        snpobj.flag_heterozygosity_outliers(n_sd=n_sd)
+
+
 def test_filter_samples_reorders_sample_metadata():
     snpobj = _toy_snpobj()
     snpobj.sample_metadata = pd.DataFrame(

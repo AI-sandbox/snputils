@@ -969,6 +969,16 @@ class SNPObject:
         return parsed_int
 
     @staticmethod
+    def _validate_nonnegative_parameter(name: str, value: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a non-negative numeric value.") from exc
+        if not np.isfinite(parsed) or parsed < 0:
+            raise ValueError(f"'{name}' must be non-negative.")
+        return parsed
+
+    @staticmethod
     def _format_call_rate_output(
         values: np.ndarray,
         column: str,
@@ -981,9 +991,29 @@ class SNPObject:
 
         return pd.DataFrame({column: np.asarray(values, dtype=float).ravel()})
 
+    def _format_sample_stat_output(
+        self,
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        data = {"sample_index": np.asarray(sample_indexes, dtype=int)}
+        if self.samples is not None:
+            data["sample"] = np.asarray(self.samples)[sample_indexes]
+        data[column] = np.asarray(values, dtype=float).ravel()
+        return pd.DataFrame(data)
+
     def _hard_call_dosages(
         self,
         samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        context: str = "HWE exact test",
     ) -> Tuple[np.ndarray, np.ndarray]:
         if self.genotypes is None:
             raise ValueError("Genotype data `genotypes` is None.")
@@ -1004,7 +1034,7 @@ class SNPObject:
             called = np.all(called_entries, axis=2)
             called_alleles = subset[called]
             if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
-                raise ValueError("HWE exact test requires biallelic hard calls encoded as 0/1 alleles.")
+                raise ValueError(f"{context} requires biallelic hard calls encoded as 0/1 alleles.")
             dosages = np.full(called.shape, np.nan, dtype=float)
             if called_alleles.size:
                 dosages[called] = called_alleles.sum(axis=1)
@@ -1019,9 +1049,50 @@ class SNPObject:
             | np.isclose(called_dosages, 2)
         )
         if called_dosages.size and not np.all(valid_dosages):
-            raise ValueError("HWE exact test requires hard-call dosages encoded as 0, 1, or 2.")
+            raise ValueError(f"{context} requires hard-call dosages encoded as 0, 1, or 2.")
         dosages = np.where(called, np.rint(subset), np.nan)
         return dosages, called
+
+    def _sample_heterozygosity_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes = self._sample_subset_indices(samples)
+        dosages, called = self._hard_call_dosages(
+            samples=sample_indexes,
+            context="Sample heterozygosity",
+        )
+        heterozygous = called & (dosages == 1)
+        called_counts = called.sum(axis=0).astype(float)
+        observed_hets = heterozygous.sum(axis=0).astype(float)
+        heterozygosity = np.full(called_counts.shape, np.nan, dtype=float)
+        nonzero = called_counts > 0
+        heterozygosity[nonzero] = observed_hets[nonzero] / called_counts[nonzero]
+        return sample_indexes, dosages, called, observed_hets, called_counts, heterozygosity
+
+    def _sample_inbreeding_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes, dosages, called, observed_hets, called_counts, _ = (
+            self._sample_heterozygosity_components(samples=samples)
+        )
+        called_alleles = called.sum(axis=1).astype(float) * 2.0
+        alt_counts = np.where(called, dosages, 0.0).sum(axis=1)
+        allele_freq = np.full(called_alleles.shape, np.nan, dtype=float)
+        variant_called = called_alleles > 0
+        allele_freq[variant_called] = alt_counts[variant_called] / called_alleles[variant_called]
+        expected_per_variant = 2.0 * allele_freq * (1.0 - allele_freq)
+        expected_hets = np.where(
+            called,
+            np.nan_to_num(expected_per_variant, nan=0.0)[:, None],
+            0.0,
+        ).sum(axis=0)
+
+        inbreeding = np.full(observed_hets.shape, np.nan, dtype=float)
+        informative = expected_hets > 0
+        inbreeding[informative] = 1.0 - (observed_hets[informative] / expected_hets[informative])
+        return sample_indexes, inbreeding, expected_hets, observed_hets, called_counts
 
     @staticmethod
     def _hwe_exact_pvalue(obs_hets: int, obs_hom_ref: int, obs_hom_alt: int) -> float:
@@ -1310,6 +1381,140 @@ class SNPObject:
             column="sample_call_rate",
             as_dataframe=as_dataframe,
         )
+
+    def sample_heterozygosity(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute observed heterozygosity per sample.
+
+        The value is the fraction of called diploid biallelic genotypes that are
+        heterozygous. Missing calls are ignored. This QC statistic is typically
+        most useful after restricting to autosomal, reasonably common, LD-pruned
+        variants.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of per-sample heterozygosity, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        sample_indexes, _, _, _, _, heterozygosity = self._sample_heterozygosity_components(
+            samples=samples,
+        )
+        return self._format_sample_stat_output(
+            heterozygosity,
+            sample_indexes=sample_indexes,
+            column="heterozygosity",
+            as_dataframe=as_dataframe,
+        )
+
+    def sample_inbreeding_coefficient(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-sample inbreeding coefficients from observed and expected heterozygosity.
+
+        The coefficient is ``1 - observed_hets / expected_hets``, where expected
+        heterozygosity is summed from cohort allele frequencies estimated across
+        the selected samples. Missing calls are ignored per sample. This statistic
+        is typically most useful after restricting to autosomal, reasonably
+        common, LD-pruned variants.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of per-sample inbreeding coefficients, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        sample_indexes, inbreeding, _, _, _ = self._sample_inbreeding_components(
+            samples=samples,
+        )
+        return self._format_sample_stat_output(
+            inbreeding,
+            sample_indexes=sample_indexes,
+            column="inbreeding_coefficient",
+            as_dataframe=as_dataframe,
+        )
+
+    def flag_heterozygosity_outliers(
+        self,
+        n_sd: float = 3,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Any:
+        """
+        Build a per-sample heterozygosity outlier report.
+
+        Samples are flagged when their observed heterozygosity is more than
+        ``n_sd`` standard deviations from the mean among finite selected samples.
+        This is best run on autosomal, reasonably common, LD-pruned variants.
+
+        Args:
+            n_sd (float, default=3):
+                Number of standard deviations from the mean used for flagging.
+                Must be non-negative.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+
+        Returns:
+            pandas.DataFrame:
+                Sample-level QC report with heterozygosity, inbreeding coefficient,
+                z-score, and outlier flag.
+        """
+        threshold = self._validate_nonnegative_parameter("n_sd", n_sd)
+        sample_indexes, _, _, observed_hets, called_counts, heterozygosity = (
+            self._sample_heterozygosity_components(samples=samples)
+        )
+        _, inbreeding, expected_hets, _, _ = self._sample_inbreeding_components(
+            samples=sample_indexes,
+        )
+
+        finite = np.isfinite(heterozygosity)
+        z_scores = np.full(heterozygosity.shape, np.nan, dtype=float)
+        outliers = np.zeros(heterozygosity.shape, dtype=bool)
+        if np.count_nonzero(finite) > 0:
+            mean = heterozygosity[finite].mean()
+            sd = heterozygosity[finite].std(ddof=0)
+            if sd > 0:
+                z_scores[finite] = (heterozygosity[finite] - mean) / sd
+                outliers[finite] = np.abs(z_scores[finite]) > threshold
+            else:
+                z_scores[finite] = 0.0
+
+        import pandas as pd
+
+        data = {
+            "sample_index": np.asarray(sample_indexes, dtype=int),
+            "called_genotypes": called_counts.astype(int),
+            "observed_heterozygotes": observed_hets.astype(int),
+            "expected_heterozygotes": expected_hets,
+            "heterozygosity": heterozygosity,
+            "inbreeding_coefficient": inbreeding,
+            "heterozygosity_z": z_scores,
+            "heterozygosity_outlier": outliers,
+        }
+        if self.samples is not None:
+            data = {
+                "sample_index": data["sample_index"],
+                "sample": np.asarray(self.samples)[sample_indexes],
+                **{key: value for key, value in data.items() if key != "sample_index"},
+            }
+        return pd.DataFrame(data)
 
     def hwe_pvalue(
         self,

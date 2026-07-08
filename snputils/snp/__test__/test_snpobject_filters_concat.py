@@ -162,6 +162,155 @@ def test_call_rate_filters_validate_threshold(method_name, min_call_rate):
         getattr(snpobj, method_name)(min_call_rate=min_call_rate)
 
 
+def test_imputation_r2_extracts_common_info_keys_and_filters_variants():
+    snpobj = SNPObject(
+        genotypes=np.zeros((6, 1), dtype=float),
+        variants_id=np.array(["v1", "v2", "v3", "v4", "v5", "v6"], dtype=object),
+        variants_info=np.array(
+            [
+                "R2=0.95;AF=0.1",
+                "DR2=0.71",
+                "INFO=0.82",
+                b"imp=0.4;AF=0.2",
+                {"rsq": "0.77"},
+                ".",
+            ],
+            dtype=object,
+        ),
+    )
+
+    r2 = snpobj.imputation_r2(source="info")
+    r2_df = snpobj.imputation_r2(source="info", as_dataframe=True)
+    filtered = snpobj.filter_imputation_quality(min_r2=0.8, source="info")
+
+    np.testing.assert_allclose(r2, np.array([0.95, 0.71, 0.82, 0.4, 0.77, np.nan]), equal_nan=True)
+    assert r2_df.columns.tolist() == ["imputation_r2"]
+    np.testing.assert_allclose(r2_df["imputation_r2"], r2, equal_nan=True)
+    assert filtered.variants_id.tolist() == ["v1", "v3"]
+
+
+def test_imputation_r2_honors_custom_info_key_order():
+    snpobj = SNPObject(
+        genotypes=np.zeros((2, 1), dtype=float),
+        variants_info=np.array(["R2=0.1;CUSTOM=0.9", "CUSTOM=0.85"], dtype=object),
+    )
+
+    np.testing.assert_allclose(
+        snpobj.imputation_r2(source="info", info_keys=["CUSTOM", "R2"]),
+        np.array([0.9, 0.85]),
+    )
+
+
+def test_imputation_r2_from_unphased_genotype_probabilities():
+    snpobj = SNPObject(
+        calldata_gp=np.array(
+            [
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0],
+                ],
+                [
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                ],
+            ],
+            dtype=np.float32,
+        ),
+        variants_id=np.array(["high_quality", "low_quality"], dtype=object),
+    )
+
+    np.testing.assert_allclose(snpobj.imputation_r2(source="gp"), np.array([1.0, 0.0]))
+    filtered = snpobj.filter_imputation_quality(min_r2=0.8, source="gp")
+    assert filtered.variants_id.tolist() == ["high_quality"]
+
+
+def test_imputation_r2_from_phased_genotype_probabilities():
+    snpobj = SNPObject(
+        calldata_gp=np.array(
+            [
+                [
+                    [1.0, 0.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0, 1.0],
+                ],
+                [
+                    [0.5, 0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5, 0.5],
+                ],
+            ],
+            dtype=np.float32,
+        )
+    )
+
+    np.testing.assert_allclose(snpobj.imputation_r2(source="gp"), np.array([1.0, 0.0]))
+
+
+def test_imputation_r2_auto_prefers_info_and_fills_missing_from_gp():
+    snpobj = SNPObject(
+        calldata_gp=np.array(
+            [
+                [
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                    [0.25, 0.5, 0.25],
+                ],
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 0.0],
+                ],
+            ],
+            dtype=np.float32,
+        ),
+        variants_info=np.array(["R2=0.9", "."], dtype=object),
+    )
+
+    np.testing.assert_allclose(snpobj.imputation_r2(source="auto"), np.array([0.9, 1.0]))
+    np.testing.assert_allclose(snpobj.imputation_r2(source="gp"), np.array([0.0, 1.0]))
+
+
+def test_imputation_r2_from_dosages_and_auto_fallback():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+                [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ]
+        ),
+        variants_id=np.array(["spread", "flat", "monomorphic"], dtype=object),
+    )
+
+    expected = np.array([1.0, 0.0, np.nan])
+    np.testing.assert_allclose(snpobj.imputation_r2(source="dosage"), expected, equal_nan=True)
+    np.testing.assert_allclose(snpobj.imputation_r2(source="auto"), expected, equal_nan=True)
+    assert snpobj.filter_imputation_quality(min_r2=0.8, source="dosage").variants_id.tolist() == ["spread"]
+
+
+@pytest.mark.parametrize("min_r2", [-0.01, 1.01, "not-a-number"])
+def test_filter_imputation_quality_validates_threshold(min_r2):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="min_r2"):
+        snpobj.filter_imputation_quality(min_r2=min_r2)
+
+
+def test_imputation_r2_validates_source():
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="source"):
+        snpobj.imputation_r2(source="unknown")
+
+
 def test_hwe_pvalue_from_3d_hard_calls_ignores_missing_calls():
     snpobj = SNPObject(
         genotypes=np.array(

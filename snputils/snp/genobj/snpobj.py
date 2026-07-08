@@ -24,6 +24,17 @@ class SNPObject:
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
     SNP-level Local Ancestry Information (LAI).
     """
+    _DEFAULT_IMPUTATION_INFO_KEYS = (
+        "INFO",
+        "R2",
+        "DR2",
+        "IMP",
+        "INFO_SCORE",
+        "IMPUTE2_INFO",
+        "RSQ",
+        "ER2",
+    )
+
     def __init__(
         self,
         genotypes: Optional[np.ndarray] = None,
@@ -1206,6 +1217,235 @@ class SNPObject:
         r = np.dot(x_centered, y_centered) / np.sqrt(ssx * ssy)
         return min(1.0, float(r * r))
 
+    @staticmethod
+    def _normalize_imputation_info_keys(
+        info_keys: Optional[Union[str, Sequence[str]]],
+    ) -> Tuple[str, ...]:
+        if info_keys is None:
+            return SNPObject._DEFAULT_IMPUTATION_INFO_KEYS
+        if isinstance(info_keys, str):
+            return (info_keys,)
+        return tuple(str(key) for key in info_keys)
+
+    @staticmethod
+    def _coerce_info_float(value: Any) -> float:
+        if value is None:
+            return np.nan
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        if isinstance(value, (list, tuple, np.ndarray)):
+            arr = np.asarray(value, dtype=object).ravel()
+            if arr.size == 0:
+                return np.nan
+            value = arr[0]
+        if isinstance(value, str):
+            value = value.strip()
+            if "," in value:
+                value = value.split(",", 1)[0].strip()
+            if value in {"", ".", "NA", "NaN", "nan", "None"}:
+                return np.nan
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return np.nan
+        if not np.isfinite(parsed):
+            return np.nan
+        return parsed
+
+    @classmethod
+    def _parse_imputation_info_value(cls, info: Any, info_keys: Tuple[str, ...]) -> float:
+        if info is None:
+            return np.nan
+        if isinstance(info, bytes):
+            info = info.decode("utf-8", errors="ignore")
+        if isinstance(info, dict):
+            upper_map = {str(key).upper(): value for key, value in info.items()}
+            for key in info_keys:
+                if key in info:
+                    return cls._coerce_info_float(info[key])
+                value = upper_map.get(key.upper())
+                if value is not None:
+                    return cls._coerce_info_float(value)
+            return np.nan
+        if isinstance(info, (int, float, np.number)):
+            return cls._coerce_info_float(info)
+
+        info_str = str(info).strip()
+        if info_str in {"", ".", "NA", "NaN", "nan", "None"}:
+            return np.nan
+        bare_value = cls._coerce_info_float(info_str)
+        if np.isfinite(bare_value) and "=" not in info_str and ";" not in info_str:
+            return bare_value
+
+        fields = {}
+        for item in info_str.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            fields[key.strip()] = value.strip()
+        upper_fields = {key.upper(): value for key, value in fields.items()}
+        for key in info_keys:
+            if key in fields:
+                return cls._coerce_info_float(fields[key])
+            value = upper_fields.get(key.upper())
+            if value is not None:
+                return cls._coerce_info_float(value)
+        return np.nan
+
+    def _imputation_r2_from_info(
+        self,
+        info_keys: Optional[Union[str, Sequence[str]]] = None,
+    ) -> np.ndarray:
+        info = self.variants_info
+        values = np.full(self.n_snps, np.nan, dtype=float)
+        if info is None:
+            return values
+
+        info_array = np.asarray(info, dtype=object).ravel()
+        if info_array.size == 0:
+            return values
+        if info_array.shape[0] != self.n_snps:
+            raise ValueError(
+                "`variants_info` must have length equal to the number of variants "
+                "to extract imputation quality metrics."
+            )
+
+        keys = self._normalize_imputation_info_keys(info_keys)
+        for idx, info_value in enumerate(info_array):
+            values[idx] = self._parse_imputation_info_value(info_value, keys)
+        return values
+
+    @staticmethod
+    def _validate_bgen_probability_padding(probabilities: np.ndarray) -> np.ndarray:
+        finite = np.isfinite(probabilities)
+        widths = finite.sum(axis=1)
+        for sample_idx, width in enumerate(widths):
+            if width == 0:
+                continue
+            if finite[sample_idx, :width].all() and not finite[sample_idx, width:].any():
+                continue
+            raise ValueError(
+                "BGEN probability rows may only contain NaN values as all-missing rows "
+                "or as trailing padding for lower-ploidy samples."
+            )
+        return widths
+
+    def _imputation_r2_from_gp(self) -> np.ndarray:
+        if self.calldata_gp is None:
+            return np.full(self.n_snps, np.nan, dtype=float)
+
+        if self.variants_alt is not None:
+            alt = np.asarray(self.variants_alt, dtype=object).astype(str)
+            multiallelic = np.char.find(alt, ",") >= 0
+            if np.any(multiallelic):
+                first = int(np.flatnonzero(multiallelic)[0])
+                raise ValueError(
+                    "BGEN imputation R2 currently supports only biallelic variants; "
+                    f"variant {first} has ALT={alt[first]!r}."
+                )
+
+        gp = np.asarray(self.calldata_gp, dtype=np.float32)
+        if gp.ndim != 3:
+            raise ValueError("`calldata_gp` must have shape (n_snps, n_samples, n_probabilities).")
+
+        r2 = np.full(gp.shape[0], np.nan, dtype=float)
+        for variant_idx, probabilities in enumerate(gp):
+            widths = self._validate_bgen_probability_padding(probabilities)
+            phased = self._bgen_biallelic_rows_look_phased(probabilities, widths)
+            dosage_sum = 0.0
+            ploidy_sum = 0.0
+            posterior_var_sum = 0.0
+            called = 0
+
+            for sample_idx, width in enumerate(widths):
+                width = int(width)
+                if width == 0:
+                    continue
+
+                sample_probs = probabilities[sample_idx, :width].astype(float, copy=False)
+
+                if phased:
+                    if width % 2 != 0:
+                        raise ValueError(
+                            f"Cannot compute phased BGEN imputation R2 for variant {variant_idx}, "
+                            f"sample {sample_idx}: expected an even probability width, got {width}."
+                        )
+                    haplotypes = sample_probs.reshape(width // 2, 2)
+                    haplotype_sums = haplotypes.sum(axis=1)
+                    if not np.all(np.isfinite(haplotype_sums)) or np.any(haplotype_sums <= 0):
+                        continue
+                    haplotypes = haplotypes / haplotype_sums[:, None]
+                    alt_probs = haplotypes[:, 1]
+                    ploidy = alt_probs.size
+                    dosage = float(alt_probs.sum())
+                    posterior_var = float(np.sum(alt_probs * (1.0 - alt_probs)))
+                else:
+                    prob_sum = sample_probs.sum()
+                    if not np.isfinite(prob_sum) or prob_sum <= 0:
+                        continue
+                    sample_probs = sample_probs / prob_sum
+                    ploidy = width - 1
+                    if ploidy <= 0:
+                        continue
+                    genotype_values = np.arange(width, dtype=float)
+                    dosage = float(np.dot(sample_probs, genotype_values))
+                    expected_square = float(np.dot(sample_probs, genotype_values * genotype_values))
+                    posterior_var = max(0.0, expected_square - dosage * dosage)
+
+                dosage_sum += dosage
+                ploidy_sum += float(ploidy)
+                posterior_var_sum += posterior_var
+                called += 1
+
+            if called == 0 or ploidy_sum <= 0:
+                continue
+
+            allele_freq = dosage_sum / ploidy_sum
+            denominator = (ploidy_sum / called) * allele_freq * (1.0 - allele_freq)
+            if denominator <= 0:
+                continue
+
+            estimate = 1.0 - (posterior_var_sum / called) / denominator
+            r2[variant_idx] = min(1.0, max(0.0, float(estimate)))
+        return r2
+
+    def _imputation_r2_from_dosage(self) -> np.ndarray:
+        dosages = self._ld_dosages()
+        r2 = np.full(dosages.shape[0], np.nan, dtype=float)
+        for variant_idx, row in enumerate(dosages):
+            called = np.isfinite(row)
+            if np.count_nonzero(called) < 2:
+                continue
+
+            observed = row[called]
+            allele_freq = observed.mean() / 2.0
+            denominator = 2.0 * allele_freq * (1.0 - allele_freq)
+            if denominator <= 0:
+                continue
+
+            estimate = np.var(observed, ddof=0) / denominator
+            r2[variant_idx] = min(1.0, max(0.0, float(estimate)))
+        return r2
+
+    @staticmethod
+    def _validate_imputation_r2_source(source: str) -> str:
+        aliases = {
+            "auto": "auto",
+            "info": "info",
+            "gp": "gp",
+            "bgen": "gp",
+            "probability": "gp",
+            "probabilities": "gp",
+            "calldata_gp": "gp",
+            "dosage": "dosage",
+            "dosages": "dosage",
+            "ds": "dosage",
+        }
+        key = str(source).lower().replace("-", "_")
+        if key not in aliases:
+            raise ValueError("'source' must be one of 'auto', 'info', 'gp', or 'dosage'.")
+        return aliases[key]
+
     def allele_counts(
         self,
         sample_labels: Optional[Sequence[Any]] = None,
@@ -1379,6 +1619,72 @@ class SNPObject:
         return self._format_call_rate_output(
             call_rate,
             column="sample_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def imputation_r2(
+        self,
+        source: str = "auto",
+        info_keys: Optional[Union[str, Sequence[str]]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-variant imputation quality R2/INFO values.
+
+        ``source="info"`` extracts scalar quality values from ``variants_info``
+        using common keys such as ``INFO``, ``R2``, ``DR2``, and ``IMP``.
+        ``source="gp"`` estimates an INFO-like value from genotype
+        probabilities as ``1 - mean(posterior variance) / expected genotype
+        variance``. ``source="dosage"`` computes empirical dosage R2 as
+        ``Var(DS) / expected genotype variance``. ``source="auto"`` uses INFO
+        values when available and fills missing values from genotype
+        probabilities, then dosages.
+
+        Args:
+            source (str, default="auto"):
+                One of ``"auto"``, ``"info"``, ``"gp"``, or ``"dosage"``.
+                Aliases such as ``"bgen"`` and ``"ds"`` are accepted.
+            info_keys (str or sequence of str, optional):
+                INFO field keys to search, in priority order. Defaults to common
+                imputation quality keys.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of imputation quality values, or a DataFrame if
+            ``as_dataframe=True``. Values unavailable from the selected source
+            are returned as NaN.
+        """
+        source = self._validate_imputation_r2_source(source)
+
+        if source == "info":
+            values = self._imputation_r2_from_info(info_keys=info_keys)
+        elif source == "gp":
+            values = self._imputation_r2_from_gp()
+        elif source == "dosage":
+            values = self._imputation_r2_from_dosage()
+        else:
+            values = np.full(self.n_snps, np.nan, dtype=float)
+
+            info_values = self._imputation_r2_from_info(info_keys=info_keys)
+            info_mask = np.isfinite(info_values)
+            values[info_mask] = info_values[info_mask]
+
+            missing = ~np.isfinite(values)
+            if np.any(missing) and self.calldata_gp is not None:
+                gp_values = self._imputation_r2_from_gp()
+                gp_mask = missing & np.isfinite(gp_values)
+                values[gp_mask] = gp_values[gp_mask]
+
+            missing = ~np.isfinite(values)
+            if np.any(missing) and self.genotypes is not None:
+                dosage_values = self._imputation_r2_from_dosage()
+                dosage_mask = missing & np.isfinite(dosage_values)
+                values[dosage_mask] = dosage_values[dosage_mask]
+
+        return self._format_call_rate_output(
+            np.asarray(values, dtype=float),
+            column="imputation_r2",
             as_dataframe=as_dataframe,
         )
 
@@ -1949,6 +2255,44 @@ class SNPObject:
         mask = np.isfinite(call_rate) & (call_rate >= threshold)
         indexes = np.where(mask)[0]
         return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
+
+    def filter_imputation_quality(
+            self,
+            min_r2: float = 0.8,
+            source: str = "auto",
+            info_keys: Optional[Union[str, Sequence[str]]] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by imputation quality R2/INFO.
+
+        Args:
+            min_r2 (float, default=0.8):
+                Minimum imputation quality value. Must be between 0 and 1.
+            source (str, default="auto"):
+                Source used by :meth:`imputation_r2`: ``"auto"``, ``"info"``,
+                ``"gp"``, or ``"dosage"``.
+            info_keys (str or sequence of str, optional):
+                INFO field keys to search when extracting values from
+                ``variants_info``.
+            include (bool, default=True):
+                If True, keeps variants with imputation quality greater than or
+                equal to ``min_r2``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_r2", min_r2)
+        r2 = np.asarray(
+            self.imputation_r2(source=source, info_keys=info_keys),
+            dtype=float,
+        ).ravel()
+        mask = np.isfinite(r2) & (r2 >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
 
     def filter_hwe(
             self,

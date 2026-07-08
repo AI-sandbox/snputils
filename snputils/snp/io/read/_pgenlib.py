@@ -24,10 +24,19 @@ def _phased_chunk_size(num_variants: int, num_samples: int) -> int:
     )
 
 
-def estimate_separate_strands_peak_bytes(num_variants: int, num_samples: int) -> int:
+def estimate_separate_strands_peak_bytes(
+    num_variants: int,
+    num_samples: int,
+    *,
+    require_phase: bool = False,
+) -> int:
     output_bytes = int(num_variants) * int(num_samples) * 2 * np.dtype(np.int8).itemsize
     int32_bytes = _allele_int32_bytes(num_variants, num_samples)
-    phase_bytes = int(num_variants) * int(num_samples) * np.dtype(np.bool_).itemsize
+    phase_bytes = (
+        int(num_variants) * int(num_samples) * np.dtype(np.bool_).itemsize
+        if require_phase
+        else 0
+    )
     if int32_bytes <= PHASED_ALLELE_FULL_READ_BYTES:
         return output_bytes + int32_bytes + phase_bytes
     chunk_bytes = _allele_int32_bytes(_phased_chunk_size(num_variants, num_samples), num_samples)
@@ -35,6 +44,8 @@ def estimate_separate_strands_peak_bytes(num_variants: int, num_samples: int) ->
         _phased_chunk_size(num_variants, num_samples)
         * int(num_samples)
         * np.dtype(np.bool_).itemsize
+        if require_phase
+        else 0
     )
     return output_bytes + chunk_bytes + chunk_phase_bytes
 

@@ -272,23 +272,12 @@ class PGENReader(SNPBaseReader):
                 log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
                 if not effective_sum_strands:
-                    try:
-                        genotypes = read_separate_strands(
-                            pgen_reader,
-                            variant_idxs,
-                            num_variants,
-                            num_samples,
-                            require_phase=True,
-                        )
-                    except ValueError as exc:
-                        if (
-                            not auto_sum_strands
-                            or "Cannot read unphased heterozygous PGEN genotypes" not in str(exc)
-                        ):
-                            raise
-                        genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
-                        pgen_reader.read_list(variant_idxs, genotypes)
-                        genotypes[genotypes < 0] = -1
+                    genotypes = read_separate_strands(
+                        pgen_reader,
+                        variant_idxs,
+                        num_variants,
+                        num_samples,
+                    )
                 else:
                     genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                     pgen_reader.read_list(variant_idxs, genotypes)

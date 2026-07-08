@@ -886,6 +886,46 @@ class SNPObject:
         pops = np.unique(labels)
         return pd.DataFrame(values, columns=pops)
 
+    def _called_genotype_mask(self) -> np.ndarray:
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            called_entries = np.isfinite(gt) & (gt >= 0)
+        except TypeError as exc:
+            raise ValueError("'genotypes' must contain numeric values.") from exc
+
+        if gt.ndim == 3:
+            return np.all(called_entries, axis=2)
+        return called_entries
+
+    @staticmethod
+    def _validate_call_rate_threshold(min_call_rate: float) -> float:
+        try:
+            threshold = float(min_call_rate)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'min_call_rate' must be a numeric value between 0 and 1.") from exc
+        if not 0 <= threshold <= 1:
+            raise ValueError("'min_call_rate' must be between 0 and 1.")
+        return threshold
+
+    @staticmethod
+    def _format_call_rate_output(
+        values: np.ndarray,
+        column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        return pd.DataFrame({column: np.asarray(values, dtype=float).ravel()})
+
     def allele_counts(
         self,
         sample_labels: Optional[Sequence[Any]] = None,
@@ -1021,6 +1061,44 @@ class SNPObject:
             minor_ac,
             sample_labels=sample_labels,
             cohort_column="mac",
+            as_dataframe=as_dataframe,
+        )
+
+    def variant_call_rate(self, as_dataframe: bool = False) -> Any:
+        """
+        Compute the fraction of samples with non-missing genotype calls per variant.
+
+        Missing calls are represented as negative values or NaN. For 3D genotype
+        arrays, a sample is counted as called only when all allele entries are
+        non-missing.
+        """
+        called = self._called_genotype_mask()
+        if called.shape[1] == 0:
+            call_rate = np.full(called.shape[0], np.nan, dtype=float)
+        else:
+            call_rate = called.mean(axis=1)
+        return self._format_call_rate_output(
+            call_rate,
+            column="variant_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def sample_call_rate(self, as_dataframe: bool = False) -> Any:
+        """
+        Compute the fraction of variants with non-missing genotype calls per sample.
+
+        Missing calls are represented as negative values or NaN. For 3D genotype
+        arrays, a genotype is counted as called only when all allele entries are
+        non-missing.
+        """
+        called = self._called_genotype_mask()
+        if called.shape[0] == 0:
+            call_rate = np.full(called.shape[1], np.nan, dtype=float)
+        else:
+            call_rate = called.mean(axis=0)
+        return self._format_call_rate_output(
+            call_rate,
+            column="sample_call_rate",
             as_dataframe=as_dataframe,
         )
 
@@ -1289,6 +1367,63 @@ class SNPObject:
             observed = dosages[i, called[i]]
             mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
+
+    def filter_variants_by_call_rate(
+            self,
+            min_call_rate: float = 0.98,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by genotype call rate.
+
+        Args:
+            min_call_rate (float, default=0.98):
+                Minimum fraction of samples with non-missing genotype calls.
+                Must be between 0 and 1.
+            include (bool, default=True):
+                If True, keeps variants with call rate greater than or equal to
+                ``min_call_rate``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_call_rate_threshold(min_call_rate)
+        call_rate = np.asarray(self.variant_call_rate(), dtype=float).ravel()
+        mask = np.isfinite(call_rate) & (call_rate >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_samples_by_call_rate(
+            self,
+            min_call_rate: float = 0.98,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter samples by genotype call rate.
+
+        Args:
+            min_call_rate (float, default=0.98):
+                Minimum fraction of variants with non-missing genotype calls.
+                Must be between 0 and 1.
+            include (bool, default=True):
+                If True, keeps samples with call rate greater than or equal to
+                ``min_call_rate``. If False, excludes those samples.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_call_rate_threshold(min_call_rate)
+        call_rate = np.asarray(self.sample_call_rate(), dtype=float).ravel()
+        mask = np.isfinite(call_rate) & (call_rate >= threshold)
+        indexes = np.where(mask)[0]
+        return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
 
     def filter_maf(
             self,

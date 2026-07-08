@@ -81,6 +81,87 @@ def test_filter_samples_by_index_works_without_sample_ids():
     np.testing.assert_array_equal(filtered.genotypes, genotypes[:, [0, 2], :])
 
 
+def _call_rate_snpobj() -> SNPObject:
+    return SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1], [1, 1]],
+                [[0, -1], [-1, -1], [0, 0]],
+                [[np.nan, 0], [1, 1], [0, 1]],
+                [[-1, -1], [-1, -1], [-1, -1]],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3"]),
+        sample_fid=np.array(["F1", "F2", "F3"]),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+
+def test_call_rate_from_3d_genotypes_treats_partial_missing_and_nan_as_missing():
+    snpobj = _call_rate_snpobj()
+
+    np.testing.assert_allclose(
+        snpobj.variant_call_rate(),
+        np.array([1.0, 1.0 / 3.0, 2.0 / 3.0, 0.0]),
+    )
+    np.testing.assert_allclose(
+        snpobj.sample_call_rate(),
+        np.array([0.25, 0.5, 0.75]),
+    )
+
+    call_rate_df = snpobj.variant_call_rate(as_dataframe=True)
+    assert call_rate_df.columns.tolist() == ["variant_call_rate"]
+    np.testing.assert_allclose(
+        call_rate_df["variant_call_rate"],
+        np.array([1.0, 1.0 / 3.0, 2.0 / 3.0, 0.0]),
+    )
+
+
+def test_call_rate_from_2d_dosages_treats_negative_and_nan_as_missing():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, np.nan],
+                [2.0, -1.0, 0.0],
+                [-1.0, np.nan, -1.0],
+            ]
+        )
+    )
+
+    np.testing.assert_allclose(
+        snpobj.variant_call_rate(),
+        np.array([2.0 / 3.0, 2.0 / 3.0, 0.0]),
+    )
+    np.testing.assert_allclose(
+        snpobj.sample_call_rate(),
+        np.array([2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
+    )
+
+
+def test_call_rate_filters_keep_entities_at_or_above_threshold():
+    snpobj = _call_rate_snpobj()
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s3"], "population": ["A", "B", "C"]}
+    )
+
+    variants = snpobj.filter_variants_by_call_rate(min_call_rate=2.0 / 3.0)
+    samples = snpobj.filter_samples_by_call_rate(min_call_rate=0.5)
+
+    assert variants.variants_id.tolist() == ["v1", "v3"]
+    assert samples.samples.tolist() == ["s2", "s3"]
+    assert samples.sample_fid.tolist() == ["F2", "F3"]
+    assert samples.sample_metadata["sample"].tolist() == ["s2", "s3"]
+
+
+@pytest.mark.parametrize("method_name", ["filter_variants_by_call_rate", "filter_samples_by_call_rate"])
+@pytest.mark.parametrize("min_call_rate", [-0.01, 1.01, "not-a-number"])
+def test_call_rate_filters_validate_threshold(method_name, min_call_rate):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="min_call_rate"):
+        getattr(snpobj, method_name)(min_call_rate=min_call_rate)
+
+
 def test_filter_samples_reorders_sample_metadata():
     snpobj = _toy_snpobj()
     snpobj.sample_metadata = pd.DataFrame(

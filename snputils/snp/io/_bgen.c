@@ -8,12 +8,69 @@
 #include <string.h>
 #include <zlib.h>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <dlfcn.h>
+#define BGEN_HAVE_DLOPEN 1
+#else
+#define BGEN_HAVE_DLOPEN 0
+#endif
+
 #if defined(__x86_64__) && defined(__GNUC__)
 #include <immintrin.h>
 #define BGEN_HAVE_AVX2 1
 #else
 #define BGEN_HAVE_AVX2 0
 #endif
+
+typedef struct libdeflate_decompressor BgenLibdeflateDecompressor;
+typedef BgenLibdeflateDecompressor *(*BgenLibdeflateAllocFunc)(void);
+typedef void (*BgenLibdeflateFreeFunc)(BgenLibdeflateDecompressor *);
+typedef int (*BgenLibdeflateZlibDecompressFunc)(
+    BgenLibdeflateDecompressor *,
+    const void *,
+    size_t,
+    void *,
+    size_t,
+    size_t *);
+
+typedef struct {
+    int checked;
+    int available;
+    void *handle;
+    BgenLibdeflateAllocFunc alloc_decompressor;
+    BgenLibdeflateFreeFunc free_decompressor;
+    BgenLibdeflateZlibDecompressFunc zlib_decompress;
+} BgenLibdeflateApi;
+
+static BgenLibdeflateApi *
+bgen_get_libdeflate_api(void)
+{
+    static BgenLibdeflateApi api = {0};
+#if BGEN_HAVE_DLOPEN
+    if (!api.checked) {
+        api.checked = 1;
+        api.handle = dlopen("libdeflate.so.0", RTLD_LAZY | RTLD_LOCAL);
+        if (api.handle == NULL) {
+            api.handle = dlopen("libdeflate.so", RTLD_LAZY | RTLD_LOCAL);
+        }
+        if (api.handle != NULL) {
+            api.alloc_decompressor = (BgenLibdeflateAllocFunc)dlsym(api.handle, "libdeflate_alloc_decompressor");
+            api.free_decompressor = (BgenLibdeflateFreeFunc)dlsym(api.handle, "libdeflate_free_decompressor");
+            api.zlib_decompress = (BgenLibdeflateZlibDecompressFunc)dlsym(api.handle, "libdeflate_zlib_decompress");
+            if (api.alloc_decompressor != NULL && api.free_decompressor != NULL && api.zlib_decompress != NULL) {
+                api.available = 1;
+            } else {
+                dlclose(api.handle);
+                memset(&api, 0, sizeof(api));
+                api.checked = 1;
+            }
+        }
+    }
+#else
+    api.checked = 1;
+#endif
+    return &api;
+}
 
 static uint16_t
 read_u16_le(const unsigned char *data)
@@ -402,6 +459,10 @@ read_variant_payload(
     size_t *block_capacity,
     unsigned char **payload_buffer,
     size_t *payload_capacity,
+    z_stream *zstream,
+    int *zstream_initialized,
+    BgenLibdeflateApi *libdeflate,
+    BgenLibdeflateDecompressor **libdeflate_decompressor,
     const unsigned char **payload,
     Py_ssize_t *payload_len)
 {
@@ -439,7 +500,6 @@ read_variant_payload(
 
     {
         uint32_t expected_len = read_u32_le(*block_buffer);
-        uLongf dest_len = (uLongf)expected_len;
         int zlib_status;
         if (expected_len > (uint32_t)PY_SSIZE_T_MAX) {
             PyErr_SetString(PyExc_MemoryError, "BGEN decompressed genotype block is too large.");
@@ -448,12 +508,51 @@ read_variant_payload(
         if (ensure_byte_capacity(payload_buffer, payload_capacity, (size_t)expected_len) < 0) {
             return -1;
         }
-        zlib_status = uncompress(
-            *payload_buffer,
-            &dest_len,
-            *block_buffer + 4,
-            (uLong)(block_len - 4U));
-        if (zlib_status != Z_OK || dest_len != (uLongf)expected_len) {
+        if (libdeflate != NULL && libdeflate->available) {
+            size_t actual_len = 0;
+            if (*libdeflate_decompressor == NULL) {
+                *libdeflate_decompressor = libdeflate->alloc_decompressor();
+                if (*libdeflate_decompressor == NULL) {
+                    PyErr_NoMemory();
+                    return -1;
+                }
+            }
+            zlib_status = libdeflate->zlib_decompress(
+                *libdeflate_decompressor,
+                *block_buffer + 4,
+                (size_t)(block_len - 4U),
+                *payload_buffer,
+                (size_t)expected_len,
+                &actual_len);
+            if (zlib_status != 0 || actual_len != (size_t)expected_len) {
+                PyErr_SetString(PyExc_ValueError, "BGEN genotype block decompressed to the wrong size.");
+                return -1;
+            }
+            *payload = *payload_buffer;
+            *payload_len = (Py_ssize_t)expected_len;
+            return 0;
+        }
+        if (!*zstream_initialized) {
+            memset(zstream, 0, sizeof(*zstream));
+            zlib_status = inflateInit(zstream);
+            if (zlib_status != Z_OK) {
+                PyErr_SetString(PyExc_ValueError, "Could not initialize BGEN zlib decompressor.");
+                return -1;
+            }
+            *zstream_initialized = 1;
+        } else {
+            zlib_status = inflateReset(zstream);
+            if (zlib_status != Z_OK) {
+                PyErr_SetString(PyExc_ValueError, "Could not reset BGEN zlib decompressor.");
+                return -1;
+            }
+        }
+        zstream->next_in = (Bytef *)(*block_buffer + 4);
+        zstream->avail_in = (uInt)(block_len - 4U);
+        zstream->next_out = *payload_buffer;
+        zstream->avail_out = (uInt)expected_len;
+        zlib_status = inflate(zstream, Z_FINISH);
+        if (zlib_status != Z_STREAM_END || zstream->total_out != (uLong)expected_len) {
             PyErr_SetString(PyExc_ValueError, "BGEN genotype block decompressed to the wrong size.");
             return -1;
         }
@@ -589,6 +688,36 @@ decode_phased_biallelic16_probabilities_avx2(const unsigned char *bits, uint32_t
         row[3] = 1.0f - ref1;
     }
 }
+
+__attribute__((target("avx2")))
+static void
+decode_phased_biallelic8_probabilities_avx2(const unsigned char *bits, uint32_t n_samples, float *out)
+{
+    uint32_t sample = 0;
+    const __m256 scale = _mm256_set1_ps(1.0f / 255.0f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+
+    for (; sample + 8 <= n_samples; sample += 8) {
+        __m128i packed = _mm_loadu_si128((const __m128i *)(bits + (uint64_t)sample * 2U));
+        __m128i high_bytes = _mm_srli_si128(packed, 8);
+        __m256 low_probs = _mm256_mul_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(packed)), scale);
+        __m256 high_probs = _mm256_mul_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(high_bytes)), scale);
+
+        store_interleaved_prob_pairs_avx2(out + (uint64_t)sample * 4U, low_probs, _mm256_sub_ps(one, low_probs));
+        store_interleaved_prob_pairs_avx2(out + (uint64_t)sample * 4U + 16U, high_probs, _mm256_sub_ps(one, high_probs));
+    }
+
+    for (; sample < n_samples; sample++) {
+        const unsigned char *ptr = bits + (uint64_t)sample * 2U;
+        float ref0 = (float)ptr[0] * (1.0f / 255.0f);
+        float ref1 = (float)ptr[1] * (1.0f / 255.0f);
+        float *row = out + (uint64_t)sample * 4U;
+        row[0] = ref0;
+        row[1] = 1.0f - ref0;
+        row[2] = ref1;
+        row[3] = 1.0f - ref1;
+    }
+}
 #endif
 
 static int
@@ -620,6 +749,19 @@ decode_layout2_probabilities_into(
         }
         if (bgen_cpu_has_avx2() && ploidy_all_value_avx2(info.ploidy_bytes, info.n_samples, 2)) {
             decode_phased_biallelic16_probabilities_avx2(info.probabilities, info.n_samples, out);
+            return 0;
+        }
+    }
+#endif
+
+#if BGEN_HAVE_AVX2
+    if (output_width == 4 && info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 8) {
+        if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
+            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            return -1;
+        }
+        if (bgen_cpu_has_avx2() && ploidy_all_value_avx2(info.ploidy_bytes, info.n_samples, 2)) {
+            decode_phased_biallelic8_probabilities_avx2(info.probabilities, info.n_samples, out);
             return 0;
         }
     }
@@ -977,6 +1119,10 @@ read_file_probabilities(PyObject *self, PyObject *args)
     int have_out_view = 0;
     float *out = NULL;
     uint32_t out_width = 0;
+    z_stream zstream;
+    int zstream_initialized = 0;
+    BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
+    BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
 
     if (!PyArg_ParseTuple(args, "s", &path)) {
         return NULL;
@@ -1025,6 +1171,10 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     &block_capacity,
                     &payload_buffer,
                     &payload_capacity,
+                    &zstream,
+                    &zstream_initialized,
+                    libdeflate,
+                    &libdeflate_decompressor,
                     &payload,
                     &payload_len) < 0) {
             goto error;
@@ -1065,6 +1215,12 @@ read_file_probabilities(PyObject *self, PyObject *args)
     }
     PyMem_Free(block_buffer);
     PyMem_Free(payload_buffer);
+    if (libdeflate_decompressor != NULL) {
+        libdeflate->free_decompressor(libdeflate_decompressor);
+    }
+    if (zstream_initialized) {
+        inflateEnd(&zstream);
+    }
     fclose(fp);
     return Py_BuildValue("NIII", out_obj, header.n_variants, header.n_samples, out_width);
 
@@ -1075,6 +1231,12 @@ error:
     Py_XDECREF(out_obj);
     PyMem_Free(block_buffer);
     PyMem_Free(payload_buffer);
+    if (libdeflate_decompressor != NULL) {
+        libdeflate->free_decompressor(libdeflate_decompressor);
+    }
+    if (zstream_initialized) {
+        inflateEnd(&zstream);
+    }
     if (fp != NULL) {
         fclose(fp);
     }
@@ -1096,6 +1258,10 @@ read_file_dosage(PyObject *self, PyObject *args)
     int have_out_view = 0;
     float *out = NULL;
     Py_ssize_t dims[2];
+    z_stream zstream;
+    int zstream_initialized = 0;
+    BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
+    BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
 
     if (!PyArg_ParseTuple(args, "s", &path)) {
         return NULL;
@@ -1140,6 +1306,10 @@ read_file_dosage(PyObject *self, PyObject *args)
                     &block_capacity,
                     &payload_buffer,
                     &payload_capacity,
+                    &zstream,
+                    &zstream_initialized,
+                    libdeflate,
+                    &libdeflate_decompressor,
                     &payload,
                     &payload_len) < 0) {
             goto error;
@@ -1160,6 +1330,12 @@ read_file_dosage(PyObject *self, PyObject *args)
     }
     PyMem_Free(block_buffer);
     PyMem_Free(payload_buffer);
+    if (libdeflate_decompressor != NULL) {
+        libdeflate->free_decompressor(libdeflate_decompressor);
+    }
+    if (zstream_initialized) {
+        inflateEnd(&zstream);
+    }
     fclose(fp);
     return Py_BuildValue("NII", out_obj, header.n_variants, header.n_samples);
 
@@ -1170,6 +1346,12 @@ error:
     Py_XDECREF(out_obj);
     PyMem_Free(block_buffer);
     PyMem_Free(payload_buffer);
+    if (libdeflate_decompressor != NULL) {
+        libdeflate->free_decompressor(libdeflate_decompressor);
+    }
+    if (zstream_initialized) {
+        inflateEnd(&zstream);
+    }
     if (fp != NULL) {
         fclose(fp);
     }

@@ -865,6 +865,165 @@ class SNPObject:
             return freq_out, count_out
         return freq_out
 
+    @staticmethod
+    def _format_allele_stat_output(
+        values: np.ndarray,
+        sample_labels: Optional[Sequence[Any]],
+        cohort_column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        if sample_labels is None:
+            return pd.DataFrame({cohort_column: np.asarray(values).ravel()})
+
+        labels = np.asarray(sample_labels)
+        if labels.ndim != 1:
+            labels = labels.ravel()
+        pops = np.unique(labels)
+        return pd.DataFrame(values, columns=pops)
+
+    def allele_counts(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        return_called: bool = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP alternate allele counts from observed calls.
+
+        This uses the same missing-data handling as :meth:`allele_freq`: missing
+        calls do not contribute to either the alternate allele count or the
+        called-allele denominator. For 2D dosage arrays, alternate allele counts
+        may be fractional when dosages are fractional.
+
+        Args:
+            sample_labels (sequence, optional):
+                Population label per sample. If None, computes cohort-level counts.
+            ancestry (str or int, optional):
+                If provided, compute ancestry-masked counts using SNP-level LAI.
+            laiobj (LocalAncestryObject, optional):
+                Optional LAI object used when `self.calldata_lai` is not set.
+            pseudohaploid (bool or int, default=False):
+                If True, detects pseudo-haploid samples using the same rule as
+                :meth:`allele_freq`. If an integer `n` is provided, checks the first
+                `n` SNPs.
+            return_called (bool, default=False):
+                If True, also return called-allele counts with the same shape as
+                the alternate allele counts.
+            as_dataframe (bool, default=False):
+                If True, return pandas DataFrame output.
+
+        Returns:
+            Alternate allele counts as a NumPy array (or DataFrame if
+            ``as_dataframe=True``). If ``return_called=True``, returns
+            ``(alt_counts, called_alleles)``.
+        """
+        allele_freq, called_alleles = self.allele_freq(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_counts=True,
+            as_dataframe=False,
+        )
+        allele_freq = np.asarray(allele_freq, dtype=float)
+        called_alleles = np.asarray(called_alleles)
+        called_float = called_alleles.astype(float, copy=False)
+
+        with np.errstate(invalid="ignore"):
+            alt_counts = allele_freq * called_float
+        alt_counts = np.where(called_float > 0, alt_counts, np.nan)
+
+        alt_out = self._format_allele_stat_output(
+            alt_counts,
+            sample_labels=sample_labels,
+            cohort_column="alt_allele_count",
+            as_dataframe=as_dataframe,
+        )
+        if not return_called:
+            return alt_out
+
+        called_out = self._format_allele_stat_output(
+            called_alleles,
+            sample_labels=sample_labels,
+            cohort_column="called_alleles",
+            as_dataframe=as_dataframe,
+        )
+        return alt_out, called_out
+
+    def maf(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP minor allele frequency from observed calls.
+
+        Missing calls are excluded from the denominator. Variants with no called
+        alleles return ``NaN``.
+        """
+        allele_freq = self.allele_freq(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_counts=False,
+            as_dataframe=False,
+        )
+        allele_freq = np.asarray(allele_freq, dtype=float)
+        with np.errstate(invalid="ignore"):
+            minor_af = np.minimum(allele_freq, 1.0 - allele_freq)
+        return self._format_allele_stat_output(
+            minor_af,
+            sample_labels=sample_labels,
+            cohort_column="maf",
+            as_dataframe=as_dataframe,
+        )
+
+    def mac(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP minor allele count from observed calls.
+
+        Missing calls are excluded from the denominator. Variants with no called
+        alleles return ``NaN``.
+        """
+        alt_counts, called_alleles = self.allele_counts(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_called=True,
+            as_dataframe=False,
+        )
+        alt_counts = np.asarray(alt_counts, dtype=float)
+        called_alleles = np.asarray(called_alleles, dtype=float)
+        with np.errstate(invalid="ignore"):
+            minor_ac = np.minimum(alt_counts, called_alleles - alt_counts)
+        minor_ac = np.where(called_alleles > 0, minor_ac, np.nan)
+        return self._format_allele_stat_output(
+            minor_ac,
+            sample_labels=sample_labels,
+            cohort_column="mac",
+            as_dataframe=as_dataframe,
+        )
+
     def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
         """
         Sum paternal and maternal strands.
@@ -1131,6 +1290,78 @@ class SNPObject:
             mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
+    def filter_maf(
+            self,
+            maf: float = 0.01,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by minor allele frequency.
+
+        The frequency is computed from observed allele calls only; missing calls
+        do not contribute to the denominator.
+
+        Args:
+            maf (float, default=0.01):
+                Minor allele frequency threshold. Must be between 0 and 0.5.
+            include (bool, default=True):
+                If True, keeps variants with minor allele frequency greater than
+                or equal to ``maf``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        try:
+            threshold = float(maf)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'maf' must be a numeric value between 0 and 0.5.") from exc
+        if not 0 <= threshold <= 0.5:
+            raise ValueError("'maf' must be between 0 and 0.5.")
+
+        minor_af = np.asarray(self.maf(), dtype=float).ravel()
+        mask = np.isfinite(minor_af) & (minor_af >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_mac(
+            self,
+            mac: Union[int, float] = 20,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by minor allele count.
+
+        The count is computed from observed allele calls only; missing calls do
+        not contribute to the denominator.
+
+        Args:
+            mac (int or float, default=20):
+                Minor allele count threshold. Must be non-negative.
+            include (bool, default=True):
+                If True, keeps variants with minor allele count greater than or
+                equal to ``mac``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        try:
+            threshold = float(mac)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'mac' must be a non-negative numeric value.") from exc
+        if threshold < 0:
+            raise ValueError("'mac' must be non-negative.")
+
+        minor_ac = np.asarray(self.mac(), dtype=float).ravel()
+        mask = np.isfinite(minor_ac) & (minor_ac >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
     def filter_samples(
             self,
             samples: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
@@ -1279,6 +1510,20 @@ class SNPObject:
             for key in ['genotypes', 'calldata_lai', 'calldata_gp']
             if self[key] is not None
         }
+        sample_metadata = getattr(self, "sample_metadata", None)
+        new_sample_metadata = None
+        if sample_metadata is not None:
+            if len(sample_metadata) != n_samples:
+                raise ValueError(
+                    f"Cannot filter 'sample_metadata': length is {len(sample_metadata)}, "
+                    f"expected {n_samples}."
+                )
+            sample_indices = (
+                ordered_indices
+                if ordered_indices is not None
+                else np.where(mask_combined)[0]
+            )
+            new_sample_metadata = sample_metadata.iloc[sample_indices].reset_index(drop=True)
 
         # Apply filtering based on inplace parameter
         if inplace:
@@ -1290,6 +1535,8 @@ class SNPObject:
             self.sample_sex = new_sample_sex
             for key, value in data_updates.items():
                 self[key] = value
+            if sample_metadata is not None:
+                self.sample_metadata = new_sample_metadata
             return None
         else:
             # Create A new `SNPObject` with filtered data
@@ -1302,6 +1549,8 @@ class SNPObject:
             snpobj.sample_sex = new_sample_sex
             for key, value in data_updates.items():
                 snpobj[key] = value
+            if sample_metadata is not None:
+                snpobj.sample_metadata = new_sample_metadata
             return snpobj
 
     def detect_chromosome_format(self) -> str:

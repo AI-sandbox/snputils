@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -78,6 +79,179 @@ def test_filter_samples_by_index_works_without_sample_ids():
 
     assert filtered.samples is None
     np.testing.assert_array_equal(filtered.genotypes, genotypes[:, [0, 2], :])
+
+
+def test_filter_samples_reorders_sample_metadata():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s3"], "population": ["A", "A", "B"]},
+        index=[10, 11, 12],
+    )
+
+    filtered = snpobj.filter_samples(samples=["s3", "s1"], reorder=True)
+
+    assert filtered.samples.tolist() == ["s3", "s1"]
+    assert filtered.sample_metadata["sample"].tolist() == ["s3", "s1"]
+    assert filtered.sample_metadata.index.tolist() == [0, 1]
+
+
+def test_filter_samples_excludes_sample_metadata_rows():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s3"], "population": ["A", "A", "B"]}
+    )
+
+    filtered = snpobj.filter_samples(samples=["s2"], include=False)
+
+    assert filtered.samples.tolist() == ["s1", "s3"]
+    assert filtered.sample_metadata["sample"].tolist() == ["s1", "s3"]
+
+
+def test_filter_samples_rejects_misaligned_sample_metadata():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame({"sample": ["s1", "s2"]})
+
+    with pytest.raises(ValueError, match="sample_metadata"):
+        snpobj.filter_samples(indexes=[0])
+
+
+def test_filter_maf_from_3d_genotypes_ignores_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1]],
+                [[1, 1], [1, 1]],
+                [[0, -1], [-1, -1]],
+                [[-1, -1], [-1, -1]],
+                [[0, 1], [1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4", "v5"], dtype=object),
+    )
+
+    filtered = snpobj.filter_maf(maf=0.25)
+
+    assert filtered.variants_id.tolist() == ["v1", "v5"]
+
+
+def test_allele_counts_maf_and_mac_from_3d_genotypes_ignore_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1]],
+                [[1, 1], [1, 1]],
+                [[0, -1], [-1, -1]],
+                [[-1, -1], [-1, -1]],
+                [[0, 1], [1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4", "v5"], dtype=object),
+    )
+
+    alt_counts, called = snpobj.allele_counts(return_called=True)
+
+    np.testing.assert_allclose(alt_counts, np.array([1.0, 4.0, 0.0, np.nan, 3.0]), equal_nan=True)
+    np.testing.assert_array_equal(called, np.array([4, 4, 1, 0, 4]))
+    np.testing.assert_allclose(snpobj.maf(), np.array([0.25, 0.0, 0.0, np.nan, 0.25]), equal_nan=True)
+    np.testing.assert_allclose(snpobj.mac(), np.array([1.0, 0.0, 0.0, np.nan, 1.0]), equal_nan=True)
+
+
+def test_filter_maf_from_2d_dosages_ignores_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, 2.0],
+                [0.0, 0.0, 1.0],
+                [2.0, -1.0, 2.0],
+                [-1.0, -1.0, -1.0],
+            ]
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+    filtered = snpobj.filter_maf(maf=0.2)
+
+    assert filtered.variants_id.tolist() == ["v1"]
+
+
+def test_allele_counts_maf_and_mac_from_2d_dosages_ignore_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, 2.0],
+                [0.0, 0.0, 1.0],
+                [2.0, -1.0, 2.0],
+                [-1.0, -1.0, -1.0],
+            ]
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+    alt_counts, called = snpobj.allele_counts(return_called=True)
+
+    np.testing.assert_allclose(alt_counts, np.array([3.0, 1.0, 4.0, np.nan]), equal_nan=True)
+    np.testing.assert_array_equal(called, np.array([6, 6, 4, 0]))
+    np.testing.assert_allclose(snpobj.maf(), np.array([0.5, 1.0 / 6.0, 0.0, np.nan]), equal_nan=True)
+    np.testing.assert_allclose(snpobj.mac(), np.array([3.0, 1.0, 0.0, np.nan]), equal_nan=True)
+
+
+def test_allele_count_stats_support_grouped_dataframe_output():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1], [1, 1]],
+                [[0, 1], [0, 0], [0, -1]],
+            ],
+            dtype=np.int8,
+        )
+    )
+    labels = ["POP2", "POP1", "POP1"]
+
+    counts = snpobj.allele_counts(sample_labels=labels, as_dataframe=True)
+    maf = snpobj.maf(sample_labels=labels, as_dataframe=True)
+    mac = snpobj.mac(sample_labels=labels, as_dataframe=True)
+
+    assert counts.columns.tolist() == ["POP1", "POP2"]
+    np.testing.assert_allclose(counts.to_numpy(), np.array([[3.0, 0.0], [0.0, 1.0]]))
+    np.testing.assert_allclose(maf.to_numpy(), np.array([[0.25, 0.0], [0.0, 0.5]]))
+    np.testing.assert_allclose(mac.to_numpy(), np.array([[1.0, 0.0], [0.0, 1.0]]))
+
+
+@pytest.mark.parametrize("maf", [-0.01, 0.51, "not-a-number"])
+def test_filter_maf_validates_threshold(maf):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="maf"):
+        snpobj.filter_maf(maf=maf)
+
+
+def test_filter_mac_keeps_variants_at_or_above_threshold():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1]],
+                [[1, 1], [1, 1]],
+                [[0, 1], [1, 1]],
+                [[-1, -1], [-1, -1]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+    filtered = snpobj.filter_mac(mac=1)
+
+    assert filtered.variants_id.tolist() == ["v1", "v3"]
+
+
+@pytest.mark.parametrize("mac", [-1, "not-a-number"])
+def test_filter_mac_validates_threshold(mac):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="mac"):
+        snpobj.filter_mac(mac=mac)
 
 
 def test_sum_strands_and_dosage_preserve_one_missing_sentinel():

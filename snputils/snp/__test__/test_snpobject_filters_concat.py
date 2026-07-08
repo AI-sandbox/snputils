@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -78,6 +79,86 @@ def test_filter_samples_by_index_works_without_sample_ids():
 
     assert filtered.samples is None
     np.testing.assert_array_equal(filtered.genotypes, genotypes[:, [0, 2], :])
+
+
+def test_filter_samples_reorders_sample_metadata():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s3"], "population": ["A", "A", "B"]},
+        index=[10, 11, 12],
+    )
+
+    filtered = snpobj.filter_samples(samples=["s3", "s1"], reorder=True)
+
+    assert filtered.samples.tolist() == ["s3", "s1"]
+    assert filtered.sample_metadata["sample"].tolist() == ["s3", "s1"]
+    assert filtered.sample_metadata.index.tolist() == [0, 1]
+
+
+def test_filter_samples_excludes_sample_metadata_rows():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s3"], "population": ["A", "A", "B"]}
+    )
+
+    filtered = snpobj.filter_samples(samples=["s2"], include=False)
+
+    assert filtered.samples.tolist() == ["s1", "s3"]
+    assert filtered.sample_metadata["sample"].tolist() == ["s1", "s3"]
+
+
+def test_filter_samples_rejects_misaligned_sample_metadata():
+    snpobj = _toy_snpobj()
+    snpobj.sample_metadata = pd.DataFrame({"sample": ["s1", "s2"]})
+
+    with pytest.raises(ValueError, match="sample_metadata"):
+        snpobj.filter_samples(indexes=[0])
+
+
+def test_filter_maf_from_3d_genotypes_ignores_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1]],
+                [[1, 1], [1, 1]],
+                [[0, -1], [-1, -1]],
+                [[-1, -1], [-1, -1]],
+                [[0, 1], [1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4", "v5"], dtype=object),
+    )
+
+    filtered = snpobj.filter_maf(maf=0.25)
+
+    assert filtered.variants_id.tolist() == ["v1", "v5"]
+
+
+def test_filter_maf_from_2d_dosages_ignores_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, 2.0],
+                [0.0, 0.0, 1.0],
+                [2.0, -1.0, 2.0],
+                [-1.0, -1.0, -1.0],
+            ]
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+    filtered = snpobj.filter_maf(maf=0.2)
+
+    assert filtered.variants_id.tolist() == ["v1"]
+
+
+@pytest.mark.parametrize("maf", [-0.01, 0.51, "not-a-number"])
+def test_filter_maf_validates_threshold(maf):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="maf"):
+        snpobj.filter_maf(maf=maf)
 
 
 def test_sum_strands_and_dosage_preserve_one_missing_sentinel():

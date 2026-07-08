@@ -1131,6 +1131,45 @@ class SNPObject:
             mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
+    def filter_maf(
+            self,
+            maf: float = 0.01,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by minor allele frequency.
+
+        The frequency is computed from observed allele calls only; missing calls
+        do not contribute to the denominator.
+
+        Args:
+            maf (float, default=0.01):
+                Minor allele frequency threshold. Must be between 0 and 0.5.
+            include (bool, default=True):
+                If True, keeps variants with minor allele frequency greater than
+                or equal to ``maf``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        try:
+            threshold = float(maf)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'maf' must be a numeric value between 0 and 0.5.") from exc
+        if not 0 <= threshold <= 0.5:
+            raise ValueError("'maf' must be between 0 and 0.5.")
+
+        allele_freq, called_alleles = self.allele_freq(return_counts=True)
+        allele_freq = np.asarray(allele_freq, dtype=float).ravel()
+        called_alleles = np.asarray(called_alleles).ravel()
+        minor_af = np.minimum(allele_freq, 1.0 - allele_freq)
+        mask = np.isfinite(minor_af) & (called_alleles > 0) & (minor_af >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
     def filter_samples(
             self,
             samples: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
@@ -1279,6 +1318,20 @@ class SNPObject:
             for key in ['genotypes', 'calldata_lai', 'calldata_gp']
             if self[key] is not None
         }
+        sample_metadata = getattr(self, "sample_metadata", None)
+        new_sample_metadata = None
+        if sample_metadata is not None:
+            if len(sample_metadata) != n_samples:
+                raise ValueError(
+                    f"Cannot filter 'sample_metadata': length is {len(sample_metadata)}, "
+                    f"expected {n_samples}."
+                )
+            sample_indices = (
+                ordered_indices
+                if ordered_indices is not None
+                else np.where(mask_combined)[0]
+            )
+            new_sample_metadata = sample_metadata.iloc[sample_indices].reset_index(drop=True)
 
         # Apply filtering based on inplace parameter
         if inplace:
@@ -1290,6 +1343,8 @@ class SNPObject:
             self.sample_sex = new_sample_sex
             for key, value in data_updates.items():
                 self[key] = value
+            if sample_metadata is not None:
+                self.sample_metadata = new_sample_metadata
             return None
         else:
             # Create A new `SNPObject` with filtered data
@@ -1302,6 +1357,8 @@ class SNPObject:
             snpobj.sample_sex = new_sample_sex
             for key, value in data_updates.items():
                 snpobj[key] = value
+            if sample_metadata is not None:
+                snpobj.sample_metadata = new_sample_metadata
             return snpobj
 
     def detect_chromosome_format(self) -> str:

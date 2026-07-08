@@ -162,6 +162,102 @@ def test_call_rate_filters_validate_threshold(method_name, min_call_rate):
         getattr(snpobj, method_name)(min_call_rate=min_call_rate)
 
 
+def test_hwe_pvalue_from_3d_hard_calls_ignores_missing_calls():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 0], [0, 1], [0, 1], [1, 1], [1, 1]],
+                [[0, 0], [0, 0], [0, 0], [1, 1], [1, 1], [1, 1]],
+                [[0, -1], [np.nan, 0], [0, 0], [0, 1], [1, 1], [-1, -1]],
+                [[-1, -1], [-1, -1], [-1, -1], [-1, -1], [-1, -1], [-1, -1]],
+            ]
+        ),
+        variants_id=np.array(["balanced", "excess_hom", "partial_missing", "all_missing"], dtype=object),
+    )
+
+    p_values = snpobj.hwe_pvalue()
+
+    np.testing.assert_allclose(
+        p_values,
+        np.array([0.4805194805194805, 0.021645021645021644, 1.0, np.nan]),
+        equal_nan=True,
+    )
+    hwe_df = snpobj.hwe_pvalue(as_dataframe=True)
+    assert hwe_df.columns.tolist() == ["hwe_pvalue"]
+    np.testing.assert_allclose(hwe_df["hwe_pvalue"], p_values, equal_nan=True)
+
+
+def test_hwe_pvalue_and_filter_support_control_sample_subset():
+    controls = np.array([f"ctrl{i}" for i in range(10)], dtype=object)
+    cases = np.array([f"case{i}" for i in range(10)], dtype=object)
+    samples = np.concatenate([controls, cases])
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2],
+                [0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2],
+            ],
+            dtype=float,
+        ),
+        samples=samples,
+        variants_id=np.array(["control_pass", "control_fail"], dtype=object),
+    )
+    control_mask = np.isin(samples, controls)
+
+    p_by_name = snpobj.hwe_pvalue(samples=controls)
+    p_by_mask = snpobj.hwe_pvalue(samples=control_mask)
+    filtered = snpobj.filter_hwe(min_p=0.05, samples=controls)
+
+    np.testing.assert_allclose(
+        p_by_name,
+        np.array([1.0, 0.0013639611162830976]),
+    )
+    np.testing.assert_allclose(p_by_mask, p_by_name)
+    assert filtered.variants_id.tolist() == ["control_pass"]
+
+
+def test_hwe_pvalue_supports_sample_indexes_and_deduplicates_them():
+    snpobj = SNPObject(
+        genotypes=np.array([[0, 0, 1, 1, 1, 1, 1, 1, 2, 2]], dtype=float),
+        samples=np.array([f"s{i}" for i in range(10)], dtype=object),
+    )
+
+    p_by_index = snpobj.hwe_pvalue(samples=[0, 1, 2, 3, 4, 5, 6, 7, 8, -1, 0])
+
+    np.testing.assert_allclose(p_by_index, np.array([1.0]))
+
+
+def test_hwe_pvalue_rejects_fractional_dosages():
+    snpobj = SNPObject(genotypes=np.array([[0.0, 0.5, 2.0]]))
+
+    with pytest.raises(ValueError, match="hard-call dosages"):
+        snpobj.hwe_pvalue()
+
+
+def test_hwe_pvalue_rejects_non_biallelic_allele_calls():
+    snpobj = SNPObject(genotypes=np.array([[[0, 0], [0, 2], [1, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="0/1 alleles"):
+        snpobj.hwe_pvalue()
+
+
+@pytest.mark.parametrize("min_p", [-0.01, 1.01, "not-a-number"])
+def test_filter_hwe_validates_threshold(min_p):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="min_p"):
+        snpobj.filter_hwe(min_p=min_p)
+
+
+def test_hwe_pvalue_validates_sample_subset():
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="not found"):
+        snpobj.hwe_pvalue(samples=["missing"])
+    with pytest.raises(ValueError, match="Boolean 'samples' mask"):
+        snpobj.hwe_pvalue(samples=[True, False])
+
+
 def test_filter_samples_reorders_sample_metadata():
     snpobj = _toy_snpobj()
     snpobj.sample_metadata = pd.DataFrame(

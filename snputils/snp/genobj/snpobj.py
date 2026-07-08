@@ -903,15 +903,57 @@ class SNPObject:
             return np.all(called_entries, axis=2)
         return called_entries
 
+    def _sample_subset_indices(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]],
+    ) -> np.ndarray:
+        n_samples = self.n_samples
+        if samples is None:
+            return np.arange(n_samples, dtype=int)
+
+        selector = np.atleast_1d(np.asarray(samples)).ravel()
+        if selector.size == 0:
+            return np.array([], dtype=int)
+
+        if np.issubdtype(selector.dtype, np.bool_):
+            if selector.shape[0] != n_samples:
+                raise ValueError(
+                    f"Boolean 'samples' mask must have length equal to the number of samples ({n_samples}); "
+                    f"got {selector.shape[0]}."
+                )
+            return np.flatnonzero(selector)
+
+        if np.issubdtype(selector.dtype, np.integer):
+            out_of_bounds = selector[(selector < -n_samples) | (selector >= n_samples)]
+            if out_of_bounds.size > 0:
+                raise ValueError("One or more sample indexes are out of bounds.")
+            indexes = np.mod(selector, n_samples).astype(int, copy=False)
+            return np.array(list(dict.fromkeys(indexes.tolist())), dtype=int)
+
+        if self.samples is None:
+            raise ValueError("Sample names are required when 'samples' is not an index or boolean mask.")
+
+        sample_names = np.asarray(self.samples)
+        name_to_idx = {name: idx for idx, name in enumerate(sample_names)}
+        missing = [sample for sample in selector if sample not in name_to_idx]
+        if missing:
+            raise ValueError(f"The following specified samples were not found: {missing}")
+        indexes = [name_to_idx[sample] for sample in selector]
+        return np.array(list(dict.fromkeys(indexes)), dtype=int)
+
+    @staticmethod
+    def _validate_probability_threshold(name: str, value: float) -> float:
+        try:
+            threshold = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a numeric value between 0 and 1.") from exc
+        if not 0 <= threshold <= 1:
+            raise ValueError(f"'{name}' must be between 0 and 1.")
+        return threshold
+
     @staticmethod
     def _validate_call_rate_threshold(min_call_rate: float) -> float:
-        try:
-            threshold = float(min_call_rate)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("'min_call_rate' must be a numeric value between 0 and 1.") from exc
-        if not 0 <= threshold <= 1:
-            raise ValueError("'min_call_rate' must be between 0 and 1.")
-        return threshold
+        return SNPObject._validate_probability_threshold("min_call_rate", min_call_rate)
 
     @staticmethod
     def _format_call_rate_output(
@@ -925,6 +967,102 @@ class SNPObject:
         import pandas as pd
 
         return pd.DataFrame({column: np.asarray(values, dtype=float).ravel()})
+
+    def _hard_call_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+
+        sample_indexes = self._sample_subset_indices(samples)
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            gt = gt.astype(float, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'genotypes' must contain numeric hard calls.") from exc
+
+        if gt.ndim == 3:
+            subset = gt[:, sample_indexes, :]
+            called_entries = np.isfinite(subset) & (subset >= 0)
+            called = np.all(called_entries, axis=2)
+            called_alleles = subset[called]
+            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
+                raise ValueError("HWE exact test requires biallelic hard calls encoded as 0/1 alleles.")
+            dosages = np.full(called.shape, np.nan, dtype=float)
+            if called_alleles.size:
+                dosages[called] = called_alleles.sum(axis=1)
+            return dosages, called
+
+        subset = gt[:, sample_indexes]
+        called = np.isfinite(subset) & (subset >= 0)
+        called_dosages = subset[called]
+        valid_dosages = (
+            np.isclose(called_dosages, 0)
+            | np.isclose(called_dosages, 1)
+            | np.isclose(called_dosages, 2)
+        )
+        if called_dosages.size and not np.all(valid_dosages):
+            raise ValueError("HWE exact test requires hard-call dosages encoded as 0, 1, or 2.")
+        dosages = np.where(called, np.rint(subset), np.nan)
+        return dosages, called
+
+    @staticmethod
+    def _hwe_exact_pvalue(obs_hets: int, obs_hom_ref: int, obs_hom_alt: int) -> float:
+        genotypes = obs_hets + obs_hom_ref + obs_hom_alt
+        if genotypes == 0:
+            return np.nan
+
+        obs_hom_rare = min(obs_hom_ref, obs_hom_alt)
+        rare_copies = 2 * obs_hom_rare + obs_hets
+        probs = np.zeros(rare_copies + 1, dtype=float)
+
+        mid = int(rare_copies * (2 * genotypes - rare_copies) / (2 * genotypes))
+        if (rare_copies & 1) != (mid & 1):
+            mid += 1
+
+        probs[mid] = 1.0
+        total = probs[mid]
+
+        curr_hets = mid
+        curr_hom_rare = (rare_copies - curr_hets) // 2
+        curr_hom_common = genotypes - curr_hets - curr_hom_rare
+        while curr_hets > 1:
+            prob = (
+                probs[curr_hets]
+                * curr_hets
+                * (curr_hets - 1)
+                / (4.0 * (curr_hom_rare + 1) * (curr_hom_common + 1))
+            )
+            curr_hets -= 2
+            curr_hom_rare += 1
+            curr_hom_common += 1
+            probs[curr_hets] = prob
+            total += prob
+
+        curr_hets = mid
+        curr_hom_rare = (rare_copies - curr_hets) // 2
+        curr_hom_common = genotypes - curr_hets - curr_hom_rare
+        while curr_hets <= rare_copies - 2:
+            prob = (
+                probs[curr_hets]
+                * 4.0
+                * curr_hom_rare
+                * curr_hom_common
+                / ((curr_hets + 2) * (curr_hets + 1))
+            )
+            curr_hets += 2
+            curr_hom_rare -= 1
+            curr_hom_common -= 1
+            probs[curr_hets] = prob
+            total += prob
+
+        probs /= total
+        p_value = probs[probs <= probs[obs_hets] + 1e-12].sum()
+        return min(1.0, float(p_value))
 
     def allele_counts(
         self,
@@ -1099,6 +1237,53 @@ class SNPObject:
         return self._format_call_rate_output(
             call_rate,
             column="sample_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def hwe_pvalue(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute exact Hardy-Weinberg equilibrium p-values per variant.
+
+        HWE is computed from hard-called diploid biallelic genotypes only.
+        Missing calls are ignored. The optional ``samples`` argument can be used
+        to restrict the calculation to a control-only subset, using sample IDs,
+        sample indexes, or a boolean sample mask.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting the samples
+                used for the HWE test. If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of HWE p-values, or a DataFrame if ``as_dataframe=True``.
+            Variants with no called genotypes in the selected samples return NaN.
+        """
+        dosages, called = self._hard_call_dosages(samples=samples)
+        p_values = np.full(dosages.shape[0], np.nan, dtype=float)
+
+        for variant_idx in range(dosages.shape[0]):
+            observed = dosages[variant_idx, called[variant_idx]]
+            if observed.size == 0:
+                continue
+
+            obs_hom_ref = int(np.count_nonzero(observed == 0))
+            obs_hets = int(np.count_nonzero(observed == 1))
+            obs_hom_alt = int(np.count_nonzero(observed == 2))
+            p_values[variant_idx] = self._hwe_exact_pvalue(
+                obs_hets=obs_hets,
+                obs_hom_ref=obs_hom_ref,
+                obs_hom_alt=obs_hom_alt,
+            )
+
+        return self._format_call_rate_output(
+            p_values,
+            column="hwe_pvalue",
             as_dataframe=as_dataframe,
         )
 
@@ -1424,6 +1609,38 @@ class SNPObject:
         mask = np.isfinite(call_rate) & (call_rate >= threshold)
         indexes = np.where(mask)[0]
         return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
+
+    def filter_hwe(
+            self,
+            min_p: float = 1e-6,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by exact Hardy-Weinberg equilibrium p-value.
+
+        Args:
+            min_p (float, default=1e-6):
+                Minimum HWE p-value. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting the samples
+                used for the HWE test. This is intended for control-only HWE QC
+                in case-control GWAS.
+            include (bool, default=True):
+                If True, keeps variants with HWE p-value greater than or equal to
+                ``min_p``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_p", min_p)
+        p_values = np.asarray(self.hwe_pvalue(samples=samples), dtype=float).ravel()
+        mask = np.isfinite(p_values) & (p_values >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
 
     def filter_maf(
             self,

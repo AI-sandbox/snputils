@@ -281,7 +281,8 @@ class PGENReader(SNPBaseReader):
                 else:
                     genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                     pgen_reader.read_list(variant_idxs, genotypes)
-                    genotypes[genotypes < 0] = -1
+                    if genotypes.size and genotypes.min() < -1:
+                        genotypes[genotypes < 0] = -1
             finally:
                 pgen_reader.close()
         else:

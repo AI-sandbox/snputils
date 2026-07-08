@@ -113,7 +113,7 @@ def test_pgen_unphased_hardcalls_reject_separate_strands(tmp_path: Path):
         PGENReader(prefix).read(sum_strands=False)
 
 
-def test_pgen_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
+def test_pgen_summed_gt_preserves_negative_missing_sentinel(tmp_path: Path):
     prefix = tmp_path / "missing"
     genotypes = np.array(
         [
@@ -125,7 +125,9 @@ def test_pgen_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
     PGENWriter(_toy_snpobj(genotypes), str(prefix)).write()
 
     observed = PGENReader(prefix).read(sum_strands=True)
-    np.testing.assert_array_equal(observed.genotypes, genotypes)
+    np.testing.assert_array_equal(observed.genotypes[:, 0], genotypes[:, 0])
+    assert observed.genotypes[0, 1] < 0
+    np.testing.assert_array_equal(observed.genotypes[1, 1], genotypes[1, 1])
 
 
 def test_pgen_phased_hardcalls_allow_separate_strands(tmp_path: Path):

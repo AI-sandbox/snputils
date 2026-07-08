@@ -956,6 +956,19 @@ class SNPObject:
         return SNPObject._validate_probability_threshold("min_call_rate", min_call_rate)
 
     @staticmethod
+    def _validate_integer_parameter(name: str, value: int, min_value: int) -> int:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be an integer greater than or equal to {min_value}.") from exc
+        if not parsed.is_integer():
+            raise ValueError(f"'{name}' must be an integer greater than or equal to {min_value}.")
+        parsed_int = int(parsed)
+        if parsed_int < min_value:
+            raise ValueError(f"'{name}' must be greater than or equal to {min_value}.")
+        return parsed_int
+
+    @staticmethod
     def _format_call_rate_output(
         values: np.ndarray,
         column: str,
@@ -1063,6 +1076,64 @@ class SNPObject:
         probs /= total
         p_value = probs[probs <= probs[obs_hets] + 1e-12].sum()
         return min(1.0, float(p_value))
+
+    def _ld_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> np.ndarray:
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+
+        sample_indexes = self._sample_subset_indices(samples)
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            gt = gt.astype(float, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'genotypes' must contain numeric values.") from exc
+
+        if gt.ndim == 3:
+            subset = gt[:, sample_indexes, :]
+            called_entries = np.isfinite(subset) & (subset >= 0)
+            called = np.all(called_entries, axis=2)
+            called_alleles = subset[called]
+            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
+                raise ValueError("LD pruning requires biallelic allele calls encoded as 0/1.")
+            dosages = np.full(called.shape, np.nan, dtype=float)
+            if called_alleles.size:
+                dosages[called] = called_alleles.sum(axis=1)
+            return dosages
+
+        subset = gt[:, sample_indexes]
+        called = np.isfinite(subset) & (subset >= 0)
+        called_dosages = subset[called]
+        if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
+            raise ValueError("LD pruning requires dosages between 0 and 2.")
+        return np.where(called, subset, np.nan)
+
+    @staticmethod
+    def _pairwise_r2_ignore_missing(
+        first: np.ndarray,
+        second: np.ndarray,
+        min_samples: int,
+    ) -> float:
+        valid = np.isfinite(first) & np.isfinite(second)
+        if np.count_nonzero(valid) < min_samples:
+            return np.nan
+
+        x = first[valid]
+        y = second[valid]
+        x_centered = x - x.mean()
+        y_centered = y - y.mean()
+        ssx = np.dot(x_centered, x_centered)
+        ssy = np.dot(y_centered, y_centered)
+        if ssx <= 0 or ssy <= 0:
+            return np.nan
+
+        r = np.dot(x_centered, y_centered) / np.sqrt(ssx * ssy)
+        return min(1.0, float(r * r))
 
     def allele_counts(
         self,
@@ -1286,6 +1357,70 @@ class SNPObject:
             column="hwe_pvalue",
             as_dataframe=as_dataframe,
         )
+
+    def ld_prune_mask(
+        self,
+        window_size: int = 50,
+        step_size: int = 5,
+        r2_threshold: float = 0.2,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        min_samples: int = 3,
+    ) -> np.ndarray:
+        """
+        Build a greedy LD-pruning mask using sliding windows and pairwise r-squared.
+
+        Variants are processed in their current order. Within each window, the
+        earlier variant is kept and later variants with pairwise r-squared greater
+        than ``r2_threshold`` are removed. Windows advance by ``step_size`` and
+        previously removed variants stay removed.
+
+        Args:
+            window_size (int, default=50):
+                Number of variants per sliding window. Must be at least 2.
+            step_size (int, default=5):
+                Number of variants to advance the window each step. Must be at least 1.
+            r2_threshold (float, default=0.2):
+                Pairwise LD r-squared threshold. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples used
+                to estimate LD. If None, all samples are used.
+            min_samples (int, default=3):
+                Minimum number of pairwise non-missing samples needed to compute r-squared.
+
+        Returns:
+            np.ndarray:
+                Boolean mask aligned to variants, where True indicates retained variants.
+        """
+        window_size = self._validate_integer_parameter("window_size", window_size, 2)
+        step_size = self._validate_integer_parameter("step_size", step_size, 1)
+        min_samples = self._validate_integer_parameter("min_samples", min_samples, 2)
+        threshold = self._validate_probability_threshold("r2_threshold", r2_threshold)
+
+        dosages = self._ld_dosages(samples=samples)
+        n_snps = dosages.shape[0]
+        keep = np.ones(n_snps, dtype=bool)
+
+        for start in range(0, n_snps, step_size):
+            stop = min(start + window_size, n_snps)
+            if stop - start < 2:
+                continue
+
+            window_indexes = np.arange(start, stop)
+            for offset, first_idx in enumerate(window_indexes[:-1]):
+                if not keep[first_idx]:
+                    continue
+                for second_idx in window_indexes[offset + 1:]:
+                    if not keep[second_idx]:
+                        continue
+                    r2 = self._pairwise_r2_ignore_missing(
+                        dosages[first_idx],
+                        dosages[second_idx],
+                        min_samples=min_samples,
+                    )
+                    if np.isfinite(r2) and r2 > threshold:
+                        keep[second_idx] = False
+
+        return keep
 
     def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
         """
@@ -1641,6 +1776,71 @@ class SNPObject:
         p_values = np.asarray(self.hwe_pvalue(samples=samples), dtype=float).ravel()
         mask = np.isfinite(p_values) & (p_values >= threshold)
         return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_ld_pruned(
+            self,
+            window_size: int = 50,
+            step_size: int = 5,
+            r2_threshold: float = 0.2,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            min_samples: int = 3,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants using greedy sliding-window LD pruning.
+
+        Args:
+            window_size (int, default=50):
+                Number of variants per sliding window. Must be at least 2.
+            step_size (int, default=5):
+                Number of variants to advance the window each step. Must be at least 1.
+            r2_threshold (float, default=0.2):
+                Pairwise LD r-squared threshold. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples used
+                to estimate LD. If None, all samples are used.
+            min_samples (int, default=3):
+                Minimum number of pairwise non-missing samples needed to compute r-squared.
+            include (bool, default=True):
+                If True, keeps retained variants. If False, excludes retained variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        mask = self.ld_prune_mask(
+            window_size=window_size,
+            step_size=step_size,
+            r2_threshold=r2_threshold,
+            samples=samples,
+            min_samples=min_samples,
+        )
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def ld_prune(
+            self,
+            window_size: int = 50,
+            step_size: int = 5,
+            r2_threshold: float = 0.2,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            min_samples: int = 3,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Alias for :meth:`filter_ld_pruned`.
+        """
+        return self.filter_ld_pruned(
+            window_size=window_size,
+            step_size=step_size,
+            r2_threshold=r2_threshold,
+            samples=samples,
+            min_samples=min_samples,
+            include=True,
+            inplace=inplace,
+        )
 
     def filter_maf(
             self,

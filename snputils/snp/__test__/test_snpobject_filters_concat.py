@@ -258,6 +258,129 @@ def test_hwe_pvalue_validates_sample_subset():
         snpobj.hwe_pvalue(samples=[True, False])
 
 
+def test_ld_prune_mask_greedily_removes_later_correlated_variants():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+                [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+                [0.0, 1.0, 0.0, 2.0, 1.0, 2.0],
+                [0.0, 1.0, 0.0, 2.0, 1.0, 2.0],
+            ]
+        ),
+        variants_id=np.array(["v1", "v2", "v3", "v4"], dtype=object),
+    )
+
+    mask = snpobj.ld_prune_mask(window_size=2, step_size=1, r2_threshold=0.8)
+    filtered = snpobj.filter_ld_pruned(window_size=2, step_size=1, r2_threshold=0.8)
+    alias_filtered = snpobj.ld_prune(window_size=2, step_size=1, r2_threshold=0.8)
+
+    np.testing.assert_array_equal(mask, np.array([True, False, True, False]))
+    assert filtered.variants_id.tolist() == ["v1", "v3"]
+    assert alias_filtered.variants_id.tolist() == ["v1", "v3"]
+
+
+def test_ld_prune_uses_selected_samples_to_estimate_ld():
+    controls = np.array([f"ctrl{i}" for i in range(4)], dtype=object)
+    cases = np.array([f"case{i}" for i in range(4)], dtype=object)
+    samples = np.concatenate([controls, cases])
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+            ]
+        ),
+        samples=samples,
+        variants_id=np.array(["v1", "v2"], dtype=object),
+    )
+
+    all_sample_mask = snpobj.ld_prune_mask(window_size=2, step_size=1, r2_threshold=0.8)
+    control_mask = snpobj.ld_prune_mask(
+        window_size=2,
+        step_size=1,
+        r2_threshold=0.8,
+        samples=controls,
+    )
+    control_bool_mask = snpobj.ld_prune_mask(
+        window_size=2,
+        step_size=1,
+        r2_threshold=0.8,
+        samples=np.isin(samples, controls),
+    )
+
+    np.testing.assert_array_equal(all_sample_mask, np.array([True, True]))
+    np.testing.assert_array_equal(control_mask, np.array([True, False]))
+    np.testing.assert_array_equal(control_bool_mask, control_mask)
+
+
+def test_ld_prune_supports_3d_calls_and_ignores_pairwise_missing_samples():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [0, 1], [1, 1], [-1, -1]],
+                [[0, 0], [0, 1], [1, 1], [0, -1]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["v1", "v2"], dtype=object),
+    )
+
+    pruned = snpobj.ld_prune_mask(window_size=2, step_size=1, r2_threshold=0.8, min_samples=3)
+    insufficient_overlap = snpobj.ld_prune_mask(
+        window_size=2,
+        step_size=1,
+        r2_threshold=0.8,
+        min_samples=4,
+    )
+
+    np.testing.assert_array_equal(pruned, np.array([True, False]))
+    np.testing.assert_array_equal(insufficient_overlap, np.array([True, True]))
+
+
+def test_ld_prune_accepts_fractional_dosages():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.5, 1.5, 2.0],
+                [0.0, 0.5, 1.5, 2.0],
+            ]
+        )
+    )
+
+    mask = snpobj.ld_prune_mask(window_size=2, step_size=1, r2_threshold=0.8)
+
+    np.testing.assert_array_equal(mask, np.array([True, False]))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"window_size": 1}, "window_size"),
+        ({"window_size": 2.5}, "window_size"),
+        ({"step_size": 0}, "step_size"),
+        ({"r2_threshold": -0.01}, "r2_threshold"),
+        ({"r2_threshold": 1.01}, "r2_threshold"),
+        ({"min_samples": 1}, "min_samples"),
+    ],
+)
+def test_ld_prune_validates_parameters(kwargs, message):
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match=message):
+        snpobj.ld_prune_mask(**kwargs)
+
+
+def test_ld_prune_rejects_invalid_genotype_encodings():
+    dosage_snpobj = SNPObject(genotypes=np.array([[0.0, 1.0, 2.5], [0.0, 1.0, 2.0]]))
+    allele_snpobj = SNPObject(genotypes=np.array([[[0, 0], [0, 2]], [[0, 0], [0, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="between 0 and 2"):
+        dosage_snpobj.ld_prune_mask(window_size=2, step_size=1)
+    with pytest.raises(ValueError, match="0/1"):
+        allele_snpobj.ld_prune_mask(window_size=2, step_size=1)
+
+
 def test_filter_samples_reorders_sample_metadata():
     snpobj = _toy_snpobj()
     snpobj.sample_metadata = pd.DataFrame(

@@ -9,17 +9,55 @@ from .utils import create_benchmark_test
 def _probabilities_to_dosage(probabilities):
     if probabilities.shape[-1] == 3:
         return probabilities @ np.array([0.0, 1.0, 2.0], dtype=np.float32)
+    if probabilities.ndim == 2:
+        return _probabilities_to_dosage(probabilities[np.newaxis, :, :])[0]
     if probabilities.shape[-1] % 2 == 0:
-        return np.nansum(probabilities[..., 1::2], axis=-1, dtype=np.float32)
-    return probabilities @ np.arange(probabilities.shape[-1], dtype=np.float32)
+        finite = np.isfinite(probabilities)
+        widths = finite.sum(axis=-1)
+        observed_widths = widths > 0
+        even_widths = np.all((widths % 2 == 0) | ~observed_widths, axis=1)
+        phased_like = np.zeros(probabilities.shape[0], dtype=bool)
+        even_indices = np.flatnonzero(even_widths)
+        if even_indices.size:
+            pairs = probabilities[even_indices].reshape(
+                even_indices.size,
+                probabilities.shape[1],
+                probabilities.shape[2] // 2,
+                2,
+            )
+            pair_present = np.isfinite(pairs).any(axis=3)
+            pair_sums = np.nansum(pairs, axis=3, dtype=np.float32)
+            phased_like[even_indices] = np.all(
+                np.isclose(pair_sums, 1.0, atol=1e-4, rtol=0) | ~pair_present,
+                axis=(1, 2),
+            )
+
+        dosage = np.full(probabilities.shape[:2], np.nan, dtype=np.float32)
+        if np.any(phased_like):
+            dosage[phased_like] = np.nansum(probabilities[phased_like, :, 1::2], axis=-1, dtype=np.float32)
+        if np.any(~phased_like):
+            weights = np.arange(probabilities.shape[-1], dtype=np.float32)
+            dosage[~phased_like] = np.nansum(probabilities[~phased_like] * weights, axis=-1, dtype=np.float32)
+        dosage[~np.any(finite, axis=-1)] = np.nan
+        return dosage
+    finite = np.isfinite(probabilities)
+    dosage = np.nansum(
+        probabilities * np.arange(probabilities.shape[-1], dtype=np.float32),
+        axis=-1,
+        dtype=np.float32,
+    )
+    dosage[~np.any(finite, axis=-1)] = np.nan
+    return dosage
 
 
 def read_bgen_snputils(path, sum_strands=True):
     """Read BGEN file using snputils"""
-    import snputils
-    snpobj = snputils.read_bgen(path, fields=["GP"])
+    from snputils.snp.io.read.bgen import BGENReader
+
+    reader = BGENReader(path)
     if sum_strands:
-        return _probabilities_to_dosage(snpobj.calldata_gp.astype(np.float32, copy=False))
+        return reader.read_dosage()
+    snpobj = reader.read(fields=["GP"])
     return snpobj.calldata_gp.astype(np.float32, copy=False)
 
 
@@ -41,7 +79,12 @@ def read_bgen_bgen(path, sum_strands=True):
             if sum_strands:
                 out[i] = _probabilities_to_dosage(probabilities)
             else:
-                out[i] = probabilities
+                if probabilities.shape[1] > out.shape[2]:
+                    expanded = np.full((n_variants, n_samples, probabilities.shape[1]), np.nan, dtype=np.float32)
+                    expanded[:, :, : out.shape[2]] = out
+                    out = expanded
+                out[i].fill(np.nan)
+                out[i, :, : probabilities.shape[1]] = probabilities
     return out
 
 

@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import logging
 import math
+import struct
+import zlib
+from importlib import import_module
 from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
-from bgen import BgenWriter as _BgenWriter
+import zstandard as zstd
 
 from snputils.snp.genobj.snpobj import SNPObject
 
 log = logging.getLogger(__name__)
+
+_U16 = struct.Struct("<H")
+_U32 = struct.Struct("<I")
+
+try:
+    _native_bgen = import_module("snputils.snp.io._bgen")
+except ImportError:  # pragma: no cover - exercised only when the extension is unavailable
+    _native_bgen = None
 
 
 class BGENWriter:
@@ -71,33 +82,176 @@ class BGENWriter:
         variants_id = self._variant_ids(n_variants)
 
         log.info(f"Writing to {output}")
-        with _BgenWriter(
-            str(output),
-            n_samples=n_samples,
-            samples=[str(sample) for sample in samples],
-            compression=compression,
-            layout=layout,
-            metadata=metadata,
-        ) as bfile:
+        if layout != 2:
+            raise NotImplementedError("Native BGENWriter currently supports BGEN layout 2 files.")
+
+        compression_flag = self._compression_flag(compression)
+        compressor = zstd.ZstdCompressor(level=3) if compression_flag == 2 else None
+        with open(output, "wb") as handle:
+            self._write_header(
+                handle=handle,
+                n_variants=n_variants,
+                n_samples=n_samples,
+                samples=[str(sample) for sample in samples],
+                compression_flag=compression_flag,
+                metadata=metadata,
+            )
             for idx in range(n_variants):
-                variant_probabilities = np.asarray(probabilities[idx], dtype=np.float64)
+                variant_probabilities = np.ascontiguousarray(probabilities[idx], dtype=np.float64)
                 alleles = self._alleles(variants_ref[idx], variants_alt[idx])
                 variant_probabilities = self._trim_trailing_nan_probability_columns(variant_probabilities)
                 variant_phased = self._variant_phased(variant_probabilities, alleles, phased)
                 ploidy = self._common_case_ploidy(variant_probabilities, alleles, variant_phased)
                 if ploidy is None:
                     ploidy = self._infer_ploidy(variant_probabilities, alleles, variant_phased)
-                bfile.add_variant(
+                self._write_variant(
+                    handle=handle,
                     varid=str(variants_id[idx]),
                     rsid=str(variants_id[idx]),
                     chrom=str(variants_chrom[idx]),
                     pos=int(variants_pos[idx]),
                     alleles=alleles,
-                    genotypes=variant_probabilities,
+                    probabilities=variant_probabilities,
                     ploidy=ploidy,
                     phased=variant_phased,
                     bit_depth=int(bit_depth),
+                    compression_flag=compression_flag,
+                    zstd_compressor=compressor,
                 )
+
+    @staticmethod
+    def _compression_flag(compression: Optional[str]) -> int:
+        if compression is None:
+            return 0
+        if compression == "zlib":
+            return 1
+        if compression == "zstd":
+            return 2
+        raise ValueError(f"compression type {compression!r} is not one of None, 'zlib', or 'zstd'.")
+
+    @staticmethod
+    def _write_header(
+        *,
+        handle,
+        n_variants: int,
+        n_samples: int,
+        samples: list[str],
+        compression_flag: int,
+        metadata: Optional[str],
+    ) -> None:
+        metadata_bytes = b"" if metadata is None else str(metadata).encode("utf-8")
+        header_len = 20 + len(metadata_bytes)
+        flags = compression_flag | (2 << 2) | (1 << 31)
+
+        sample_parts = []
+        for sample in samples:
+            sample_bytes = sample.encode("utf-8")
+            if len(sample_bytes) > np.iinfo(np.uint16).max:
+                raise ValueError("BGEN sample IDs cannot exceed uint16 length.")
+            sample_parts.append(_U16.pack(len(sample_bytes)) + sample_bytes)
+        sample_payload = b"".join(sample_parts)
+        sample_block = _U32.pack(8 + len(sample_payload)) + _U32.pack(n_samples) + sample_payload
+
+        after_offset = (
+            _U32.pack(header_len)
+            + _U32.pack(n_variants)
+            + _U32.pack(n_samples)
+            + b"bgen"
+            + metadata_bytes
+            + _U32.pack(flags)
+            + sample_block
+        )
+        handle.write(_U32.pack(len(after_offset)))
+        handle.write(after_offset)
+
+    @classmethod
+    def _write_variant(
+        cls,
+        *,
+        handle,
+        varid: str,
+        rsid: str,
+        chrom: str,
+        pos: int,
+        alleles: list[str],
+        probabilities: np.ndarray,
+        ploidy: Union[int, np.ndarray],
+        phased: bool,
+        bit_depth: int,
+        compression_flag: int,
+        zstd_compressor: Optional[zstd.ZstdCompressor],
+    ) -> None:
+        if _native_bgen is None:
+            raise ImportError("Native BGEN support requires the compiled snputils.snp.io._bgen extension.")
+        probabilities = np.ascontiguousarray(probabilities, dtype=np.float64)
+        n_samples, width = probabilities.shape
+        if len(alleles) > np.iinfo(np.uint16).max:
+            raise ValueError("BGEN allele count cannot exceed uint16 range.")
+        min_ploidy, max_ploidy, ploidy_array = cls._normalise_ploidy(ploidy, n_samples)
+        encoded = _native_bgen.encode_layout2(
+            probabilities,
+            n_samples,
+            width,
+            len(alleles),
+            min_ploidy,
+            max_ploidy,
+            bool(phased),
+            int(bit_depth),
+            ploidy_array if ploidy_array is not None else None,
+        )
+
+        if compression_flag == 0:
+            genotype_block = _U32.pack(len(encoded)) + encoded
+        elif compression_flag == 1:
+            compressed = zlib.compress(encoded, level=6)
+            genotype_block = _U32.pack(len(compressed) + 4) + _U32.pack(len(encoded)) + compressed
+        else:
+            if zstd_compressor is None:  # pragma: no cover - guarded by caller
+                raise ValueError("Missing zstd compressor.")
+            compressed = zstd_compressor.compress(encoded)
+            genotype_block = _U32.pack(len(compressed) + 4) + _U32.pack(len(encoded)) + compressed
+
+        handle.write(cls._variant_header(varid, rsid, chrom, pos, alleles))
+        handle.write(genotype_block)
+
+    @staticmethod
+    def _normalise_ploidy(ploidy: Union[int, np.ndarray], n_samples: int) -> tuple[int, int, Optional[np.ndarray]]:
+        if isinstance(ploidy, (int, np.integer)):
+            value = int(ploidy)
+            if value < 0 or value > 63:
+                raise ValueError("BGEN ploidy must be in the 0-63 range.")
+            return value, value, None
+        ploidy_array = np.ascontiguousarray(ploidy, dtype=np.uint8)
+        if ploidy_array.shape != (n_samples,):
+            raise ValueError("BGEN ploidy array length must match sample count.")
+        if np.any(ploidy_array > 63):
+            raise ValueError("BGEN ploidy values must be in the 0-63 range.")
+        return int(ploidy_array.min()), int(ploidy_array.max()), ploidy_array
+
+    @staticmethod
+    def _variant_header(varid: str, rsid: str, chrom: str, pos: int, alleles: list[str]) -> bytes:
+        if pos < 0 or pos > np.iinfo(np.uint32).max:
+            raise ValueError("BGEN variant positions must be in the uint32 range.")
+        parts = [
+            BGENWriter._u16_text(varid, "variant ID"),
+            BGENWriter._u16_text(rsid, "RSID"),
+            BGENWriter._u16_text(chrom, "chromosome"),
+            _U32.pack(int(pos)),
+            _U16.pack(len(alleles)),
+        ]
+        for allele in alleles:
+            allele_bytes = str(allele).encode("utf-8")
+            if len(allele_bytes) > np.iinfo(np.uint32).max:
+                raise ValueError("BGEN allele strings cannot exceed uint32 length.")
+            parts.append(_U32.pack(len(allele_bytes)) + allele_bytes)
+        return b"".join(parts)
+
+    @staticmethod
+    def _u16_text(value: str, field: str) -> bytes:
+        value_bytes = str(value).encode("utf-8")
+        if len(value_bytes) > np.iinfo(np.uint16).max:
+            raise ValueError(f"BGEN {field} cannot exceed uint16 length.")
+        return _U16.pack(len(value_bytes)) + value_bytes
 
     def _probabilities(self, phased: Optional[bool]) -> np.ndarray:
         if self.__snpobj.calldata_gp is not None:

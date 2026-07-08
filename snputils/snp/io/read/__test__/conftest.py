@@ -8,7 +8,6 @@ import platform
 
 import numpy as np
 import pytest
-from bgen import BgenReader as RawBgenReader
 
 import snputils
 from snputils.snp.io.read import BEDReader, BGENReader, PGENReader, VCFReader
@@ -18,8 +17,7 @@ def _bgen_is_readable(path: pathlib.Path) -> bool:
     if not path.exists():
         return False
     try:
-        with RawBgenReader(str(path), delay_parsing=True) as bfile:
-            next(iter(bfile)).probabilities
+        BGENReader(path).read(fields=["GP"], variant_idxs=[0])
         return True
     except Exception:
         return False
@@ -41,7 +39,7 @@ def _generate_bgen_from_vcf(data_path: pathlib.Path, subset_vcf_file: pathlib.Pa
         return
 
     # PLINK2's bgen-1.2 export is the target fixture format. Some alpha builds emit
-    # bgen-1.2 files that neither PLINK2 nor bgen can decompress, so validate the
+    # bgen-1.2 files that neither PLINK2 nor snputils can decompress, so validate the
     # result and fall back to bgen-1.3 to keep the I/O tests exercising real BGEN.
     export_attempts = [
         ("bgen-1.2", ["bgen-1.2", "ref-first", "bits=8"]),

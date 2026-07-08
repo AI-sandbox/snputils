@@ -61,6 +61,15 @@ def test_bgen_reader_does_not_hard_call(data_path):
         BGENReader(data_path + "/bgen/subset.bgen").read(fields=["GT"])
 
 
+def test_bgen_full_read_dosage_matches_indexed_rows(data_path):
+    path = data_path + "/bgen/subset.bgen"
+    indexes = [0, 2, 159]
+    full = BGENReader(path).read(fields=["GP"])
+    subset = BGENReader(path).read(fields=["GP"], variant_idxs=indexes)
+
+    np.testing.assert_allclose(full.dosage()[indexes], subset.dosage(), atol=1 / 255, equal_nan=True)
+
+
 def test_bgen_to_dosage_populates_genotypes(snpobj_bgen):
     dosage_obj = snpobj_bgen.to_dosage()
 

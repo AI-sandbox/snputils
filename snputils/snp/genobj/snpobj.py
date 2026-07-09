@@ -1240,8 +1240,8 @@ class SNPObject:
     @staticmethod
     def _validate_relatedness_method(method: str) -> str:
         method = str(method).lower().replace("-", "_")
-        if method != "grm":
-            raise ValueError("'method' must be 'grm'.")
+        if method not in {"grm", "ibd"}:
+            raise ValueError("'method' must be either 'grm' or 'ibd'.")
         return method
 
     @staticmethod
@@ -1255,6 +1255,22 @@ class SNPObject:
         if key not in aliases:
             raise ValueError("'scale' must be either 'relationship' or 'kinship'.")
         return aliases[key]
+
+    @staticmethod
+    def _validate_positive_parameter(name: str, value: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a positive numeric value.") from exc
+        if not np.isfinite(parsed) or parsed <= 0:
+            raise ValueError(f"'{name}' must be positive.")
+        return parsed
+
+    @staticmethod
+    def _validate_optional_nonnegative_parameter(name: str, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        return SNPObject._validate_nonnegative_parameter(name, value)
 
     def _format_relatedness_output(
         self,
@@ -1324,11 +1340,101 @@ class SNPObject:
         relatedness[valid] = numerator[valid] / counts[valid]
         return sample_indexes, relatedness, counts
 
+    def _ibd_relatedness_components(
+        self,
+        ibdobj: Any,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+        if ibdobj is None:
+            raise ValueError("`ibdobj` is required when method='ibd'.")
+        if self.samples is None:
+            raise ValueError("Sample names are required on `SNPObject.samples` when method='ibd'.")
+
+        genome_length_cm = self._validate_positive_parameter("genome_length_cm", genome_length_cm)
+        min_segment_cm = self._validate_optional_nonnegative_parameter("min_segment_cm", min_segment_cm)
+        sample_indexes = self._sample_subset_indices(samples)
+        sample_names = np.asarray(self.samples)
+        sample_to_position = {str(sample_names[idx]): pos for pos, idx in enumerate(sample_indexes)}
+        n_samples = sample_indexes.size
+
+        length_cm = getattr(ibdobj, "length_cm", None)
+        if length_cm is None:
+            raise ValueError("`ibdobj.length_cm` is required for IBD relatedness.")
+        length_cm = np.asarray(length_cm, dtype=float)
+
+        sample_id_1 = np.asarray(getattr(ibdobj, "sample_id_1"))
+        sample_id_2 = np.asarray(getattr(ibdobj, "sample_id_2"))
+        if sample_id_1.shape[0] != length_cm.shape[0] or sample_id_2.shape[0] != length_cm.shape[0]:
+            raise ValueError("IBD sample ID arrays must have the same length as `ibdobj.length_cm`.")
+
+        segment_type = getattr(ibdobj, "segment_type", None)
+        if segment_type is not None:
+            segment_type = np.asarray(segment_type)
+            if segment_type.shape[0] != length_cm.shape[0]:
+                raise ValueError("`ibdobj.segment_type` must have the same length as `ibdobj.length_cm`.")
+        elif segment_types is not None:
+            raise ValueError("`ibdobj.segment_type` is required when filtering by `segment_types`.")
+
+        mask = np.isfinite(length_cm) & (length_cm > 0)
+        if min_segment_cm is not None:
+            mask &= length_cm >= min_segment_cm
+        if segment_types is not None:
+            allowed_types = np.char.upper(np.atleast_1d(np.asarray(segment_types, dtype=str)))
+            observed_types = np.char.upper(segment_type.astype(str))
+            mask &= np.isin(observed_types, allowed_types)
+
+        ibd1_cm = np.zeros((n_samples, n_samples), dtype=float)
+        ibd2_cm = np.zeros((n_samples, n_samples), dtype=float)
+        weighted_ibd_cm = np.zeros((n_samples, n_samples), dtype=float)
+        n_segments = np.zeros((n_samples, n_samples), dtype=np.int64)
+
+        for idx in np.flatnonzero(mask):
+            first = sample_to_position.get(str(sample_id_1[idx]))
+            second = sample_to_position.get(str(sample_id_2[idx]))
+            if first is None or second is None or first == second:
+                continue
+
+            segment_length = float(length_cm[idx])
+            type_label = "" if segment_type is None else str(segment_type[idx]).upper()
+            weight = 2.0 if type_label == "IBD2" else 1.0
+            i, j = (first, second) if first < second else (second, first)
+
+            if weight == 2.0:
+                ibd2_cm[i, j] += segment_length
+            else:
+                ibd1_cm[i, j] += segment_length
+            weighted_ibd_cm[i, j] += segment_length * weight
+            n_segments[i, j] += 1
+
+        for matrix in (ibd1_cm, ibd2_cm, weighted_ibd_cm, n_segments):
+            matrix += matrix.T
+
+        relationship = weighted_ibd_cm / (2.0 * genome_length_cm)
+        np.fill_diagonal(relationship, 1.0)
+
+        metrics = {
+            "n_segments": n_segments,
+            "ibd1_cm": ibd1_cm,
+            "ibd2_cm": ibd2_cm,
+            "weighted_ibd_cm": weighted_ibd_cm,
+        }
+        return sample_indexes, relationship, metrics
+
     def _sample_call_rate_from_dosages(self, sample_indexes: np.ndarray) -> np.ndarray:
         dosages = self._diploid_dosages(samples=sample_indexes, context="Relatedness pruning")
         if dosages.shape[0] == 0:
             return np.full(dosages.shape[1], np.nan, dtype=float)
         return np.isfinite(dosages).mean(axis=0)
+
+    def _sample_call_rate_for_pruning(self, sample_indexes: np.ndarray) -> np.ndarray:
+        try:
+            return self._sample_call_rate_from_dosages(sample_indexes)
+        except ValueError:
+            return np.ones(sample_indexes.shape[0], dtype=float)
 
     @staticmethod
     def _normalize_imputation_info_keys(
@@ -1742,31 +1848,44 @@ class SNPObject:
         scale: str = "relationship",
         min_variants: int = 1,
         block_size: int = 10000,
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
         as_dataframe: bool = False,
     ) -> Any:
         """
-        Compute genotype-derived sample relatedness.
+        Compute sample relatedness.
 
-        The initial implementation supports a GRM-style estimator on diploid
+        ``method="grm"`` computes genotype-derived relatedness from diploid
         biallelic dosages. Genotypes are standardized per variant as
         ``(g - 2p) / sqrt(2p(1-p))`` and pairwise products are averaged over
-        variants where both samples are called. This is best run on autosomal,
-        reasonably common, LD-pruned variants.
+        variants where both samples are called. ``method="ibd"`` summarizes
+        already-called IBD segments from an ``IBDObject`` as
+        ``(IBD1 cM + 2 * IBD2 cM) / (2 * genome_length_cm)``.
 
         Args:
             method (str, default="grm"):
-                Relatedness estimator. Currently only ``"grm"`` is supported.
+                Relatedness estimator. Supported values are ``"grm"`` and ``"ibd"``.
             samples (str or array_like, optional):
                 Sample IDs, sample indexes, or boolean mask selecting samples.
                 If None, all samples are used.
             scale (str, default="relationship"):
-                ``"relationship"`` returns the GRM relationship coefficient.
+                ``"relationship"`` returns the relationship coefficient.
                 ``"kinship"`` returns half the relationship coefficient.
             min_variants (int, default=1):
                 Minimum number of pairwise non-missing informative variants
-                required to report a finite value.
+                required to report a finite GRM value.
             block_size (int, default=10000):
                 Number of variants per block used while accumulating the GRM.
+            ibdobj (IBDObject, optional):
+                IBD segments used when ``method="ibd"``.
+            genome_length_cm (float, default=3400.0):
+                Diploid genome length denominator for IBD normalization.
+            min_segment_cm (float, optional):
+                Minimum IBD segment length to include.
+            segment_types (sequence of str, optional):
+                IBD segment types to include, such as ``["IBD1", "IBD2"]``.
             as_dataframe (bool, default=False):
                 If True, return a pandas DataFrame with sample labels.
 
@@ -1774,13 +1893,22 @@ class SNPObject:
             Square NumPy array of relatedness values, or a DataFrame if
             ``as_dataframe=True``.
         """
-        self._validate_relatedness_method(method)
+        method = self._validate_relatedness_method(method)
         scale = self._validate_relatedness_scale(scale)
-        sample_indexes, relationship, _ = self._grm_relatedness_components(
-            samples=samples,
-            min_variants=min_variants,
-            block_size=block_size,
-        )
+        if method == "grm":
+            sample_indexes, relationship, _ = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+        else:
+            sample_indexes, relationship, _ = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
         values = relationship if scale == "relationship" else relationship / 2.0
         return self._format_relatedness_output(
             values,
@@ -1794,20 +1922,38 @@ class SNPObject:
         samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
         min_variants: int = 1,
         block_size: int = 10000,
+        method: str = "grm",
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
     ) -> Any:
         """
-        Return sample pairs with GRM-derived kinship at or above ``threshold``.
+        Return sample pairs with estimated kinship at or above ``threshold``.
 
         The default threshold, 0.0884, is a commonly used second-degree kinship
-        cutoff. Input variants should already be appropriate for relatedness QC
-        (autosomal, reasonably common, and preferably LD-pruned).
+        cutoff. For ``method="grm"``, input variants should already be
+        appropriate for relatedness QC (autosomal, reasonably common, and
+        preferably LD-pruned). For ``method="ibd"``, pass an ``IBDObject`` via
+        ``ibdobj``.
         """
         threshold = self._validate_nonnegative_parameter("threshold", threshold)
-        sample_indexes, relationship, counts = self._grm_relatedness_components(
-            samples=samples,
-            min_variants=min_variants,
-            block_size=block_size,
-        )
+        method = self._validate_relatedness_method(method)
+        if method == "grm":
+            sample_indexes, relationship, counts = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+            extra_metrics = {"n_variants": counts}
+        else:
+            sample_indexes, relationship, extra_metrics = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
         kinship = relationship / 2.0
 
         columns = ["sample_index_1", "sample_index_2"]
@@ -1815,7 +1961,12 @@ class SNPObject:
         if include_names:
             columns.extend(["sample_1", "sample_2"])
             sample_names = np.asarray(self.samples)
-        columns.extend(["relationship", "kinship", "n_variants"])
+        metric_columns = (
+            ["n_variants"]
+            if method == "grm"
+            else ["n_segments", "ibd1_cm", "ibd2_cm", "weighted_ibd_cm"]
+        )
+        columns.extend(["relationship", "kinship", *metric_columns])
 
         records = []
         n_samples = sample_indexes.size
@@ -1829,11 +1980,17 @@ class SNPObject:
                     "sample_index_2": int(sample_indexes[second]),
                     "relationship": float(relationship[first, second]),
                     "kinship": float(value),
-                    "n_variants": int(counts[first, second]),
                 }
                 if include_names:
                     record["sample_1"] = sample_names[sample_indexes[first]]
                     record["sample_2"] = sample_names[sample_indexes[second]]
+                for column in metric_columns:
+                    metric_value = extra_metrics[column][first, second]
+                    if column in {"n_variants", "n_segments"}:
+                        metric_value = int(metric_value)
+                    else:
+                        metric_value = float(metric_value)
+                    record[column] = metric_value
                 records.append(record)
 
         import pandas as pd
@@ -1845,20 +2002,40 @@ class SNPObject:
         threshold: float = 0.0884,
         samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
         inplace: bool = False,
+        method: str = "grm",
+        min_variants: int = 1,
+        block_size: int = 10000,
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
     ) -> Optional['SNPObject']:
         """
         Greedily remove samples until no selected pair exceeds a kinship threshold.
 
         At each step, the removed sample is chosen by: more flagged
         relationships, then lower sample call rate, then later sample index.
-        Relatedness is estimated with the default GRM settings. Samples outside
-        the optional ``samples`` subset are kept.
+        Samples outside the optional ``samples`` subset are kept.
         """
         threshold = self._validate_nonnegative_parameter("threshold", threshold)
-        sample_indexes, relationship, _ = self._grm_relatedness_components(samples=samples)
+        method = self._validate_relatedness_method(method)
+        if method == "grm":
+            sample_indexes, relationship, _ = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+        else:
+            sample_indexes, relationship, _ = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
         kinship = relationship / 2.0
         keep = np.ones(sample_indexes.size, dtype=bool)
-        call_rate = self._sample_call_rate_from_dosages(sample_indexes)
+        call_rate = self._sample_call_rate_for_pruning(sample_indexes)
 
         while np.count_nonzero(keep) > 1:
             active = np.flatnonzero(keep)

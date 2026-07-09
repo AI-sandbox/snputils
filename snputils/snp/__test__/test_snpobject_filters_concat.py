@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from snputils.ibd.genobj.ibdobj import IBDObject
 from snputils.snp.genobj.snpobj import SNPObject
 
 
@@ -120,6 +121,20 @@ def _manual_grm(dosages: np.ndarray, min_variants: int = 1) -> tuple[np.ndarray,
     valid = counts >= min_variants
     relatedness[valid] = numerator[valid] / counts[valid]
     return relatedness, counts
+
+
+def _toy_ibdobj() -> IBDObject:
+    return IBDObject(
+        sample_id_1=np.array(["A", "A", "B", "A", "A"], dtype=object),
+        haplotype_id_1=np.array([1, 1, 1, 1, 1], dtype=int),
+        sample_id_2=np.array(["B", "B", "C", "C", "D"], dtype=object),
+        haplotype_id_2=np.array([2, 2, 2, 2, 2], dtype=int),
+        chrom=np.array(["1", "1", "1", "1", "1"], dtype=object),
+        start=np.array([1, 101, 201, 301, 401], dtype=int),
+        end=np.array([100, 200, 300, 400, 500], dtype=int),
+        length_cm=np.array([20.0, 10.0, 5.0, 2.0, 100.0], dtype=float),
+        segment_type=np.array(["IBD1", "IBD2", "IBD1", "IBD1", "IBD1"], dtype=object),
+    )
 
 
 def test_call_rate_from_3d_genotypes_treats_partial_missing_and_nan_as_missing():
@@ -357,6 +372,130 @@ def test_relatedness_methods_support_sample_subsets():
     assert pairs["sample_2"].tolist() == ["s2"]
 
 
+def test_relatedness_ibd_uses_weighted_segment_lengths_and_dataframe_labels():
+    snpobj = SNPObject(samples=np.array(["A", "B", "C"], dtype=object))
+    ibdobj = _toy_ibdobj()
+
+    relatedness = snpobj.relatedness(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+    )
+    kinship_df = snpobj.relatedness(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+        scale="kinship",
+        as_dataframe=True,
+    )
+
+    expected = np.array(
+        [
+            [1.0, 0.2, 0.01],
+            [0.2, 1.0, 0.025],
+            [0.01, 0.025, 1.0],
+        ]
+    )
+    np.testing.assert_allclose(relatedness, expected)
+    assert kinship_df.index.tolist() == ["A", "B", "C"]
+    assert kinship_df.columns.tolist() == ["A", "B", "C"]
+    np.testing.assert_allclose(kinship_df.to_numpy(), expected / 2.0)
+
+
+def test_relatedness_ibd_filters_segments_by_length_type_and_samples():
+    snpobj = SNPObject(samples=np.array(["A", "B", "C"], dtype=object))
+    ibdobj = _toy_ibdobj()
+
+    only_ibd2 = snpobj.relatedness(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+        segment_types=["IBD2"],
+    )
+    long_segments = snpobj.relatedness(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+        min_segment_cm=6.0,
+        samples=["A", "B"],
+    )
+
+    np.testing.assert_allclose(
+        only_ibd2,
+        np.array(
+            [
+                [1.0, 0.1, 0.0],
+                [0.1, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ),
+    )
+    np.testing.assert_allclose(
+        long_segments,
+        np.array(
+            [
+                [1.0, 0.2],
+                [0.2, 1.0],
+            ]
+        ),
+    )
+
+
+def test_flag_related_pairs_ibd_reports_segment_metrics():
+    snpobj = SNPObject(samples=np.array(["A", "B", "C"], dtype=object))
+    ibdobj = _toy_ibdobj()
+
+    pairs = snpobj.flag_related_pairs(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+        threshold=0.09,
+    )
+
+    assert pairs.columns.tolist() == [
+        "sample_index_1",
+        "sample_index_2",
+        "sample_1",
+        "sample_2",
+        "relationship",
+        "kinship",
+        "n_segments",
+        "ibd1_cm",
+        "ibd2_cm",
+        "weighted_ibd_cm",
+    ]
+    assert pairs["sample_1"].tolist() == ["A"]
+    assert pairs["sample_2"].tolist() == ["B"]
+    np.testing.assert_allclose(pairs["relationship"], np.array([0.2]))
+    np.testing.assert_allclose(pairs["kinship"], np.array([0.1]))
+    assert pairs["n_segments"].tolist() == [2]
+    np.testing.assert_allclose(pairs["ibd1_cm"], np.array([20.0]))
+    np.testing.assert_allclose(pairs["ibd2_cm"], np.array([10.0]))
+    np.testing.assert_allclose(pairs["weighted_ibd_cm"], np.array([40.0]))
+
+
+def test_prune_related_samples_ibd_does_not_require_genotypes_and_preserves_metadata():
+    snpobj = SNPObject(
+        samples=np.array(["A", "B", "C"], dtype=object),
+        sample_fid=np.array(["F1", "F2", "F3"], dtype=object),
+    )
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["A", "B", "C"], "batch": ["x", "y", "z"]}
+    )
+    ibdobj = _toy_ibdobj()
+
+    filtered = snpobj.prune_related_samples(
+        method="ibd",
+        ibdobj=ibdobj,
+        genome_length_cm=100.0,
+        threshold=0.09,
+    )
+
+    assert filtered.samples.tolist() == ["A", "C"]
+    assert filtered.sample_fid.tolist() == ["F1", "F3"]
+    assert filtered.sample_metadata["sample"].tolist() == ["A", "C"]
+
+
 def test_relatedness_validates_parameters_and_sample_selector():
     snpobj = _toy_snpobj()
 
@@ -374,6 +513,43 @@ def test_relatedness_validates_parameters_and_sample_selector():
         snpobj.prune_related_samples(threshold=np.nan)
     with pytest.raises(ValueError, match="not found"):
         snpobj.relatedness(samples=["missing"])
+
+
+def test_relatedness_ibd_validates_required_inputs_and_filters():
+    snpobj = SNPObject(samples=np.array(["A", "B"], dtype=object))
+    ibdobj = _toy_ibdobj()
+    no_segment_type = IBDObject(
+        sample_id_1=np.array(["A"], dtype=object),
+        haplotype_id_1=np.array([1], dtype=int),
+        sample_id_2=np.array(["B"], dtype=object),
+        haplotype_id_2=np.array([2], dtype=int),
+        chrom=np.array(["1"], dtype=object),
+        start=np.array([1], dtype=int),
+        end=np.array([10], dtype=int),
+        length_cm=np.array([1.0], dtype=float),
+    )
+    no_length = IBDObject(
+        sample_id_1=np.array(["A"], dtype=object),
+        haplotype_id_1=np.array([1], dtype=int),
+        sample_id_2=np.array(["B"], dtype=object),
+        haplotype_id_2=np.array([2], dtype=int),
+        chrom=np.array(["1"], dtype=object),
+        start=np.array([1], dtype=int),
+        end=np.array([10], dtype=int),
+    )
+
+    with pytest.raises(ValueError, match="ibdobj"):
+        snpobj.relatedness(method="ibd")
+    with pytest.raises(ValueError, match="genome_length_cm"):
+        snpobj.relatedness(method="ibd", ibdobj=ibdobj, genome_length_cm=0)
+    with pytest.raises(ValueError, match="min_segment_cm"):
+        snpobj.relatedness(method="ibd", ibdobj=ibdobj, min_segment_cm=-1)
+    with pytest.raises(ValueError, match="segment_type"):
+        snpobj.relatedness(method="ibd", ibdobj=no_segment_type, segment_types=["IBD1"])
+    with pytest.raises(ValueError, match="length_cm"):
+        snpobj.relatedness(method="ibd", ibdobj=no_length)
+    with pytest.raises(ValueError, match="Sample names"):
+        SNPObject(genotypes=np.zeros((1, 2))).relatedness(method="ibd", ibdobj=ibdobj)
 
 
 def test_imputation_r2_extracts_common_info_keys_and_filters_variants():

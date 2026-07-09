@@ -9,7 +9,7 @@ from .utils import create_benchmark_test
 def read_bcf_snputils(path, sum_strands=True):
     """Read BCF file using snputils"""
     import snputils
-    return snputils.read_bcf(path, fields=["GT"], sum_strands=sum_strands).genotypes
+    return snputils.read_bcf(path, fields=["GT"], sum_strands=sum_strands, chromosome_ploidy="autosomal").genotypes
 
 
 def read_bcf_cyvcf2(path, sum_strands=True):

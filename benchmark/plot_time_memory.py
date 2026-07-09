@@ -259,7 +259,7 @@ def plot_time_memory(
     fig, axs = plt.subplots(
         len(DEFAULT_FORMATS),
         2,
-        figsize=(17.75, 15.3),
+        figsize=(17.75, 15.0),
         sharex="col",
         gridspec_kw={"width_ratios": [1.35, 1.0]},
     )

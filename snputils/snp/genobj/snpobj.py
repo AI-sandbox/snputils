@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 import numpy as np
@@ -6,7 +7,7 @@ import copy
 import warnings
 import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECKING
-from scipy.stats import mode
+from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
 from snputils._utils.genotypes import sum_diploid_genotypes
@@ -914,6 +915,20 @@ class SNPObject:
             return np.all(called_entries, axis=2)
         return called_entries
 
+    def _called_mask_for_samples(
+        self,
+        sample_indexes: np.ndarray,
+        *,
+        context: str,
+    ) -> np.ndarray:
+        sample_indexes = np.asarray(sample_indexes, dtype=int)
+        if self.calldata_gp is not None:
+            dosages = self._diploid_dosages(samples=sample_indexes, context=context)
+            return np.isfinite(dosages)
+
+        called = self._called_genotype_mask()
+        return called[:, sample_indexes]
+
     def _sample_subset_indices(
         self,
         samples: Optional[Union[str, Sequence[str], np.ndarray]],
@@ -967,6 +982,21 @@ class SNPObject:
         return SNPObject._validate_probability_threshold("min_call_rate", min_call_rate)
 
     @staticmethod
+    def _validate_differential_missingness_test(test: str) -> str:
+        test = str(test).lower().replace("-", "_")
+        aliases = {
+            "auto": "auto",
+            "chi2": "chi2",
+            "chi_square": "chi2",
+            "chisq": "chi2",
+            "fisher": "fisher",
+            "fisher_exact": "fisher",
+        }
+        if test not in aliases:
+            raise ValueError("'test' must be one of 'auto', 'chi2', or 'fisher'.")
+        return aliases[test]
+
+    @staticmethod
     def _validate_integer_parameter(name: str, value: int, min_value: int) -> int:
         try:
             parsed = float(value)
@@ -1018,6 +1048,433 @@ class SNPObject:
         if self.samples is not None:
             data["sample"] = np.asarray(self.samples)[sample_indexes]
         data[column] = np.asarray(values, dtype=float).ravel()
+        return pd.DataFrame(data)
+
+    @staticmethod
+    def _group_labels_missing_mask(labels: np.ndarray) -> np.ndarray:
+        try:
+            import pandas as pd
+
+            missing = np.asarray(pd.isna(labels), dtype=bool)
+        except Exception:
+            missing = np.zeros(labels.shape, dtype=bool)
+            for idx, value in enumerate(labels):
+                missing[idx] = value is None or (
+                    isinstance(value, float) and np.isnan(value)
+                )
+
+        string_labels = labels.astype(str)
+        missing |= np.char.strip(string_labels) == ""
+        return missing
+
+    @staticmethod
+    def _hashable_group_label(label: Any) -> Any:
+        if isinstance(label, np.generic):
+            label = label.item()
+        try:
+            hash(label)
+            return label
+        except TypeError:
+            return str(label)
+
+    @staticmethod
+    def _encode_group_labels(labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        group_to_index: Dict[Any, int] = {}
+        group_names: List[Any] = []
+        group_ids = np.empty(labels.shape[0], dtype=int)
+
+        for idx, label in enumerate(labels):
+            key = SNPObject._hashable_group_label(label)
+            if key not in group_to_index:
+                group_to_index[key] = len(group_names)
+                group_names.append(label)
+            group_ids[idx] = group_to_index[key]
+
+        if len(group_names) < 2:
+            raise ValueError("'groups' must contain at least two non-missing groups.")
+
+        return np.asarray(group_names, dtype=object), group_ids
+
+    def _align_group_labels_by_sample(
+        self,
+        source_samples: Sequence[Any],
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        *,
+        source_name: str,
+    ) -> np.ndarray:
+        if self.samples is None:
+            raise ValueError(
+                f"Sample names are required to align group labels from {source_name}."
+            )
+
+        values = np.asarray(values, dtype=object)
+        if values.ndim != 1:
+            values = values.ravel()
+
+        source_samples = np.asarray(source_samples, dtype=object).ravel()
+        if source_samples.shape[0] != values.shape[0]:
+            raise ValueError(
+                f"{source_name} sample/value length mismatch: "
+                f"{source_samples.shape[0]} samples but {values.shape[0]} values."
+            )
+
+        source_names = [str(sample) for sample in source_samples.tolist()]
+        if len(set(source_names)) != len(source_names):
+            raise ValueError(f"{source_name} sample IDs must be unique.")
+
+        value_by_sample = {
+            sample_name: values[idx] for idx, sample_name in enumerate(source_names)
+        }
+        selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+        missing = [
+            str(sample) for sample in selected_samples
+            if str(sample) not in value_by_sample
+        ]
+        if missing:
+            raise ValueError(
+                f"{source_name} is missing group labels for samples: {missing}"
+            )
+
+        return np.asarray(
+            [value_by_sample[str(sample)] for sample in selected_samples],
+            dtype=object,
+        )
+
+    def _extract_group_column_values(
+        self,
+        values: np.ndarray,
+        *,
+        group_column: Optional[str],
+        names: Optional[Sequence[str]],
+        source_name: str,
+    ) -> np.ndarray:
+        values = np.asarray(values, dtype=object)
+        if values.ndim == 1:
+            if group_column is not None and names is not None and group_column not in names:
+                raise ValueError(f"Group column '{group_column}' was not found in {source_name}.")
+            return values
+
+        if values.ndim != 2:
+            raise ValueError(f"{source_name} group values must be one- or two-dimensional.")
+
+        if group_column is None:
+            if values.shape[1] == 1:
+                return values[:, 0]
+            raise ValueError(
+                f"`group_column` is required when {source_name} contains multiple columns."
+            )
+
+        if names is None:
+            raise ValueError(f"{source_name} does not expose column names for `group_column`.")
+
+        names = [str(name) for name in names]
+        if str(group_column) not in names:
+            raise ValueError(f"Group column '{group_column}' was not found in {source_name}.")
+        return values[:, names.index(str(group_column))]
+
+    def _group_labels_for_samples(
+        self,
+        groups: Any,
+        sample_indexes: np.ndarray,
+        *,
+        group_column: Optional[str] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes = np.asarray(sample_indexes, dtype=int)
+        n_selected = sample_indexes.shape[0]
+        if n_selected == 0:
+            raise ValueError("At least one sample is required for differential missingness.")
+
+        labels: np.ndarray
+
+        if isinstance(groups, Mapping):
+            if self.samples is None:
+                raise ValueError("Sample names are required when 'groups' is a mapping.")
+            selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+            string_mapping = {str(key): value for key, value in groups.items()}
+            missing = [
+                str(sample) for sample in selected_samples
+                if str(sample) not in string_mapping
+            ]
+            if missing:
+                raise ValueError(f"'groups' is missing labels for samples: {missing}")
+            labels = np.asarray(
+                [string_mapping[str(sample)] for sample in selected_samples],
+                dtype=object,
+            )
+        elif hasattr(groups, "phen_df"):
+            frame = groups.phen_df
+            names = [str(name) for name in getattr(groups, "phenotype_names", [])]
+            if group_column is None:
+                if len(names) != 1:
+                    raise ValueError(
+                        "`group_column` is required when a MultiPhenotypeObject "
+                        "contains multiple phenotype columns."
+                    )
+                group_column = names[0]
+            columns_by_name = {str(col): col for col in frame.columns}
+            if str(group_column) not in columns_by_name:
+                raise ValueError(f"Group column '{group_column}' was not found in 'groups'.")
+            resolved_group_column = columns_by_name[str(group_column)]
+            labels = self._align_group_labels_by_sample(
+                getattr(groups, "samples"),
+                np.asarray(frame.loc[:, resolved_group_column], dtype=object),
+                sample_indexes,
+                source_name="groups",
+            )
+        elif hasattr(groups, "columns") and hasattr(groups, "loc"):
+            if group_column is None:
+                raise ValueError("`group_column` is required when 'groups' is a DataFrame.")
+            columns_by_name = {str(col): col for col in groups.columns}
+            if str(group_column) not in columns_by_name:
+                raise ValueError(f"Group column '{group_column}' was not found in 'groups'.")
+            resolved_group_column = columns_by_name[str(group_column)]
+            values = np.asarray(groups.loc[:, resolved_group_column], dtype=object)
+            index_values = np.asarray(groups.index, dtype=object)
+            if self.samples is not None:
+                selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+                index_strings = {str(sample) for sample in index_values.tolist()}
+                if all(str(sample) in index_strings for sample in selected_samples):
+                    labels = self._align_group_labels_by_sample(
+                        index_values,
+                        values,
+                        sample_indexes,
+                        source_name="groups",
+                    )
+                elif values.shape[0] == self.n_samples:
+                    labels = values[sample_indexes]
+                else:
+                    raise ValueError(
+                        "'groups' DataFrame must be indexed by sample ID or have "
+                        "one row per SNPObject sample."
+                    )
+            elif values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            else:
+                raise ValueError(
+                    "'groups' DataFrame must have one row per SNPObject sample when "
+                    "SNPObject.samples is None."
+                )
+        elif hasattr(groups, "index") and hasattr(groups, "to_numpy"):
+            values = np.asarray(groups.to_numpy(), dtype=object).ravel()
+            index_values = np.asarray(groups.index, dtype=object)
+            if self.samples is not None:
+                selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+                index_strings = {str(sample) for sample in index_values.tolist()}
+                if all(str(sample) in index_strings for sample in selected_samples):
+                    labels = self._align_group_labels_by_sample(
+                        index_values,
+                        values,
+                        sample_indexes,
+                        source_name="groups",
+                    )
+                elif values.shape[0] == self.n_samples:
+                    labels = values[sample_indexes]
+                elif values.shape[0] == n_selected:
+                    labels = values
+                else:
+                    raise ValueError(
+                        "'groups' Series must be indexed by sample ID, have one "
+                        "entry per SNPObject sample, or have one entry per selected sample."
+                    )
+            elif values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            elif values.shape[0] == n_selected:
+                labels = values
+            else:
+                raise ValueError(
+                    "'groups' Series must have one entry per SNPObject sample or "
+                    "one entry per selected sample when SNPObject.samples is None."
+                )
+        elif hasattr(groups, "samples") and hasattr(groups, "values"):
+            names = (
+                getattr(groups, "phenotype_names", None)
+                or getattr(groups, "covariate_names", None)
+                or getattr(groups, "names", None)
+            )
+            values = self._extract_group_column_values(
+                np.asarray(getattr(groups, "values"), dtype=object),
+                group_column=group_column,
+                names=names,
+                source_name=type(groups).__name__,
+            )
+            labels = self._align_group_labels_by_sample(
+                getattr(groups, "samples"),
+                values,
+                sample_indexes,
+                source_name=type(groups).__name__,
+            )
+        else:
+            values = np.asarray(groups, dtype=object)
+            if values.ndim == 0:
+                raise ValueError("'groups' must contain one label per sample.")
+            if values.ndim != 1:
+                values = values.ravel()
+            if values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            elif values.shape[0] == n_selected:
+                labels = values
+            else:
+                raise ValueError(
+                    "'groups' must have length equal to the number of SNPObject "
+                    "samples or the number of selected samples."
+                )
+
+        missing = self._group_labels_missing_mask(labels)
+        if np.any(missing):
+            raise ValueError("'groups' contains missing labels for selected samples.")
+
+        group_names, group_ids = self._encode_group_labels(labels)
+        return labels, group_names, group_ids
+
+    @staticmethod
+    def _chi2_missingness_stats(
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        missing_counts = np.asarray(missing_counts, dtype=float)
+        called_counts = np.asarray(called_counts, dtype=float)
+        n_variants, n_groups = missing_counts.shape
+
+        p_values = np.full(n_variants, np.nan, dtype=float)
+        statistics = np.full(n_variants, np.nan, dtype=float)
+        min_expected = np.full(n_variants, np.nan, dtype=float)
+
+        group_totals = missing_counts + called_counts
+        row_missing = missing_counts.sum(axis=1)
+        row_called = called_counts.sum(axis=1)
+        grand_total = row_missing + row_called
+
+        degenerate = (grand_total > 0) & ((row_missing == 0) | (row_called == 0))
+        p_values[degenerate] = 1.0
+        statistics[degenerate] = 0.0
+        min_expected[degenerate] = 0.0
+
+        valid = (
+            (grand_total > 0)
+            & (row_missing > 0)
+            & (row_called > 0)
+            & np.all(group_totals > 0, axis=1)
+        )
+        if not np.any(valid):
+            return p_values, statistics, min_expected
+
+        expected_missing = (
+            row_missing[valid, None] * group_totals[valid] / grand_total[valid, None]
+        )
+        expected_called = (
+            row_called[valid, None] * group_totals[valid] / grand_total[valid, None]
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            stat = (
+                ((missing_counts[valid] - expected_missing) ** 2 / expected_missing).sum(axis=1)
+                + ((called_counts[valid] - expected_called) ** 2 / expected_called).sum(axis=1)
+            )
+        statistics[valid] = stat
+        p_values[valid] = chi2.sf(stat, df=n_groups - 1)
+        min_expected[valid] = np.minimum(
+            expected_missing.min(axis=1),
+            expected_called.min(axis=1),
+        )
+        return p_values, statistics, min_expected
+
+    @staticmethod
+    def _fisher_missingness_stats(
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if missing_counts.shape[1] != 2:
+            raise ValueError("Fisher exact differential missingness requires exactly two groups.")
+
+        n_variants = missing_counts.shape[0]
+        p_values = np.full(n_variants, np.nan, dtype=float)
+        statistics = np.full(n_variants, np.nan, dtype=float)
+
+        row_missing = missing_counts.sum(axis=1)
+        row_called = called_counts.sum(axis=1)
+        degenerate = (row_missing == 0) | (row_called == 0)
+        p_values[degenerate] = 1.0
+
+        for variant_idx in np.flatnonzero(~degenerate):
+            table = np.vstack(
+                [missing_counts[variant_idx], called_counts[variant_idx]]
+            ).astype(int, copy=False)
+            result = fisher_exact(table)
+            if hasattr(result, "statistic"):
+                statistics[variant_idx] = float(result.statistic)
+                p_values[variant_idx] = float(result.pvalue)
+            else:
+                odds_ratio, p_value = result
+                statistics[variant_idx] = float(odds_ratio)
+                p_values[variant_idx] = float(p_value)
+
+        return p_values, statistics
+
+    @staticmethod
+    def _differential_missingness_column_name(
+        prefix: str,
+        group_name: Any,
+        used: Dict[str, int],
+    ) -> str:
+        label = str(group_name).strip() or "group"
+        column = f"{prefix}_{label}"
+        seen = used.get(column, 0)
+        used[column] = seen + 1
+        if seen:
+            return f"{column}_{seen + 1}"
+        return column
+
+    def _format_differential_missingness_output(
+        self,
+        p_values: np.ndarray,
+        statistics: np.ndarray,
+        method_names: np.ndarray,
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+        group_names: np.ndarray,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return p_values
+
+        import pandas as pd
+
+        total_missing = missing_counts.sum(axis=1)
+        total_called = called_counts.sum(axis=1)
+        total = total_missing + total_called
+        data: Dict[str, Any] = {
+            "differential_missingness_pvalue": np.asarray(p_values, dtype=float),
+            "statistic": np.asarray(statistics, dtype=float),
+            "test": np.asarray(method_names, dtype=object),
+            "missing_count": total_missing.astype(int),
+            "called_count": total_called.astype(int),
+            "n_samples": total.astype(int),
+        }
+
+        column_counts = {column: 1 for column in data}
+        for group_idx, group_name in enumerate(group_names):
+            for prefix, values in (
+                ("missing_count", missing_counts[:, group_idx].astype(int)),
+                ("called_count", called_counts[:, group_idx].astype(int)),
+            ):
+                column = self._differential_missingness_column_name(
+                    prefix,
+                    group_name,
+                    column_counts,
+                )
+                data[column] = values
+
+            group_total = missing_counts[:, group_idx] + called_counts[:, group_idx]
+            rate = np.full(group_total.shape, np.nan, dtype=float)
+            nonzero = group_total > 0
+            rate[nonzero] = missing_counts[nonzero, group_idx] / group_total[nonzero]
+            column = self._differential_missingness_column_name(
+                "missing_rate",
+                group_name,
+                column_counts,
+            )
+            data[column] = rate
+
         return pd.DataFrame(data)
 
     def _hard_call_dosages(
@@ -1838,6 +2295,117 @@ class SNPObject:
         return self._format_call_rate_output(
             call_rate,
             column="sample_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def differential_missingness(
+        self,
+        groups: Any,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        test: str = "auto",
+        min_expected: float = 5.0,
+        group_column: Optional[str] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Test whether genotype missingness differs across sample groups per variant.
+
+        Missingness is computed from genotype calls or BGEN genotype
+        probabilities. For 3D genotype arrays, a sample is counted as called
+        only when all allele entries are non-missing. ``groups`` may be a
+        sequence aligned to samples, a mapping keyed by sample ID, a pandas
+        Series/DataFrame, or a snputils phenotype/covariate-style object with
+        ``samples`` and ``values`` attributes.
+
+        Args:
+            groups:
+                Group labels, such as case/control status or genotyping batch.
+            samples (str or array_like, optional):
+                Optional sample IDs, sample indexes, or boolean mask selecting
+                samples used for the test.
+            test (str, default="auto"):
+                Statistical test. ``"chi2"`` uses the chi-square test of
+                independence for 2xK tables. ``"fisher"`` uses Fisher's exact
+                test and requires exactly two groups. ``"auto"`` uses chi-square
+                except for two-group variants with any expected cell below
+                ``min_expected``, where it uses Fisher's exact test.
+            min_expected (float, default=5.0):
+                Expected cell-count cutoff used by ``test="auto"``.
+            group_column (str, optional):
+                Column name to use when ``groups`` contains multiple columns.
+            as_dataframe (bool, default=False):
+                If True, return p-values, test names, statistics, and per-group
+                missing/called counts as a pandas DataFrame.
+
+        Returns:
+            NumPy array of p-values, or a DataFrame if ``as_dataframe=True``.
+        """
+        test = self._validate_differential_missingness_test(test)
+        min_expected = self._validate_nonnegative_parameter("min_expected", min_expected)
+        sample_indexes = self._sample_subset_indices(samples)
+        _, group_names, group_ids = self._group_labels_for_samples(
+            groups,
+            sample_indexes,
+            group_column=group_column,
+        )
+        n_groups = group_names.shape[0]
+        if test == "fisher" and n_groups != 2:
+            raise ValueError("Fisher exact differential missingness requires exactly two groups.")
+
+        called = self._called_mask_for_samples(
+            sample_indexes,
+            context="Differential missingness",
+        )
+        if called.shape[1] != group_ids.shape[0]:
+            raise ValueError("Internal error: group labels and selected samples are misaligned.")
+
+        group_one_hot = np.zeros((group_ids.shape[0], n_groups), dtype=np.int64)
+        group_one_hot[np.arange(group_ids.shape[0]), group_ids] = 1
+        missing_counts = (~called).astype(np.int64, copy=False) @ group_one_hot
+        called_counts = called.astype(np.int64, copy=False) @ group_one_hot
+
+        chi2_p, chi2_stat, expected_min = self._chi2_missingness_stats(
+            missing_counts,
+            called_counts,
+        )
+        method_names = np.full(called.shape[0], "chi2", dtype=object)
+
+        if test == "chi2" or (test == "auto" and n_groups > 2):
+            p_values = chi2_p
+            statistics = chi2_stat
+        elif test == "fisher":
+            p_values, statistics = self._fisher_missingness_stats(
+                missing_counts,
+                called_counts,
+            )
+            method_names[:] = "fisher"
+        else:
+            p_values = chi2_p.copy()
+            statistics = chi2_stat.copy()
+            row_missing = missing_counts.sum(axis=1)
+            row_called = called_counts.sum(axis=1)
+            use_fisher = (
+                np.isfinite(expected_min)
+                & (expected_min < min_expected)
+                & (row_missing > 0)
+                & (row_called > 0)
+            )
+            if np.any(use_fisher):
+                fisher_p, fisher_stat = self._fisher_missingness_stats(
+                    missing_counts,
+                    called_counts,
+                )
+                p_values[use_fisher] = fisher_p[use_fisher]
+                statistics[use_fisher] = fisher_stat[use_fisher]
+                method_names[use_fisher] = "fisher"
+
+        return self._format_differential_missingness_output(
+            p_values,
+            statistics,
+            method_names,
+            missing_counts,
+            called_counts,
+            group_names,
             as_dataframe=as_dataframe,
         )
 
@@ -2696,6 +3264,62 @@ class SNPObject:
         mask = np.isfinite(call_rate) & (call_rate >= threshold)
         indexes = np.where(mask)[0]
         return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
+
+    def filter_differential_missingness(
+            self,
+            groups: Any,
+            min_p: float = 1e-5,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            test: str = "auto",
+            min_expected: float = 5.0,
+            group_column: Optional[str] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by differential missingness p-value.
+
+        Args:
+            groups:
+                Group labels passed to :meth:`differential_missingness`.
+            min_p (float, default=1e-5):
+                Minimum differential missingness p-value. Must be between 0
+                and 1. Variants below this threshold show evidence that
+                missingness differs by group.
+            samples (str or array_like, optional):
+                Optional sample IDs, sample indexes, or boolean mask selecting
+                samples used for the test.
+            test (str, default="auto"):
+                Statistical test passed to :meth:`differential_missingness`.
+            min_expected (float, default=5.0):
+                Expected cell-count cutoff used by ``test="auto"``.
+            group_column (str, optional):
+                Column name to use when ``groups`` contains multiple columns.
+            include (bool, default=True):
+                If True, keeps variants with p-value greater than or equal to
+                ``min_p``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_p", min_p)
+        p_values = np.asarray(
+            self.differential_missingness(
+                groups,
+                samples=samples,
+                test=test,
+                min_expected=min_expected,
+                group_column=group_column,
+            ),
+            dtype=float,
+        ).ravel()
+        mask = np.isfinite(p_values) & (p_values >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
 
     def filter_imputation_quality(
             self,

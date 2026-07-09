@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from snputils.ibd.genobj.ibdobj import IBDObject
+from snputils.phenotype.genobj.phenobj import PhenotypeObject
 from snputils.snp.genobj.snpobj import SNPObject
 
 
@@ -200,6 +201,167 @@ def test_call_rate_filters_validate_threshold(method_name, min_call_rate):
 
     with pytest.raises(ValueError, match="min_call_rate"):
         getattr(snpobj, method_name)(min_call_rate=min_call_rate)
+
+
+def test_differential_missingness_aligns_phenotype_groups_and_filters_variants():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [-1.0, -1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, -1.0],
+                [0.0, 0.0, -1.0, -1.0],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+        variants_id=np.array(["complete", "case_missing", "balanced", "control_missing"], dtype=object),
+    )
+    phenotype = PhenotypeObject(
+        samples=["s3", "s1", "s4", "s2"],
+        values=[0, 1, 0, 1],
+        phenotype_name="case_control",
+        quantitative=False,
+    )
+
+    p_values = snpobj.differential_missingness(phenotype)
+    report = snpobj.differential_missingness(phenotype, as_dataframe=True)
+    filtered = snpobj.filter_differential_missingness(phenotype, min_p=0.5)
+
+    np.testing.assert_allclose(p_values, np.array([1.0, 1.0 / 3.0, 1.0, 1.0 / 3.0]))
+    assert report.columns.tolist() == [
+        "differential_missingness_pvalue",
+        "statistic",
+        "test",
+        "missing_count",
+        "called_count",
+        "n_samples",
+        "missing_count_1",
+        "called_count_1",
+        "missing_rate_1",
+        "missing_count_0",
+        "called_count_0",
+        "missing_rate_0",
+    ]
+    assert report["test"].tolist() == ["chi2", "fisher", "fisher", "fisher"]
+    assert report["missing_count_1"].tolist() == [0, 2, 1, 0]
+    assert report["missing_count_0"].tolist() == [0, 0, 1, 2]
+    assert filtered.variants_id.tolist() == ["complete", "balanced"]
+
+
+def test_differential_missingness_supports_multigroup_chi_square():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [-1.0, -1.0, 0.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, -1.0, 0.0, -1.0],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4", "s5", "s6"], dtype=object),
+    )
+    groups = pd.Series(
+        ["batch_a", "batch_a", "batch_b", "batch_b", "batch_c", "batch_c"],
+        index=["s1", "s2", "s3", "s4", "s5", "s6"],
+    )
+
+    report = snpobj.differential_missingness(groups, test="chi2", as_dataframe=True)
+
+    assert report["test"].tolist() == ["chi2", "chi2"]
+    assert report.loc[0, "differential_missingness_pvalue"] < 0.05
+    assert report.loc[1, "differential_missingness_pvalue"] == pytest.approx(1.0)
+    assert report["missing_count_batch_a"].tolist() == [2, 1]
+    assert report["missing_count_batch_b"].tolist() == [0, 1]
+    assert report["missing_count_batch_c"].tolist() == [0, 1]
+
+
+def test_differential_missingness_supports_bgen_probability_missingness():
+    gp = np.array(
+        [
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+            [
+                [np.nan, np.nan, np.nan],
+                [np.nan, np.nan, np.nan],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+        ],
+        dtype=float,
+    )
+    snpobj = SNPObject(
+        calldata_gp=gp,
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+
+    np.testing.assert_allclose(
+        snpobj.differential_missingness(["case", "case", "control", "control"]),
+        np.array([1.0, 1.0 / 3.0]),
+    )
+
+
+def test_differential_missingness_uses_group_column_from_table():
+    snpobj = SNPObject(
+        genotypes=np.array([[-1.0, -1.0, 0.0, 0.0]]),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+    groups = pd.DataFrame(
+        {
+            "batch": ["case", "case", "control", "control"],
+            "ignore": [0, 1, 0, 1],
+        },
+        index=["s1", "s2", "s3", "s4"],
+    )
+
+    np.testing.assert_allclose(
+        snpobj.differential_missingness(groups, group_column="batch"),
+        np.array([1.0 / 3.0]),
+    )
+
+
+def test_filter_differential_missingness_include_false_keeps_failing_variants():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [-1.0, -1.0, 0.0, 0.0],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+        variants_id=np.array(["complete", "differential"], dtype=object),
+    )
+
+    filtered = snpobj.filter_differential_missingness(
+        ["case", "case", "control", "control"],
+        min_p=0.5,
+        include=False,
+    )
+
+    assert filtered.variants_id.tolist() == ["differential"]
+
+
+def test_differential_missingness_validates_inputs():
+    snpobj = SNPObject(
+        genotypes=np.zeros((1, 4), dtype=float),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+
+    with pytest.raises(ValueError, match="'test'"):
+        snpobj.differential_missingness(["a", "a", "b", "b"], test="invalid")
+    with pytest.raises(ValueError, match="Fisher"):
+        snpobj.differential_missingness(["a", "b", "c", "c"], test="fisher")
+    with pytest.raises(ValueError, match="length"):
+        snpobj.differential_missingness(["a", "b", "c"])
+    with pytest.raises(ValueError, match="missing labels"):
+        snpobj.differential_missingness({"s1": "a", "s2": "a", "s3": "b"})
+    with pytest.raises(ValueError, match="missing labels"):
+        snpobj.differential_missingness(["a", "a", np.nan, "b"])
+    with pytest.raises(ValueError, match="min_p"):
+        snpobj.filter_differential_missingness(["a", "a", "b", "b"], min_p=1.1)
+    with pytest.raises(ValueError, match="min_expected"):
+        snpobj.differential_missingness(["a", "a", "b", "b"], min_expected=-1)
 
 
 def test_relatedness_grm_from_dosages_matches_manual_standardization():

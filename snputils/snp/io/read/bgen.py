@@ -1,15 +1,51 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Sequence, Union
+import struct
+import zlib
+from dataclasses import dataclass
+from importlib import import_module
+from pathlib import Path
+from typing import List, Optional, Sequence, Union
 
 import numpy as np
-from bgen import BgenReader as _BgenReader
+import zstandard as zstd
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 
 log = logging.getLogger(__name__)
+
+try:
+    _native_bgen = import_module("snputils.snp.io._bgen")
+except ImportError:  # pragma: no cover - exercised only when the extension is unavailable
+    _native_bgen = None
+
+_U16 = struct.Struct("<H")
+_U32 = struct.Struct("<I")
+_ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()
+
+
+@dataclass(frozen=True)
+class _BGENHeader:
+    first_variant_offset: int
+    n_variants: int
+    n_samples: int
+    compression: int
+    layout: int
+    has_sample_ids: bool
+    metadata: bytes
+
+
+@dataclass(frozen=True)
+class _BGENRecord:
+    index: int
+    varid: str
+    rsid: str
+    chrom: str
+    pos: int
+    alleles: tuple[str, ...]
+    probabilities: Optional[np.ndarray]
 
 
 def _as_field_list(fields: Optional[Union[str, Sequence[str]]]) -> Optional[List[str]]:
@@ -20,15 +56,185 @@ def _as_field_list(fields: Optional[Union[str, Sequence[str]]]) -> Optional[List
     return list(fields)
 
 
-def _variant_identifier(var) -> str:
-    varid = str(var.varid)
-    if varid and varid != ".":
-        return varid
-    return str(var.rsid)
+def _variant_identifier(varid: str, rsid: str) -> str:
+    return varid if varid and varid != "." else rsid
 
 
-def _is_strictly_increasing(values: np.ndarray) -> bool:
-    return bool(values.size <= 1 or np.all(values[1:] > values[:-1]))
+def _read_exact(handle, size: int, context: str) -> bytes:
+    data = handle.read(size)
+    if len(data) != size:
+        raise ValueError(f"Malformed BGEN file: {context} is truncated.")
+    return data
+
+
+def _read_u16(handle, context: str) -> int:
+    return _U16.unpack(_read_exact(handle, 2, context))[0]
+
+
+def _read_u32(handle, context: str) -> int:
+    return _U32.unpack(_read_exact(handle, 4, context))[0]
+
+
+def _read_len_prefixed_text(handle, len_size: int, context: str) -> str:
+    if len_size == 2:
+        size = _read_u16(handle, f"{context} length")
+    elif len_size == 4:
+        size = _read_u32(handle, f"{context} length")
+    else:  # pragma: no cover - internal misuse guard
+        raise ValueError("BGEN string length size must be 2 or 4 bytes.")
+    if size == 0:
+        return ""
+    return _read_exact(handle, size, context).decode("utf-8")
+
+
+def _read_sample_file(sample_path: Union[str, bytes, Path], n_samples: int) -> np.ndarray:
+    samples: list[str] = []
+    with open(sample_path, "rt", encoding="utf-8") as handle:
+        next(handle, None)
+        next(handle, None)
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            samples.append(line.split()[0])
+    if len(samples) != n_samples:
+        raise ValueError("BGEN sample file contains an inconsistent number of samples.")
+    return np.asarray(samples, dtype=object)
+
+
+class _DirectBGENFile:
+    def __init__(self, filename: Union[str, Path], sample_path: Optional[Union[str, bytes]] = None):
+        self.filename = Path(filename)
+        self.sample_path = sample_path
+        self.handle = None
+        self.header: Optional[_BGENHeader] = None
+        self.samples: Optional[np.ndarray] = None
+
+    def __enter__(self) -> "_DirectBGENFile":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        self.close()
+        return False
+
+    def open(self) -> None:
+        self.handle = open(self.filename, "rb")
+        self.header = self._read_header()
+        if self.header.layout != 2:
+            raise NotImplementedError("Native BGENReader currently supports BGEN layout 2 files.")
+        if self.header.compression not in (0, 1, 2):
+            raise ValueError("Unsupported BGEN compression flag.")
+        if self.header.has_sample_ids:
+            self.samples = self._read_embedded_samples(self.header.n_samples)
+        elif self.sample_path:
+            self.samples = _read_sample_file(self.sample_path, self.header.n_samples)
+        else:
+            self.samples = np.asarray([str(idx) for idx in range(self.header.n_samples)], dtype=object)
+
+    def close(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+        self.handle = None
+
+    def _read_header(self) -> _BGENHeader:
+        assert self.handle is not None
+        data = _read_exact(self.handle, 20, "header")
+        offset, header_length, n_variants, n_samples = struct.unpack("<IIII", data[:16])
+        magic = data[16:20]
+        if magic not in (b"bgen", b"\x00\x00\x00\x00"):
+            raise ValueError("File does not appear to be a BGEN file.")
+        if header_length < 20:
+            raise ValueError("Malformed BGEN file: header length is too small.")
+        metadata = _read_exact(self.handle, header_length - 20, "free data") if header_length > 20 else b""
+        flags = _read_u32(self.handle, "flags")
+        compression = flags & 0b11
+        layout = (flags >> 2) & 0b1111
+        has_sample_ids = bool(flags & (1 << 31))
+        return _BGENHeader(
+            first_variant_offset=offset + 4,
+            n_variants=n_variants,
+            n_samples=n_samples,
+            compression=compression,
+            layout=layout,
+            has_sample_ids=has_sample_ids,
+            metadata=metadata,
+        )
+
+    def _read_embedded_samples(self, n_samples: int) -> np.ndarray:
+        assert self.handle is not None
+        sample_block_len = _read_u32(self.handle, "sample block length")
+        sample_count = _read_u32(self.handle, "sample count")
+        if sample_count != n_samples:
+            raise ValueError("BGEN sample block contains an inconsistent number of samples.")
+        samples = []
+        bytes_read = 8
+        for _ in range(n_samples):
+            sample_len = _read_u16(self.handle, "sample ID length")
+            sample = _read_exact(self.handle, sample_len, "sample ID").decode("utf-8")
+            samples.append(sample)
+            bytes_read += 2 + sample_len
+        if bytes_read != sample_block_len:
+            raise ValueError("Malformed BGEN file: sample block length does not match its contents.")
+        return np.asarray(samples, dtype=object)
+
+    def records(self, read_probabilities: bool = True):
+        assert self.handle is not None
+        assert self.header is not None
+        self.handle.seek(self.header.first_variant_offset)
+        for idx in range(self.header.n_variants):
+            yield self._read_record(idx, read_probabilities)
+
+    def _read_record(self, index: int, read_probabilities: bool) -> _BGENRecord:
+        assert self.handle is not None
+        assert self.header is not None
+
+        varid = _read_len_prefixed_text(self.handle, 2, "variant ID")
+        rsid = _read_len_prefixed_text(self.handle, 2, "RSID")
+        chrom = _read_len_prefixed_text(self.handle, 2, "chromosome")
+        pos = _read_u32(self.handle, "position")
+        n_alleles = _read_u16(self.handle, "allele count")
+        alleles = tuple(_read_len_prefixed_text(self.handle, 4, "allele") for _ in range(n_alleles))
+        block_len = _read_u32(self.handle, "genotype block length")
+        block = _read_exact(self.handle, block_len, "genotype block")
+
+        probabilities = None
+        if read_probabilities:
+            probabilities = self._decode_probabilities(block, n_alleles)
+        return _BGENRecord(
+            index=index,
+            varid=varid,
+            rsid=rsid,
+            chrom=chrom,
+            pos=pos,
+            alleles=alleles,
+            probabilities=probabilities,
+        )
+
+    def _decode_probabilities(self, block: bytes, n_alleles: int) -> np.ndarray:
+        assert self.header is not None
+        if _native_bgen is None:
+            raise ImportError("Native BGEN support requires the compiled snputils.snp.io._bgen extension.")
+        if self.header.compression == 0:
+            payload = block
+        else:
+            if len(block) < 4:
+                raise ValueError("Malformed BGEN genotype block: compressed length field is truncated.")
+            expected_len = _U32.unpack(block[:4])[0]
+            compressed = block[4:]
+            if self.header.compression == 1:
+                payload = zlib.decompress(compressed)
+            else:
+                payload = _ZSTD_DECOMPRESSOR.decompress(compressed, max_output_size=expected_len)
+            if len(payload) != expected_len:
+                raise ValueError("BGEN genotype block decompressed to the wrong size.")
+
+        buffer, n_samples, width, _phased, _bit_depth = _native_bgen.decode_layout2(
+            payload,
+            self.header.n_samples,
+            n_alleles,
+        )
+        return np.frombuffer(buffer, dtype=np.float32).reshape(n_samples, width)
 
 
 @SNPBaseReader.register
@@ -77,29 +283,45 @@ class BGENReader(SNPBaseReader):
                 "BGENReader preserves genotype probabilities in `calldata_gp` and does not hard-call GT."
             )
 
-        sample_path_str = "" if sample_path is None else str(sample_path)
-        log.info(f"Reading {self.filename}")
-
-        with _BgenReader(str(self.filename), sample_path_str, delay_parsing=True) as bfile:
-            file_samples = np.asarray(bfile.samples, dtype=object)
-            sample_indices = self._resolve_sample_indices(file_samples, sample_ids, sample_idxs)
-            variant_indices = self._resolve_variant_indices(bfile, variant_ids, variant_idxs)
-            variant_indices = np.asarray(variant_indices, dtype=int)
-
-            samples = file_samples[sample_indices] if "IID" in fields_set else None
-            read_gp = "GP" in fields_set
-            if not read_gp and not {"REF", "ALT"} & fields_set:
-                metadata = self._bulk_variant_metadata(bfile, variant_indices, fields_set)
-                calldata_gp = None
-            else:
-                variants = self._load_selected_variants(bfile, variant_indices)
-                metadata, calldata_gp = self._variant_data_from_records(
-                    variants=variants,
-                    sample_indices=sample_indices,
-                    fields_set=fields_set,
-                    read_gp=read_gp,
+        if self._can_use_native_bulk_gp(
+            fields_set=fields_set,
+            sample_path=sample_path,
+            sample_ids=sample_ids,
+            sample_idxs=sample_idxs,
+            variant_ids=variant_ids,
+            variant_idxs=variant_idxs,
+        ):
+            try:
+                calldata_gp = self._read_native_bulk_gp()
+                return SNPObject(genotypes=None, calldata_gp=calldata_gp)
+            except (NotImplementedError, ValueError) as exc:
+                fallback_messages = (
+                    "uniform probability width",
+                    "larger than the allocated output width",
                 )
+                if isinstance(exc, ValueError) and not any(message in str(exc) for message in fallback_messages):
+                    raise
+                log.debug("Falling back to the general BGEN reader.", exc_info=True)
 
+        log.info("Reading %s", self.filename)
+        with _DirectBGENFile(self.filename, sample_path=sample_path) as bfile:
+            assert bfile.header is not None
+            assert bfile.samples is not None
+            sample_indices = self._resolve_sample_indices(bfile.samples, sample_ids, sample_idxs)
+            requested_variant_idxs = self._normalize_variant_indices(
+                bfile.header.n_variants,
+                variant_idxs,
+            )
+            records = self._load_records(
+                bfile=bfile,
+                fields_set=fields_set,
+                sample_indices=sample_indices,
+                variant_ids=variant_ids,
+                variant_idxs=requested_variant_idxs,
+            )
+            samples = bfile.samples[sample_indices] if "IID" in fields_set else None
+
+        metadata, calldata_gp = self._records_to_arrays(records, sample_indices, fields_set)
         return SNPObject(
             genotypes=None,
             calldata_gp=calldata_gp,
@@ -111,6 +333,73 @@ class BGENReader(SNPBaseReader):
             variants_pos=metadata["variants_pos"],
         )
 
+    def read_dosage(
+        self,
+        sample_path: Optional[Union[str, bytes]] = None,
+        sample_ids: Optional[Sequence[str]] = None,
+        sample_idxs: Optional[Sequence[int]] = None,
+        variant_ids: Optional[Sequence[str]] = None,
+        variant_idxs: Optional[Sequence[int]] = None,
+    ) -> np.ndarray:
+        """
+        Read biallelic BGEN alternate-allele dosages as a ``float32`` array.
+
+        The all-samples/all-variants case uses a native streaming decoder that avoids
+        materializing genotype probabilities. Filtered reads fall back to the general
+        probability reader and convert from ``calldata_gp``.
+        """
+        if (
+            _native_bgen is not None
+            and sample_ids is None
+            and sample_idxs is None
+            and variant_ids is None
+            and variant_idxs is None
+        ):
+            try:
+                buffer, n_variants, n_samples = _native_bgen.read_file_dosage(str(self.filename))
+                if isinstance(buffer, np.ndarray):
+                    return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples)
+                return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
+            except NotImplementedError:
+                log.debug("Falling back to probability-based BGEN dosage reading.", exc_info=True)
+
+        snpobj = self.read(
+            fields=["GP"],
+            sample_path=sample_path,
+            sample_ids=sample_ids,
+            sample_idxs=sample_idxs,
+            variant_ids=variant_ids,
+            variant_idxs=variant_idxs,
+        )
+        return snpobj.dosage().astype(np.float32, copy=False)
+
+    @staticmethod
+    def _can_use_native_bulk_gp(
+        *,
+        fields_set: set[str],
+        sample_path: Optional[Union[str, bytes]],
+        sample_ids: Optional[Sequence[str]],
+        sample_idxs: Optional[Sequence[int]],
+        variant_ids: Optional[Sequence[str]],
+        variant_idxs: Optional[Sequence[int]],
+    ) -> bool:
+        return (
+            _native_bgen is not None
+            and fields_set == {"GP"}
+            and sample_path is None
+            and sample_ids is None
+            and sample_idxs is None
+            and variant_ids is None
+            and variant_idxs is None
+        )
+
+    def _read_native_bulk_gp(self) -> np.ndarray:
+        assert _native_bgen is not None
+        buffer, n_variants, n_samples, width = _native_bgen.read_file_probabilities(str(self.filename))
+        if isinstance(buffer, np.ndarray):
+            return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples, width)
+        return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples, width)
+
     @staticmethod
     def _variant_metadata_template() -> dict[str, Optional[np.ndarray]]:
         return {
@@ -121,129 +410,125 @@ class BGENReader(SNPBaseReader):
             "variants_pos": None,
         }
 
-    @classmethod
-    def _bulk_variant_metadata(
-        cls,
-        bfile,
-        variant_indices: np.ndarray,
-        fields_set: set[str],
-    ) -> dict[str, Optional[np.ndarray]]:
-        metadata = cls._variant_metadata_template()
-        if "ID" in fields_set:
-            identifiers = cls._variant_identifiers_array(bfile)
-            metadata["variants_id"] = identifiers[variant_indices]
-        if "#CHROM" in fields_set:
-            metadata["variants_chrom"] = np.asarray(bfile.chroms(), dtype=object)[variant_indices]
-        if "POS" in fields_set:
-            metadata["variants_pos"] = np.asarray(bfile.positions(), dtype=np.int64)[variant_indices]
-        return metadata
-
-    @classmethod
-    def _variant_data_from_records(
-        cls,
-        variants: Sequence[Any],
-        sample_indices: np.ndarray,
-        fields_set: set[str],
-        read_gp: bool,
-    ) -> tuple[dict[str, Optional[np.ndarray]], Optional[np.ndarray]]:
-        metadata = cls._variant_metadata_template()
-        variants_ref: list[str] = []
-        variants_alt: list[str] = []
-        variants_chrom: list[str] = []
-        variants_id: list[str] = []
-        variants_pos: list[int] = []
-        probabilities: list[np.ndarray] = []
-        prob_width = None
-
-        for var in variants:
-            alleles = [str(allele) for allele in var.alleles]
-            if "REF" in fields_set:
-                variants_ref.append(alleles[0] if alleles else "")
-            if "ALT" in fields_set:
-                variants_alt.append(",".join(alleles[1:]) if len(alleles) > 1 else "")
-            if "#CHROM" in fields_set:
-                variants_chrom.append(str(var.chrom))
-            if "ID" in fields_set:
-                variants_id.append(_variant_identifier(var))
-            if "POS" in fields_set:
-                variants_pos.append(int(var.pos))
-
-            if read_gp:
-                probs = np.asarray(var.probabilities, dtype=np.float32)[sample_indices, :]
-                if prob_width is None:
-                    prob_width = probs.shape[1]
-                elif probs.shape[1] != prob_width:
-                    new_width = max(prob_width, probs.shape[1])
-                    if new_width != prob_width:
-                        probabilities = [cls._pad_probabilities(p, new_width) for p in probabilities]
-                        prob_width = new_width
-                    probs = cls._pad_probabilities(probs, prob_width)
-                probabilities.append(probs)
-
-        if "REF" in fields_set:
-            metadata["variants_ref"] = np.asarray(variants_ref, dtype=object)
-        if "ALT" in fields_set:
-            metadata["variants_alt"] = np.asarray(variants_alt, dtype=object)
-        if "#CHROM" in fields_set:
-            metadata["variants_chrom"] = np.asarray(variants_chrom, dtype=object)
-        if "ID" in fields_set:
-            metadata["variants_id"] = np.asarray(variants_id, dtype=object)
-        if "POS" in fields_set:
-            metadata["variants_pos"] = np.asarray(variants_pos, dtype=np.int64)
-
-        calldata_gp = None
-        if read_gp:
-            calldata_gp = (
-                np.stack(probabilities, axis=0)
-                if probabilities
-                else np.empty((0, len(sample_indices), 0), dtype=np.float32)
-            )
-        return metadata, calldata_gp
-
     @staticmethod
-    def _load_selected_variants(bfile, variant_indices: np.ndarray) -> list[Any]:
-        if variant_indices.size == 0:
-            return []
+    def _normalize_variant_indices(
+        n_variants: int,
+        variant_idxs: Optional[Sequence[int]],
+    ) -> Optional[np.ndarray]:
+        if variant_idxs is None:
+            return None
+        idx = np.asarray(variant_idxs, dtype=int).ravel()
+        if np.any((idx < -n_variants) | (idx >= n_variants)):
+            raise ValueError("One or more variant indexes are out of bounds.")
+        return np.mod(idx, n_variants)
 
-        if not _is_strictly_increasing(variant_indices):
-            return [bfile[int(idx)] for idx in variant_indices]
+    @classmethod
+    def _load_records(
+        cls,
+        *,
+        bfile: _DirectBGENFile,
+        fields_set: set[str],
+        sample_indices: np.ndarray,
+        variant_ids: Optional[Sequence[str]],
+        variant_idxs: Optional[np.ndarray],
+    ) -> list[_BGENRecord]:
+        read_gp = "GP" in fields_set
+        by_index: dict[int, _BGENRecord] = {}
+        selected: list[_BGENRecord] = []
+        requested_ids = {str(value) for value in np.asarray(variant_ids, dtype=object).ravel()} if variant_ids is not None else None
+        found_ids: set[str] = set()
+        requested_idx_set = set(int(idx) for idx in variant_idxs) if variant_idxs is not None else None
+        scan_limit = int(np.max(variant_idxs)) if variant_idxs is not None and variant_idxs.size else None
 
-        if getattr(bfile, "index", None) is not None:
-            return [bfile[int(idx)] for idx in variant_indices]
+        for record in bfile.records(read_probabilities=read_gp):
+            include = False
+            aliases = {
+                _variant_identifier(record.varid, record.rsid),
+                record.rsid,
+                f"{record.chrom}:{record.pos}",
+            }
+            if requested_idx_set is not None:
+                include = record.index in requested_idx_set
+            elif requested_ids is not None:
+                include = bool(requested_ids.intersection(aliases))
+                if include:
+                    found_ids.update(aliases)
+            else:
+                include = True
 
-        total_variants = len(bfile)
-        scan_limit = int(variant_indices[-1])
-        selection_count = int(variant_indices.size)
-        should_scan = scan_limit <= total_variants // 2 or selection_count >= max(1024, scan_limit // 8)
-        if not should_scan:
-            return [bfile[int(idx)] for idx in variant_indices]
+            if include:
+                if record.probabilities is not None:
+                    record = _BGENRecord(
+                        index=record.index,
+                        varid=record.varid,
+                        rsid=record.rsid,
+                        chrom=record.chrom,
+                        pos=record.pos,
+                        alleles=record.alleles,
+                        probabilities=record.probabilities[sample_indices, :],
+                    )
+                if requested_idx_set is not None:
+                    by_index[record.index] = record
+                else:
+                    selected.append(record)
 
-        selected: list[Any] = []
-        target_pos = 0
-        next_idx = int(variant_indices[target_pos])
-        for idx, var in enumerate(bfile):
-            if idx != next_idx:
-                if idx > scan_limit:
-                    break
-                continue
-            selected.append(var)
-            target_pos += 1
-            if target_pos == selection_count:
+            if scan_limit is not None and record.index >= scan_limit:
                 break
-            next_idx = int(variant_indices[target_pos])
+
+        if requested_idx_set is not None:
+            missing = [int(idx) for idx in variant_idxs if int(idx) not in by_index]
+            if missing:
+                raise ValueError(f"The following specified variant indexes were not found: {missing}")
+            return [by_index[int(idx)] for idx in variant_idxs]
+
+        if requested_ids is not None:
+            missing = sorted(requested_ids - found_ids)
+            if missing:
+                raise ValueError(f"The following specified variants were not found: {missing}")
         return selected
 
-    @staticmethod
-    def _variant_identifiers_array(bfile) -> np.ndarray:
-        rsids = np.asarray(bfile.rsids(), dtype=object)
-        try:
-            varids = np.asarray(bfile.varids(), dtype=object)
-        except ValueError:
-            varids = rsids
-        identifiers = rsids.copy()
-        valid = (varids != "") & (varids != ".")
-        identifiers[valid] = varids[valid]
-        return identifiers
+    @classmethod
+    def _records_to_arrays(
+        cls,
+        records: Sequence[_BGENRecord],
+        sample_indices: np.ndarray,
+        fields_set: set[str],
+    ) -> tuple[dict[str, Optional[np.ndarray]], Optional[np.ndarray]]:
+        metadata = cls._variant_metadata_template()
+        if "REF" in fields_set:
+            metadata["variants_ref"] = np.asarray(
+                [record.alleles[0] if record.alleles else "" for record in records],
+                dtype=object,
+            )
+        if "ALT" in fields_set:
+            metadata["variants_alt"] = np.asarray(
+                [",".join(record.alleles[1:]) if len(record.alleles) > 1 else "" for record in records],
+                dtype=object,
+            )
+        if "#CHROM" in fields_set:
+            metadata["variants_chrom"] = np.asarray([record.chrom for record in records], dtype=object)
+        if "ID" in fields_set:
+            metadata["variants_id"] = np.asarray(
+                [_variant_identifier(record.varid, record.rsid) for record in records],
+                dtype=object,
+            )
+        if "POS" in fields_set:
+            metadata["variants_pos"] = np.asarray([record.pos for record in records], dtype=np.int64)
+
+        calldata_gp = None
+        if "GP" in fields_set:
+            if not records:
+                calldata_gp = np.empty((0, len(sample_indices), 0), dtype=np.float32)
+            else:
+                widths = [record.probabilities.shape[1] for record in records if record.probabilities is not None]
+                max_width = max(widths, default=0)
+                calldata_gp = np.full((len(records), len(sample_indices), max_width), np.nan, dtype=np.float32)
+                for idx, record in enumerate(records):
+                    if record.probabilities is None:
+                        continue
+                    width = record.probabilities.shape[1]
+                    calldata_gp[idx, :, :width] = record.probabilities
+        return metadata, calldata_gp
 
     @staticmethod
     def _resolve_sample_indices(
@@ -267,46 +552,3 @@ class BGENReader(SNPBaseReader):
         if missing:
             raise ValueError(f"The following specified samples were not found: {missing}")
         return np.asarray([sample_lookup[str(sample)] for sample in requested], dtype=int)
-
-    @staticmethod
-    def _pad_probabilities(probabilities: np.ndarray, width: int) -> np.ndarray:
-        if probabilities.shape[1] == width:
-            return probabilities
-        padded = np.full((probabilities.shape[0], width), np.nan, dtype=probabilities.dtype)
-        padded[:, : probabilities.shape[1]] = probabilities
-        return padded
-
-    @staticmethod
-    def _resolve_variant_indices(
-        bfile,
-        variant_ids: Optional[Sequence[str]],
-        variant_idxs: Optional[Sequence[int]],
-    ) -> np.ndarray:
-        if variant_idxs is not None:
-            idx = np.asarray(variant_idxs, dtype=int).ravel()
-            n_variants = len(bfile)
-            if np.any((idx < -n_variants) | (idx >= n_variants)):
-                raise ValueError("One or more variant indexes are out of bounds.")
-            return np.mod(idx, n_variants)
-
-        if variant_ids is None:
-            return np.arange(len(bfile), dtype=int)
-
-        requested = {str(value) for value in np.asarray(variant_ids, dtype=object).ravel()}
-        selected: list[int] = []
-        varids = BGENReader._variant_identifiers_array(bfile)
-        rsids = np.asarray(bfile.rsids(), dtype=object)
-        chroms = np.asarray(bfile.chroms(), dtype=object)
-        positions = np.asarray(bfile.positions(), dtype=np.int64)
-        for idx, (varid, rsid, chrom, pos) in enumerate(zip(varids, rsids, chroms, positions)):
-            aliases = {str(varid), str(rsid), f"{chrom}:{pos}"}
-            if requested.intersection(aliases):
-                selected.append(idx)
-
-        found = set()
-        for idx in selected:
-            found.update({str(varids[idx]), str(rsids[idx]), f"{chroms[idx]}:{positions[idx]}"})
-        missing = sorted(requested - found)
-        if missing:
-            raise ValueError(f"The following specified variants were not found: {missing}")
-        return np.asarray(selected, dtype=int)

@@ -5,7 +5,7 @@
 - **Python** 3.9 or newer (3.9–3.14 supported)
 - **pip** with a recent setuptools build backend
 
-Core dependencies (NumPy, pandas, scikit-learn, Polars, matplotlib, Pgenlib, bgen, and others) are installed automatically with the package. See [`pyproject.toml`](https://github.com/AI-sandbox/snputils/blob/main/pyproject.toml) for the full list.
+Core dependencies (NumPy, pandas, scikit-learn, Polars, matplotlib, Pgenlib, and others) are installed automatically with the package. See [`pyproject.toml`](https://github.com/AI-sandbox/snputils/blob/main/pyproject.toml) for the full list.
 
 ## PyPI install
 

@@ -171,6 +171,28 @@ def _count_vcf_records(
     separator: Union[str, bytes] = "\t",
 ) -> int:
     separator_bytes = separator.encode("utf-8") if isinstance(separator, str) else separator
+    if region_filter is None:
+        n_records = 0
+        saw_body_tail = False
+        tail = b""
+        with _open_vcf_binary(vcf_path) as file:
+            for line in file:
+                if line.startswith(b"#"):
+                    continue
+                n_records = 1
+                break
+            else:
+                return 0
+
+            while chunk := file.read(8 * 1024 * 1024):
+                n_records += chunk.count(b"\n")
+                saw_body_tail = True
+                tail = chunk[-1:]
+
+        if saw_body_tail and tail != b"\n":
+            n_records += 1
+        return n_records
+
     n_records = 0
     with _open_vcf_binary(vcf_path) as file:
         for line in file:
@@ -238,6 +260,58 @@ def _empty_genotype_array(n_variants: int, n_samples: int, sum_strands: bool) ->
     if sum_strands:
         return np.empty((n_variants, n_samples), dtype=np.int8)
     return np.empty((n_variants, n_samples, 2), dtype=np.int8)
+
+
+def _concat_axis0_releasing(chunks: list[np.ndarray]) -> np.ndarray:
+    if len(chunks) == 1:
+        return chunks[0]
+
+    # Avoid np.concatenate's full source-plus-destination peak: copy each
+    # chunk into the final array and release that chunk reference immediately.
+    shape = list(chunks[0].shape)
+    shape[0] = sum(chunk.shape[0] for chunk in chunks)
+    out = np.empty(tuple(shape), dtype=chunks[0].dtype)
+    offset = 0
+    for idx, chunk in enumerate(chunks):
+        height = chunk.shape[0]
+        out[offset:offset + height] = chunk
+        offset += height
+        chunks[idx] = np.empty((0,) + chunk.shape[1:], dtype=chunk.dtype)
+    return out
+
+
+def _initial_stream_capacity(vcf_path: Union[str, pathlib.Path]) -> int:
+    path = Path(vcf_path)
+    if path.suffixes[-2:] == [".vcf", ".gz"]:
+        try:
+            # A gzip stream does not expose row count cheaply. The compressed
+            # byte size is a conservative starting point that avoids an extra
+            # decompression pass for common 1KGP-style GT-only files.
+            return max(65_536, int(path.stat().st_size // 128))
+        except OSError:
+            pass
+    return 65_536
+
+
+def _ensure_axis0_capacity(
+    array: Optional[np.ndarray],
+    used: int,
+    additional: int,
+    tail_shape: tuple[int, ...],
+    dtype: np.dtype,
+    initial_capacity: int,
+) -> np.ndarray:
+    required = used + additional
+    if array is None:
+        capacity = max(required, initial_capacity)
+        return np.empty((capacity,) + tail_shape, dtype=dtype)
+    if required <= array.shape[0]:
+        return array
+
+    capacity = max(required, array.shape[0] * 2)
+    grown = np.empty((capacity,) + tail_shape, dtype=dtype)
+    grown[:used] = array[:used]
+    return grown
 
 
 def _parse_vcf_qual_raw(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
@@ -870,7 +944,14 @@ class VCFReader(SNPBaseReader):
         sample_offsets = sample_idxs.astype(np.int64, copy=False) * 4
         block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
 
-        gt_chunks: list[np.ndarray] = []
+        # For gzip inputs we do not know n_records without a second pass. Keep
+        # one growable genotype buffer and fill it directly, instead of keeping
+        # all parsed genotype chunks and concatenating them at the end.
+        gt_buffer: Optional[np.ndarray] = None
+        gt_records = 0
+        initial_gt_capacity = _initial_stream_capacity(self._filename)
+        # Variant metadata is much smaller than the genotype matrix, so chunked
+        # metadata assembly keeps this path simple without driving peak memory.
         array_chunks: dict[str, list[np.ndarray]] = {
             field: []
             for field in field_columns
@@ -891,6 +972,8 @@ class VCFReader(SNPBaseReader):
             while True:
                 chunk = file.read(block_size)
                 if chunk:
+                    # gzip reads can split records anywhere. Parse only complete
+                    # lines in this block and carry the partial tail forward.
                     combined = remainder + chunk
                     cut = combined.rfind(b"\n")
                     if cut < 0:
@@ -917,6 +1000,9 @@ class VCFReader(SNPBaseReader):
                     height = int(line_ends.size)
 
                     if n_samples_total > 128:
+                        # For fixed-width GT-only rows, selected sample offsets
+                        # are computed from the first sample column; we only
+                        # need the nine fixed-field tabs for wide files.
                         tabs = _first_tabs_by_line(block, line_starts, 9)
                     else:
                         tabs = np.flatnonzero(raw == ord("\t"))
@@ -943,6 +1029,10 @@ class VCFReader(SNPBaseReader):
                         height = int(tabs.shape[0])
 
                     if n_selected:
+                        # This fast path is deliberately strict: every retained
+                        # row must be FORMAT=GT with fixed-width diploid calls.
+                        # If a block violates that, read() falls back to the
+                        # more general simple-FORMAT or pandas parser.
                         sample_starts = tabs[:, 8] + 1
                         if not _field_matches_value(raw, tabs[:, 7] + 1, tabs[:, 8], "GT"):
                             raise ValueError("The block fast path requires GT-only sample fields.")
@@ -953,13 +1043,28 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[offsets])
                         paternal = _ascii_gt_to_int(raw[offsets + 2])
                         if sum_strands:
-                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
+                            gt_buffer = _ensure_axis0_capacity(
+                                gt_buffer,
+                                gt_records,
+                                height,
+                                (n_selected,),
+                                np.int8,
+                                initial_gt_capacity,
+                            )
+                            gt_buffer[gt_records:gt_records + height] = sum_diploid_alleles(maternal, paternal)
                         else:
                             _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
-                            gt = np.empty((height, n_selected, 2), dtype=np.int8)
-                            gt[:, :, 0] = maternal
-                            gt[:, :, 1] = paternal
-                            gt_chunks.append(gt)
+                            gt_buffer = _ensure_axis0_capacity(
+                                gt_buffer,
+                                gt_records,
+                                height,
+                                (n_selected, 2),
+                                np.int8,
+                                initial_gt_capacity,
+                            )
+                            gt_buffer[gt_records:gt_records + height, :, 0] = maternal
+                            gt_buffer[gt_records:gt_records + height, :, 1] = paternal
+                        gt_records += height
 
                     if "POS" in include:
                         array_chunks["POS"].append(_parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1]))
@@ -986,15 +1091,17 @@ class VCFReader(SNPBaseReader):
             first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
             n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
             genotypes = _empty_genotype_array(n_records, 0, sum_strands)
-        elif gt_chunks:
-            genotypes = np.concatenate(gt_chunks, axis=0)
+        elif gt_buffer is not None:
+            # Return only populated rows; slicing keeps a normal ndarray view and
+            # avoids copying the output matrix after streaming.
+            genotypes = gt_buffer[:gt_records]
         elif sum_strands:
             genotypes = np.empty((0, n_selected), dtype=np.int8)
         else:
             genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
 
         arrays = {
-            field: np.concatenate(chunks, axis=0)
+            field: _concat_axis0_releasing(chunks)
             for field, chunks in array_chunks.items()
             if chunks
         }
@@ -1031,7 +1138,13 @@ class VCFReader(SNPBaseReader):
             n_tabs_needed = 9
         block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
 
-        gt_chunks: list[np.ndarray] = []
+        # Same growable output strategy as the GT-only path, but this parser
+        # also handles simple FORMAT layouts where GT is first or follows DP.
+        gt_buffer: Optional[np.ndarray] = None
+        gt_records = 0
+        initial_gt_capacity = _initial_stream_capacity(self._filename)
+        # Metadata chunks are cheap relative to genotype calls and are released
+        # during final axis-0 assembly.
         array_chunks: dict[str, list[np.ndarray]] = {
             field: []
             for field in field_columns
@@ -1052,6 +1165,8 @@ class VCFReader(SNPBaseReader):
             while True:
                 chunk = file.read(block_size)
                 if chunk:
+                    # Work on complete VCF records only; keep an incomplete line
+                    # for the next read from the compressed stream.
                     combined = remainder + chunk
                     cut = combined.rfind(b"\n")
                     if cut < 0:
@@ -1083,6 +1198,9 @@ class VCFReader(SNPBaseReader):
                             raise ValueError("VCF records do not all have the expected number of tab-delimited columns.")
                         tabs = tabs.reshape(height, tabs_per_record)
                     else:
+                        # Variable-width sample fields require tab positions up
+                        # to the last selected sample, but not necessarily all
+                        # samples in wide VCFs.
                         tabs = _first_tabs_by_line(block, line_starts, n_tabs_needed)
 
                     if region_filter is not None:
@@ -1104,6 +1222,8 @@ class VCFReader(SNPBaseReader):
                         height = int(tabs.shape[0])
 
                     if n_selected:
+                        # Keep this fallback vectorized by supporting only the
+                        # simple layouts that give a fixed GT byte offset.
                         format_starts = tabs[:, 7] + 1
                         format_ends = tabs[:, 8]
                         if _field_is_gt_first(raw, format_starts, format_ends):
@@ -1132,13 +1252,28 @@ class VCFReader(SNPBaseReader):
                         maternal = _ascii_gt_to_int(raw[sample_starts + gt_offset])
                         paternal = _ascii_gt_to_int(raw[sample_starts + gt_offset + 2])
                         if sum_strands:
-                            gt_chunks.append(sum_diploid_alleles(maternal, paternal))
+                            gt_buffer = _ensure_axis0_capacity(
+                                gt_buffer,
+                                gt_records,
+                                height,
+                                (n_selected,),
+                                np.int8,
+                                initial_gt_capacity,
+                            )
+                            gt_buffer[gt_records:gt_records + height] = sum_diploid_alleles(maternal, paternal)
                         else:
                             _raise_if_unphased_vcf_gt_separator(sep)
-                            gt = np.empty((height, n_selected, 2), dtype=np.int8)
-                            gt[:, :, 0] = maternal
-                            gt[:, :, 1] = paternal
-                            gt_chunks.append(gt)
+                            gt_buffer = _ensure_axis0_capacity(
+                                gt_buffer,
+                                gt_records,
+                                height,
+                                (n_selected, 2),
+                                np.int8,
+                                initial_gt_capacity,
+                            )
+                            gt_buffer[gt_records:gt_records + height, :, 0] = maternal
+                            gt_buffer[gt_records:gt_records + height, :, 1] = paternal
+                        gt_records += height
 
                     if "POS" in include:
                         array_chunks["POS"].append(_parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1]))
@@ -1165,15 +1300,16 @@ class VCFReader(SNPBaseReader):
             first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
             n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
             genotypes = _empty_genotype_array(n_records, 0, sum_strands)
-        elif gt_chunks:
-            genotypes = np.concatenate(gt_chunks, axis=0)
+        elif gt_buffer is not None:
+            # Trim unused capacity without copying.
+            genotypes = gt_buffer[:gt_records]
         elif sum_strands:
             genotypes = np.empty((0, n_selected), dtype=np.int8)
         else:
             genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
 
         arrays = {
-            field: np.concatenate(chunks, axis=0)
+            field: _concat_axis0_releasing(chunks)
             for field, chunks in array_chunks.items()
             if chunks
         }
@@ -1620,21 +1756,7 @@ class VCFReader(SNPBaseReader):
 
         try:
             if Path(self._filename).suffixes[-2:] == [".vcf", ".gz"]:
-                use_streaming_gt_only = (
-                    bool(sum_strands)
-                    or not sample_columns
-                    or not _first_record_is_fixed_width_gt_only(self._filename, len(names) - 9)
-                )
-                if use_streaming_gt_only:
-                    return self._read_block_gt_only_streaming(
-                        names=names,
-                        field_columns=field_columns,
-                        sample_columns=sample_columns,
-                        sample_idxs=sample_idxs,
-                        region_filter=region_filter,
-                        sum_strands=bool(sum_strands),
-                    )
-                return self._read_block_gt_only(
+                return self._read_block_gt_only_streaming(
                     names=names,
                     field_columns=field_columns,
                     sample_columns=sample_columns,

@@ -732,35 +732,72 @@ class SNPObject:
         if gp.ndim != 3:
             raise ValueError("`calldata_gp` must have shape (n_snps, n_samples, n_probabilities).")
 
-        dosage = np.full(gp.shape[:2], np.nan, dtype=np.float32)
-        for variant_idx, probabilities in enumerate(gp):
-            finite = np.isfinite(probabilities)
-            widths = finite.sum(axis=1)
-            for sample_idx, width in enumerate(widths):
-                if width == 0:
+        n_snps, n_samples, n_probabilities = gp.shape
+        dosage = np.empty((n_snps, n_samples), dtype=np.float32)
+        weights = np.arange(n_probabilities, dtype=np.float32)
+        probability_target = 64_000_000
+        chunk_size = max(1, min(n_snps, probability_target // max(1, n_samples * n_probabilities)))
+
+        for start in range(0, n_snps, chunk_size):
+            stop = min(start + chunk_size, n_snps)
+            block = gp[start:stop]
+            if not np.isnan(block).any():
+                if n_probabilities == 3:
+                    dosage[start:stop] = block[:, :, 1] + (2.0 * block[:, :, 2])
                     continue
-                if finite[sample_idx, :width].all() and not finite[sample_idx, width:].any():
+                if n_probabilities == 4:
+                    pair0 = block[:, :, 0] + block[:, :, 1]
+                    pair1 = block[:, :, 2] + block[:, :, 3]
+                    phased = np.all(
+                        np.isclose(pair0, 1.0, atol=1e-4, rtol=0)
+                        & np.isclose(pair1, 1.0, atol=1e-4, rtol=0),
+                        axis=1,
+                    )
+                    if np.all(phased):
+                        dosage[start:stop] = block[:, :, 1] + block[:, :, 3]
+                    else:
+                        block_dosage = (
+                            block[:, :, 1]
+                            + (2.0 * block[:, :, 2])
+                            + (3.0 * block[:, :, 3])
+                        )
+                        if np.any(phased):
+                            block_dosage[phased] = block[phased, :, 1] + block[phased, :, 3]
+                        dosage[start:stop] = block_dosage
                     continue
+
+            finite = np.isfinite(block)
+            widths = finite.sum(axis=2)
+            expected_finite = np.arange(n_probabilities) < widths[:, :, None]
+            if not np.array_equal(finite, expected_finite):
                 raise ValueError(
                     "BGEN probability rows may only contain NaN values as all-missing rows "
                     "or as trailing padding for lower-ploidy samples."
                 )
 
-            phased = self._bgen_biallelic_rows_look_phased(probabilities, widths)
-            for sample_idx, width in enumerate(widths):
-                width = int(width)
-                if width == 0:
-                    continue
-                sample_probs = probabilities[sample_idx, :width]
-                if phased:
-                    if width % 2 != 0:
-                        raise ValueError(
-                            f"Cannot compute phased BGEN dosage for variant {variant_idx}, sample {sample_idx}: "
-                            f"expected an even probability width, got {width}."
-                        )
-                    dosage[variant_idx, sample_idx] = np.nansum(sample_probs[1::2])
-                else:
-                    dosage[variant_idx, sample_idx] = np.dot(sample_probs, np.arange(width, dtype=np.float32))
+            block_dosage = np.nansum(block * weights, axis=2, dtype=np.float32)
+            if n_probabilities % 2 == 0:
+                phased = np.zeros(block.shape[0], dtype=bool)
+                observed = widths > 0
+                even_widths = np.all((widths % 2 == 0) | ~observed, axis=1)
+                even_indices = np.flatnonzero(even_widths)
+                if even_indices.size:
+                    pairs = block[even_indices].reshape(
+                        even_indices.size,
+                        n_samples,
+                        n_probabilities // 2,
+                        2,
+                    )
+                    pair_present = np.isfinite(pairs).any(axis=3)
+                    pair_sums = np.nansum(pairs, axis=3, dtype=np.float32)
+                    phased[even_indices] = np.all(
+                        np.isclose(pair_sums, 1.0, atol=1e-4, rtol=0) | ~pair_present,
+                        axis=(1, 2),
+                    )
+                if np.any(phased):
+                    block_dosage[phased] = np.nansum(block[phased, :, 1::2], axis=2, dtype=np.float32)
+            block_dosage[widths == 0] = np.nan
+            dosage[start:stop] = block_dosage
         return dosage
 
     @staticmethod

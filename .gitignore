@@ -161,3 +161,4 @@ snputils/tools/__test__/test_admixture_mapping_internal_large.py
 *.md
 !README.md
 !docs/**/*.md
+.benchmarks/

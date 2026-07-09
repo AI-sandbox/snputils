@@ -4,6 +4,7 @@ import gzip
 import logging
 import re
 import struct
+import zlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -18,6 +19,7 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_FIELDS = ["GT", "IID", "REF", "ALT", "#CHROM", "ID", "POS", "QUAL", "FILTER"]
 _ALL_FIELDS = ["GT", "GP", "IID", "REF", "ALT", "#CHROM", "ID", "POS", "QUAL", "FILTER", "INFO"]
+_CORE_FIELDS = frozenset(_DEFAULT_FIELDS)
 
 _BCF_MAGIC = b"BCF\x02\x02"
 _U32 = struct.Struct("<I")
@@ -160,9 +162,61 @@ def _parse_bcf_header(text: str) -> _BCFHeader:
     )
 
 
-def _load_bcf_data(filename: Union[str, bytes]) -> Tuple[bytes, int, _BCFHeader]:
+def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
+    """Read a BGZF-compressed file, falling back to generic gzip.
+
+    BCF files are normally BGZF. Parsing BGZF blocks directly avoids per-member
+    overhead in ``gzip.GzipFile`` while keeping the dependency footprint at the
+    Python standard library.
+    """
+    chunks = []
+    with open(filename, "rb") as handle:
+        while True:
+            header = handle.read(12)
+            if not header:
+                return b"".join(chunks)
+            if len(header) < 12 or header[:3] != b"\x1f\x8b\x08" or not (header[3] & 4):
+                break
+
+            xlen = int.from_bytes(header[10:12], "little")
+            extra = handle.read(xlen)
+            if len(extra) != xlen:
+                raise EOFError("Unexpected end of BGZF extra header.")
+
+            extra_offset = 0
+            block_size = None
+            while extra_offset + 4 <= xlen:
+                subfield_len = int.from_bytes(extra[extra_offset + 2:extra_offset + 4], "little")
+                if extra_offset + 4 + subfield_len > xlen:
+                    raise ValueError("Malformed BGZF extra header: subfield length extends beyond XLEN.")
+                if extra[extra_offset:extra_offset + 2] == b"BC" and subfield_len == 2:
+                    block_size = int.from_bytes(extra[extra_offset + 4:extra_offset + 6], "little") + 1
+                    break
+                extra_offset += 4 + subfield_len
+
+            if block_size is None:
+                break
+
+            remaining = block_size - 12 - xlen
+            if remaining < 8:
+                raise ValueError("Malformed BGZF block: block size is too small.")
+
+            block_tail = handle.read(remaining)
+            if len(block_tail) != remaining:
+                raise EOFError("Unexpected end of BGZF block.")
+
+            compressed = block_tail[:-8]
+            if compressed:
+                chunk = zlib.decompress(compressed, -15)
+                if chunk:
+                    chunks.append(chunk)
+
     with gzip.open(filename, "rb") as handle:
-        data = handle.read()
+        return handle.read()
+
+
+def _load_bcf_data(filename: Union[str, bytes]) -> Tuple[bytes, int, _BCFHeader]:
+    data = _read_bgzf_or_gzip(filename)
     if data[:5] != _BCF_MAGIC:
         raise ValueError(f"{filename!r} does not look like a BCF2.2 file.")
     header_len = _U32.unpack_from(data, 5)[0]
@@ -272,6 +326,8 @@ def _read_float_list(data: bytes, offset: int) -> Tuple[List[float], int]:
 
 
 def _render_info_value(value: Any) -> str:
+    if value is None:
+        return "."
     if isinstance(value, list):
         rendered = []
         for item in value:
@@ -320,6 +376,19 @@ def _record_identifiers(chrom: str, pos: int, variant_id: str, ref: str, alts: S
     return identifiers
 
 
+def _parse_chrom_pos_identifier(identifier: str) -> Optional[Tuple[str, int]]:
+    parts = identifier.split(":")
+    if len(parts) != 2 or not parts[0]:
+        return None
+    try:
+        pos = int(parts[1])
+    except ValueError:
+        return None
+    if pos < 1:
+        return None
+    return parts[0], pos
+
+
 def _count_records(data: bytes, body_offset: int) -> int:
     offset = body_offset
     end = len(data)
@@ -350,6 +419,43 @@ def _build_record_offsets(data: bytes, body_offset: int) -> np.ndarray:
     if offset != end:
         raise ValueError("Malformed BCF: record boundaries do not consume the full file.")
     return np.asarray(offsets, dtype=np.int64)
+
+
+def _build_indiv_offsets(data: bytes, body_offset: int) -> Tuple[np.ndarray, bool]:
+    """Build individual-section offsets for all records.
+
+    This is the cheapest scan needed by the GT-only fast path. It intentionally
+    avoids reading fixed fields such as POS/QUAL/INFO counts when callers only
+    need FORMAT/GT.
+    """
+    offset = body_offset
+    end = len(data)
+    if offset >= end:
+        return np.empty(0, dtype=np.int64), True
+    if offset + 8 > end:
+        raise ValueError("Malformed BCF: record header is truncated.")
+
+    indiv_offsets = []
+    append_offset = indiv_offsets.append
+    unpack = _U32_PAIR.unpack_from
+    uniform_indiv = True
+
+    l_shared, first_l_indiv = unpack(data, offset)
+    append_offset(offset + 8 + l_shared)
+    offset += 8 + l_shared + first_l_indiv
+
+    while offset < end:
+        if offset + 8 > end:
+            raise ValueError("Malformed BCF: record header is truncated.")
+        l_shared, l_indiv = unpack(data, offset)
+        append_offset(offset + 8 + l_shared)
+        if l_indiv != first_l_indiv:
+            uniform_indiv = False
+        offset += 8 + l_shared + l_indiv
+
+    if offset != end:
+        raise ValueError("Malformed BCF: record boundaries do not consume the full file.")
+    return np.asarray(indiv_offsets, dtype=np.int64), uniform_indiv
 
 
 def _gather_u32(raw: np.ndarray, offsets: np.ndarray) -> np.ndarray:
@@ -409,22 +515,83 @@ def _resolve_variant_request(
     variant_ids: Optional[Sequence[str]],
     variant_idxs: Optional[Sequence[int]],
 ) -> Tuple[int, Optional[List[int]], Optional[List[int]]]:
-    n_records = _count_records(data, body_offset)
-
     requested_variant_idxs = None
+    n_records: Optional[int] = None
     if variant_idxs is not None:
-        requested_variant_idxs = np.asarray(variant_idxs, dtype=int).ravel()
-        if np.any((requested_variant_idxs < -n_records) | (requested_variant_idxs >= n_records)):
-            raise ValueError("One or more variant indexes are out of bounds.")
-        requested_variant_idxs = np.mod(requested_variant_idxs, n_records).tolist()
+        raw_variant_idxs = np.asarray(variant_idxs, dtype=int).ravel()
+        if np.any(raw_variant_idxs < 0):
+            n_records = _count_records(data, body_offset)
+            if np.any((raw_variant_idxs < -n_records) | (raw_variant_idxs >= n_records)):
+                raise ValueError("One or more variant indexes are out of bounds.")
+            requested_variant_idxs = np.mod(raw_variant_idxs, n_records).tolist()
+        else:
+            requested_variant_idxs = raw_variant_idxs.tolist()
 
     if variant_ids is None and requested_variant_idxs is None and region_filter is None:
+        n_records = _count_records(data, body_offset)
         return n_records, None, None
 
+    if region_filter is not None and requested_variant_idxs is None and variant_ids is None:
+        contig_lookup = {name: idx for idx, name in header.contigs.items()}
+        region_chrom, start, end_pos = region_filter
+        contig_id = contig_lookup.get(region_chrom)
+        if contig_id is not None:
+            try:
+                from snputils.snp.io.read import _bcf
+            except ImportError:
+                _bcf = None
+            if _bcf is not None:
+                offsets_buffer, _n_selected, n_records = _bcf.select_region_offsets(
+                    data,
+                    body_offset,
+                    int(contig_id),
+                    -1 if start is None else int(start),
+                    -1 if end_pos is None else int(end_pos),
+                )
+                selected_offsets = np.frombuffer(offsets_buffer, dtype=np.dtype("<i8")).astype(np.int64, copy=False)
+                return int(n_records), selected_offsets.tolist(), None
+        else:
+            return 0, [], None
+
     requested_idx_set = None if requested_variant_idxs is None else set(requested_variant_idxs)
-    requested_ids = None if variant_ids is None else {
+    requested_id_values = None if variant_ids is None else [
         str(value) for value in np.asarray(variant_ids, dtype=object).ravel()
-    }
+    ]
+    requested_ids = None if requested_id_values is None else set(requested_id_values)
+
+    if requested_id_values is not None and requested_variant_idxs is None and region_filter is None:
+        unique_requested_ids = list(requested_ids)
+        parsed_ids = [_parse_chrom_pos_identifier(identifier) for identifier in unique_requested_ids]
+        if all(parsed is not None for parsed in parsed_ids):
+            try:
+                from snputils.snp.io.read import _bcf
+            except ImportError:
+                _bcf = None
+            if _bcf is not None:
+                contig_lookup = {name: idx for idx, name in header.contigs.items()}
+                found_ids = set()
+                selected_offset_set = set()
+                n_records = 0
+                for identifier, (chrom, pos) in zip(unique_requested_ids, parsed_ids):
+                    contig_id = contig_lookup.get(chrom)
+                    if contig_id is None:
+                        continue
+                    offsets_buffer, n_selected, n_records = _bcf.select_region_offsets(
+                        data,
+                        body_offset,
+                        int(contig_id),
+                        int(pos),
+                        int(pos),
+                    )
+                    if n_selected:
+                        offsets = np.frombuffer(offsets_buffer, dtype=np.dtype("<i8")).astype(np.int64, copy=False)
+                        selected_offset_set.update(int(offset) for offset in offsets)
+                        found_ids.add(identifier)
+                missing = sorted(requested_ids - found_ids)
+                if missing:
+                    raise ValueError(f"The following specified variants were not found: {missing}")
+                return int(n_records), sorted(selected_offset_set), None
+
     found_ids = set()
     selected_offsets: List[int] = []
     selected_by_row: Dict[int, int] = {}
@@ -438,17 +605,22 @@ def _resolve_variant_request(
 
         want_row = requested_idx_set is None or row_idx in requested_idx_set
         passes = want_row
-        if passes and (region_filter is not None or requested_ids is not None):
-            chrom, pos, variant_id, ref, alts = _decode_record_identifiers(data, offset, header)
-            if region_filter is not None and not _vcf_region_matches(chrom, pos, region_filter):
+        chrom = None
+        pos = None
+        if passes and region_filter is not None:
+            base = offset + 8
+            chrom = header.contigs[_I32.unpack_from(data, base)[0]]
+            pos = _I32.unpack_from(data, base + 4)[0] + 1
+            if not _vcf_region_matches(chrom, pos, region_filter):
                 passes = False
-            if passes and requested_ids is not None:
-                record_ids = _record_identifiers(chrom, pos, variant_id, ref, alts)
-                matched = requested_ids.intersection(record_ids)
-                if matched:
-                    found_ids.update(matched)
-                else:
-                    passes = False
+        if passes and requested_ids is not None:
+            chrom, pos, variant_id, ref, alts = _decode_record_identifiers(data, offset, header)
+            record_ids = _record_identifiers(chrom, pos, variant_id, ref, alts)
+            matched = requested_ids.intersection(record_ids)
+            if matched:
+                found_ids.update(matched)
+            else:
+                passes = False
 
         if passes:
             if requested_variant_idxs is None:
@@ -458,6 +630,14 @@ def _resolve_variant_request(
 
         offset += 8 + l_shared + l_indiv
         row_idx += 1
+
+    if offset != end:
+        raise ValueError("Malformed BCF: record boundaries do not consume the full file.")
+    if n_records is None:
+        n_records = row_idx
+    if requested_variant_idxs is not None and requested_variant_idxs:
+        if min(requested_variant_idxs) < 0 or max(requested_variant_idxs) >= n_records:
+            raise ValueError("One or more variant indexes are out of bounds.")
 
     if requested_ids is not None:
         missing = sorted(requested_ids - found_ids)
@@ -518,13 +698,21 @@ def _decode_gt_array(
 def _decode_gp_array(data: bytes, offset: int, n_samples: int, n_vals: int) -> np.ndarray:
     if n_vals < 1:
         return np.empty((n_samples, 0), dtype=np.float32)
-    return np.frombuffer(
+    raw = np.frombuffer(
         data,
-        dtype=np.dtype("<f4"),
+        dtype=np.dtype("<u4"),
         count=n_samples * n_vals,
         offset=offset,
-    ).reshape(n_samples, n_vals).copy()
+    ).reshape(n_samples, n_vals)
+    values = np.frombuffer(raw.tobytes(), dtype=np.dtype("<f4")).reshape(n_samples, n_vals).copy()
+    values[raw == _FLOAT_MISSING] = np.nan
+    return values
 
+
+def _decode_gp_raw(raw: np.ndarray) -> np.ndarray:
+    values = np.frombuffer(raw.tobytes(), dtype=np.dtype("<f4")).reshape(raw.shape).copy()
+    values[raw == _FLOAT_MISSING] = np.nan
+    return values
 
 def _parse_filter_pass(
     data: bytes,
@@ -532,6 +720,8 @@ def _parse_filter_pass(
     header: _BCFHeader,
 ) -> Tuple[bool, int]:
     filter_ids, offset = _read_int_list(data, offset)
+    if any(idx is None for idx in filter_ids):
+        return False, offset
     filter_names = [header.filters.get(int(idx), str(idx)) for idx in filter_ids if idx is not None]
     if not filter_names:
         return True, offset
@@ -684,59 +874,80 @@ def _batch_decode_gt(
 ) -> np.ndarray:
     """Batch-decode GT data for all records using vectorized numpy operations.
 
-    Instead of calling np.frombuffer per record, we gather all GT bytes into a
-    single contiguous buffer and decode them all at once.
+    Instead of calling np.frombuffer per record, gather GT bytes in bounded
+    chunks and decode each chunk with NumPy. Chunking keeps the temporary
+    byte-offset matrix small for cohorts with thousands of samples.
     """
     if type_size not in _INT_UNSIGNED_DTYPES:
         raise ValueError(f"Unsupported GT integer width in BCF FORMAT/GT: {type_size}")
+    n_sel = len(sample_index_array)
     if n_vals < 1:
-        n_sel = len(sample_index_array)
         if sum_strands:
             return np.empty((n_records, n_sel), dtype=np.int8)
         return np.empty((n_records, n_sel, 0), dtype=np.int8)
-
-    dtype = _INT_UNSIGNED_DTYPES[type_size]
-    gt_bytes_per_record = n_samples * n_vals * type_size
-
-    # Build index array to gather all GT bytes from the raw buffer
-    gt_starts = indiv_offsets + gt_data_rel_offset
-    # Create a (n_records, gt_bytes_per_record) array of byte offsets
-    byte_offsets_per_sample = np.arange(gt_bytes_per_record, dtype=np.int64)
-    all_byte_offsets = gt_starts[:, None] + byte_offsets_per_sample[None, :]
-
-    # Gather all bytes into a contiguous buffer
-    raw_bytes = np.frombuffer(data, dtype=np.uint8)
-    gathered = raw_bytes[all_byte_offsets.ravel()]
-
-    # Reinterpret as the correct integer type
-    raw = np.frombuffer(gathered.tobytes(), dtype=dtype).reshape(n_records, n_samples, n_vals)
-
-    # Decode: BCF GT encoding is (allele_index + 1) << 1 | phase
-    decoded = (raw.astype(np.int32, copy=False) >> 1) - 1
-
-    if n_vals == 1:
-        # Haploid: pad to diploid with -1
-        padded = np.full((n_records, n_samples, 2), -1, dtype=np.int8)
-        padded[:, :, 0] = decoded[:, :, 0].astype(np.int8, copy=False)
-        selected = padded[:, sample_index_array, :]
-    elif n_vals == 2:
-        if not sum_strands:
-            selected_raw = raw[:, sample_index_array, :]
-            selected_decoded = decoded[:, sample_index_array, :]
-            second_allele_called = selected_decoded[:, :, 1] >= 0
-            second_allele_phased = (selected_raw[:, :, 1] & 1) != 0
-            if np.any(second_allele_called & ~second_allele_phased):
-                raise ValueError(
-                    "Cannot read unphased BCF genotypes with `sum_strands=False`; "
-                    "use `sum_strands=True` to load 0/1/2 genotype dosages."
-                )
-        selected = decoded[:, sample_index_array, :].astype(np.int8, copy=False)
-    else:
+    if n_vals not in (1, 2):
         raise ValueError("BCFReader currently supports haploid or diploid GT fields only.")
 
+    dtype = _INT_UNSIGNED_DTYPES[type_size]
+    gt_starts = indiv_offsets + gt_data_rel_offset
+    raw_bytes = np.frombuffer(data, dtype=np.uint8)
+
+    all_samples = (
+        n_sel == n_samples
+        and sample_index_array.dtype.kind in "iu"
+        and np.array_equal(sample_index_array, np.arange(n_samples, dtype=sample_index_array.dtype))
+    )
+    sample_stride = n_vals * type_size
+    if all_samples:
+        rel_byte_offsets = np.arange(n_samples * sample_stride, dtype=np.int64)
+        decode_samples = n_samples
+    else:
+        within_sample = np.arange(sample_stride, dtype=np.int64)
+        rel_byte_offsets = (
+            sample_index_array.astype(np.int64, copy=False)[:, None] * sample_stride
+            + within_sample[None, :]
+        ).ravel()
+        decode_samples = n_sel
+
     if sum_strands:
-        return sum_diploid_genotypes(selected)
-    return selected
+        out = np.empty((n_records, n_sel), dtype=np.int8)
+    else:
+        out = np.empty((n_records, n_sel, 2), dtype=np.int8)
+
+    # Keep the int64 offset matrix under roughly 64 MiB per chunk. The gathered
+    # byte buffer is smaller, so this cap controls peak temporary memory.
+    max_offset_bytes = 64 * 1024 * 1024
+    records_per_chunk = max(1, max_offset_bytes // max(1, rel_byte_offsets.size * np.dtype(np.int64).itemsize))
+
+    for start in range(0, n_records, records_per_chunk):
+        stop = min(start + records_per_chunk, n_records)
+        byte_offsets = gt_starts[start:stop, None] + rel_byte_offsets[None, :]
+        gathered = raw_bytes[byte_offsets.ravel()]
+
+        if type_size == 1:
+            raw = gathered.reshape(stop - start, decode_samples, n_vals)
+        else:
+            raw = np.frombuffer(gathered.tobytes(), dtype=dtype).reshape(stop - start, decode_samples, n_vals)
+
+        # Decode: BCF GT encoding is (allele_index + 1) << 1 | phase.
+        decoded = (raw.astype(np.int16, copy=False) >> 1) - 1
+
+        if n_vals == 1:
+            if sum_strands:
+                out[start:stop] = decoded[:, :, 0].astype(np.int8, copy=False)
+            else:
+                chunk = out[start:stop]
+                chunk[:, :, 0] = decoded[:, :, 0].astype(np.int8, copy=False)
+                chunk[:, :, 1] = -1
+            continue
+
+        if sum_strands:
+            out[start:stop] = sum_diploid_genotypes(decoded)
+        else:
+            _raise_if_unphased_bcf_gt(raw.reshape(-1, n_vals), decoded.reshape(-1, n_vals))
+            out[start:stop] = decoded.astype(np.int8, copy=False)
+
+    return out
 
 
 def _batch_decode_gp(
@@ -761,8 +972,9 @@ def _batch_decode_gp(
     raw_bytes = np.frombuffer(data, dtype=np.uint8)
     gathered = raw_bytes[all_byte_offsets.ravel()]
 
-    raw = np.frombuffer(gathered.tobytes(), dtype=np.dtype("<f4")).reshape(n_records, n_samples, n_vals)
-    return raw[:, sample_index_array, :].copy()
+    raw = np.frombuffer(gathered.tobytes(), dtype=np.dtype("<u4")).reshape(n_records, n_samples, n_vals)
+    values = _decode_gp_raw(raw)
+    return values[:, sample_index_array, :]
 
 
 def _vectorized_qual(qual_raw: np.ndarray) -> np.ndarray:
@@ -773,6 +985,14 @@ def _vectorized_qual(qual_raw: np.ndarray) -> np.ndarray:
     result[:] = np.frombuffer(qual_raw.tobytes(), dtype=np.float32)
     result[missing_mask] = np.nan
     return result
+
+
+def _all_samples_selected(sample_index_array: np.ndarray, n_samples: int) -> bool:
+    return (
+        len(sample_index_array) == n_samples
+        and sample_index_array.dtype.kind in "iu"
+        and np.array_equal(sample_index_array, np.arange(n_samples, dtype=sample_index_array.dtype))
+    )
 
 
 @SNPBaseReader.register
@@ -878,6 +1098,19 @@ class BCFReader(SNPBaseReader):
         sum_strands: bool,
     ) -> SNPObject:
         """Optimized bulk read of all records with no variant filtering."""
+        if selected_fields == ["GT"]:
+            gt_only = self._try_read_gt_only_all(
+                data, body_offset, header, file_samples, sample_index_array, sum_strands
+            )
+            if gt_only is not None:
+                return gt_only
+        elif "GT" in selected_fields and set(selected_fields).issubset(_CORE_FIELDS):
+            core = self._try_read_core_all(
+                data, body_offset, header, file_samples, sample_index_array, selected_fields, sum_strands
+            )
+            if core is not None:
+                return core
+
         # Pass 1: build record offset table and extract fixed fields
         record_offsets = _build_record_offsets(data, body_offset)
         n_records = len(record_offsets)
@@ -920,50 +1153,56 @@ class BCFReader(SNPBaseReader):
 
         # Batch GT decode
         if need_gt and n_records > 0:
-            # Probe the first record to determine GT layout
-            first_n_fmt = int(n_fmt_arr[0])
-            first_indiv_offset = int(indiv_offsets[0])
-            gt_layout = _probe_gt_layout(data, first_indiv_offset, first_n_fmt, n_file_samples, header)
-            if gt_layout is None:
-                raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
-
-            gt_data_rel_offset, gt_n_vals, gt_type_size, _ = gt_layout
-
-            # Check if all records have uniform l_indiv (same FORMAT layout)
-            uniform_indiv = np.all(l_indiv == l_indiv[0])
-
-            if uniform_indiv:
-                genotypes = _batch_decode_gt(
-                    data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
-                    n_file_samples, n_records, sample_index_array, sum_strands,
-                )
-            else:
-                # Fallback: per-record GT decode
+            if n_file_samples == 0 and np.all(n_fmt_arr == 0):
                 if sum_strands:
-                    genotypes = np.empty((n_records, n_selected_samples), dtype=np.int8)
+                    genotypes = np.empty((n_records, 0), dtype=np.int8)
                 else:
-                    genotypes = np.empty((n_records, n_selected_samples, 2), dtype=np.int8)
-                for i in range(n_records):
-                    cur_indiv = int(indiv_offsets[i])
-                    cur_n_fmt = int(n_fmt_arr[i])
-                    cur_gt_layout = _probe_gt_layout(data, cur_indiv, cur_n_fmt, n_file_samples, header)
-                    if cur_gt_layout is None:
-                        raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
-                    rel_off, nv, ts, _ = cur_gt_layout
-                    gt = _decode_gt_array(
-                        data,
-                        cur_indiv + rel_off,
-                        n_file_samples,
-                        nv,
-                        ts,
-                        require_phase=not sum_strands,
-                        phase_sample_idxs=sample_index_array,
+                    genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
+            else:
+                # Probe the first record to determine GT layout
+                first_n_fmt = int(n_fmt_arr[0])
+                first_indiv_offset = int(indiv_offsets[0])
+                gt_layout = _probe_gt_layout(data, first_indiv_offset, first_n_fmt, n_file_samples, header)
+                if gt_layout is None:
+                    raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+
+                gt_data_rel_offset, gt_n_vals, gt_type_size, _ = gt_layout
+
+                # Check if all records have uniform l_indiv (same FORMAT layout)
+                uniform_indiv = np.all(l_indiv == l_indiv[0])
+
+                if uniform_indiv:
+                    genotypes = _batch_decode_gt(
+                        data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
+                        n_file_samples, n_records, sample_index_array, sum_strands,
                     )
-                    gt = gt[sample_index_array]
+                else:
+                    # Fallback: per-record GT decode
                     if sum_strands:
-                        genotypes[i] = sum_diploid_genotypes(gt)
+                        genotypes = np.empty((n_records, n_selected_samples), dtype=np.int8)
                     else:
-                        genotypes[i] = gt
+                        genotypes = np.empty((n_records, n_selected_samples, 2), dtype=np.int8)
+                    for i in range(n_records):
+                        cur_indiv = int(indiv_offsets[i])
+                        cur_n_fmt = int(n_fmt_arr[i])
+                        cur_gt_layout = _probe_gt_layout(data, cur_indiv, cur_n_fmt, n_file_samples, header)
+                        if cur_gt_layout is None:
+                            raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+                        rel_off, nv, ts, _ = cur_gt_layout
+                        gt = _decode_gt_array(
+                            data,
+                            cur_indiv + rel_off,
+                            n_file_samples,
+                            nv,
+                            ts,
+                            require_phase=not sum_strands,
+                            phase_sample_idxs=sample_index_array,
+                        )
+                        gt = gt[sample_index_array]
+                        if sum_strands:
+                            genotypes[i] = sum_diploid_genotypes(gt)
+                        else:
+                            genotypes[i] = gt
 
         # Batch GP decode
         if need_gp and n_records > 0:
@@ -1116,7 +1355,9 @@ class BCFReader(SNPBaseReader):
                     elif n_vals == 1 and type_code == 1:
                         val = data[offset]
                         offset += 1
-                        if val == 128 or val == 129:
+                        if val == 128:
+                            filter_pass = False
+                        elif val == 129:
                             filter_pass = True
                         else:
                             filter_name = filters_dict.get(val, str(val))
@@ -1143,6 +1384,193 @@ class BCFReader(SNPBaseReader):
             variants_qual=variants_qual,
             variants_filter_pass=variants_filter_pass,
             variants_info=variants_info,
+        )
+
+    def _try_read_gt_only_all(
+        self,
+        data: bytes,
+        body_offset: int,
+        header: _BCFHeader,
+        file_samples: np.ndarray,
+        sample_index_array: np.ndarray,
+        sum_strands: bool,
+    ) -> Optional[SNPObject]:
+        """Fast path for full-file genotype-only reads.
+
+        The benchmarked BCF path requests only FORMAT/GT. In that case we can
+        avoid vectorized extraction of POS/QUAL/INFO metadata and decode the
+        individual sections directly.
+        """
+        if body_offset >= len(data):
+            return self._empty_snpobject(["GT"], file_samples, sample_index_array, sum_strands)
+
+        first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
+        n_fmt_n_samples = _U32.unpack_from(data, body_offset + 8 + 20)[0]
+        n_fmt = n_fmt_n_samples >> 24
+        n_samples = n_fmt_n_samples & 0xFFFFFF
+        if n_samples != len(file_samples):
+            raise ValueError(
+                f"BCF record sample count ({n_samples}) does not match header sample count "
+                f"({len(file_samples)})."
+            )
+        if n_samples == 0 and n_fmt == 0:
+            n_records = _count_records(data, body_offset)
+            if sum_strands:
+                genotypes = np.empty((n_records, 0), dtype=np.int8)
+            else:
+                genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
+            return SNPObject(genotypes=genotypes)
+
+        first_indiv_offset = body_offset + 8 + first_l_shared
+        gt_layout = _probe_gt_layout(data, first_indiv_offset, n_fmt, n_samples, header)
+        if gt_layout is None:
+            raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+
+        gt_data_rel_offset, gt_n_vals, gt_type_size, _total_indiv_bytes = gt_layout
+
+        try:
+            from snputils.snp.io.read import _bcf
+        except ImportError:
+            _bcf = None
+
+        if _bcf is not None:
+            sample_arg = None if _all_samples_selected(sample_index_array, n_samples) else sample_index_array.tolist()
+            decoded = _bcf.decode_gt(
+                data,
+                body_offset,
+                gt_data_rel_offset,
+                n_samples,
+                gt_n_vals,
+                gt_type_size,
+                first_l_indiv,
+                sample_arg,
+                sum_strands,
+            )
+            if decoded is not None:
+                gt_buffer, n_records = decoded
+                genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
+                if sum_strands:
+                    genotypes = genotypes.reshape(n_records, len(sample_index_array))
+                else:
+                    genotypes = genotypes.reshape(n_records, len(sample_index_array), 2)
+                return SNPObject(genotypes=genotypes)
+
+        indiv_offsets, uniform_indiv = _build_indiv_offsets(data, body_offset)
+        n_records = len(indiv_offsets)
+        if not uniform_indiv:
+            return None
+
+        genotypes = _batch_decode_gt(
+            data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
+            n_samples, n_records, sample_index_array, sum_strands,
+        )
+        return SNPObject(genotypes=genotypes)
+
+    def _try_read_core_all(
+        self,
+        data: bytes,
+        body_offset: int,
+        header: _BCFHeader,
+        file_samples: np.ndarray,
+        sample_index_array: np.ndarray,
+        selected_fields: list[str],
+        sum_strands: bool,
+    ) -> Optional[SNPObject]:
+        """Fast path for full-file GT plus core variant metadata reads."""
+        if body_offset >= len(data):
+            return self._empty_snpobject(selected_fields, file_samples, sample_index_array, sum_strands)
+
+        first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
+        n_fmt_n_samples = _U32.unpack_from(data, body_offset + 8 + 20)[0]
+        n_fmt = n_fmt_n_samples >> 24
+        n_samples = n_fmt_n_samples & 0xFFFFFF
+        if n_samples != len(file_samples):
+            raise ValueError(
+                f"BCF record sample count ({n_samples}) does not match header sample count "
+                f"({len(file_samples)})."
+            )
+        if n_samples == 0 and n_fmt == 0:
+            return None
+
+        first_indiv_offset = body_offset + 8 + first_l_shared
+        gt_layout = _probe_gt_layout(data, first_indiv_offset, n_fmt, n_samples, header)
+        if gt_layout is None:
+            raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
+
+        try:
+            from snputils.snp.io.read import _bcf
+        except ImportError:
+            return None
+
+        gt_data_rel_offset, gt_n_vals, gt_type_size, _total_indiv_bytes = gt_layout
+        sample_arg = None if _all_samples_selected(sample_index_array, n_samples) else sample_index_array.tolist()
+        pass_filter_id = next((idx for idx, name in header.filters.items() if name == "PASS"), -1)
+        decoded = _bcf.decode_core(
+            data,
+            body_offset,
+            gt_data_rel_offset,
+            n_samples,
+            gt_n_vals,
+            gt_type_size,
+            first_l_indiv,
+            sample_arg,
+            sum_strands,
+            pass_filter_id,
+        )
+        if decoded is None:
+            return None
+
+        (
+            gt_buffer,
+            chrom_buffer,
+            pos_buffer,
+            qual_buffer,
+            filter_buffer,
+            ids,
+            refs,
+            alts,
+            n_records,
+        ) = decoded
+
+        genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
+        if sum_strands:
+            genotypes = genotypes.reshape(n_records, len(sample_index_array))
+        else:
+            genotypes = genotypes.reshape(n_records, len(sample_index_array), 2)
+
+        variants_chrom = None
+        if "#CHROM" in selected_fields:
+            contig_ids = np.frombuffer(chrom_buffer, dtype=np.dtype("<i4"))
+            variants_chrom = np.empty(n_records, dtype=object)
+            for cid in np.unique(contig_ids):
+                variants_chrom[contig_ids == cid] = header.contigs[int(cid)]
+
+        variants_pos = (
+            np.frombuffer(pos_buffer, dtype=np.dtype("<i8"))
+            if "POS" in selected_fields
+            else None
+        )
+        variants_qual = (
+            _vectorized_qual(np.frombuffer(qual_buffer, dtype=np.dtype("<u4")))
+            if "QUAL" in selected_fields
+            else None
+        )
+        variants_filter_pass = (
+            np.frombuffer(filter_buffer, dtype=np.bool_)
+            if "FILTER" in selected_fields
+            else None
+        )
+
+        return SNPObject(
+            genotypes=genotypes,
+            samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
+            variants_ref=np.asarray(refs, dtype=object) if "REF" in selected_fields else None,
+            variants_alt=np.asarray(alts, dtype=object) if "ALT" in selected_fields else None,
+            variants_chrom=variants_chrom,
+            variants_id=np.asarray(ids, dtype=object) if "ID" in selected_fields else None,
+            variants_pos=variants_pos,
+            variants_qual=variants_qual,
+            variants_filter_pass=variants_filter_pass,
         )
 
     def _read_filtered(
@@ -1337,7 +1765,9 @@ class BCFReader(SNPBaseReader):
                     elif n_vals == 1 and type_code == 1:
                         val = data[offset]
                         offset += 1
-                        if val == 128 or val == 129:
+                        if val == 128:
+                            filter_pass = False
+                        elif val == 129:
                             filter_pass = True
                         else:
                             filter_name = filters_dict.get(val, str(val))
@@ -1352,7 +1782,11 @@ class BCFReader(SNPBaseReader):
                 if need_info:
                     variants_info[out_idx] = _parse_info_string(data, offset, n_info, header)
 
-            if not (need_gt or need_gp) or l_indiv == 0:
+            if not (need_gt or need_gp):
+                continue
+            if l_indiv == 0:
+                if need_gt and n_samples > 0:
+                    raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
                 continue
 
             format_offset = indiv_offset

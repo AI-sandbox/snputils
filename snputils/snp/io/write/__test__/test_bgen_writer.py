@@ -37,6 +37,36 @@ def test_bgen_writer_roundtrips_probabilities(tmp_path):
     np.testing.assert_allclose(observed.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
 
 
+def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path):
+    path = tmp_path / "toy_bulk.bgen"
+    gp = np.array(
+        [
+            [[1.0, 0.0, 0.0], [0.2, 0.3, 0.5], [np.nan, np.nan, np.nan]],
+            [[0.0, 1.0, 0.0], [0.25, 0.5, 0.25], [0.0, 0.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    snpobj = SNPObject(
+        calldata_gp=gp,
+        samples=np.array(["s1", "s2", "s3"], dtype=object),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2"], dtype=object),
+        variants_pos=np.array([10, 20]),
+    )
+
+    BGENWriter(snpobj, path).write(compression="zlib", bit_depth=16, phased=False)
+    reader = BGENReader(path)
+    fast_gp = reader.read(fields=["GP"]).calldata_gp
+    general_gp = reader.read(fields=["GP"], sample_idxs=np.arange(gp.shape[1])).calldata_gp
+    fast_dosage = reader.read_dosage()
+    general_dosage = reader.read(fields=["GP"], sample_idxs=np.arange(gp.shape[1])).dosage()
+
+    np.testing.assert_allclose(fast_gp, general_gp, atol=1 / 65535, equal_nan=True)
+    np.testing.assert_allclose(fast_dosage, general_dosage, atol=1 / 65535, equal_nan=True)
+
+
 def test_bgen_writer_rejects_incompatible_phased_width(tmp_path):
     snpobj = SNPObject(
         calldata_gp=np.array([[[1.0, 0.0, 0.0]]], dtype=np.float32),
@@ -98,8 +128,10 @@ def test_bgen_writer_roundtrips_mixed_probability_widths(tmp_path):
 
     BGENWriter(snpobj, path).write(compression="zlib", bit_depth=16)
     observed = BGENReader(path).read()
+    observed_gp_only = BGENReader(path).read(fields=["GP"])
 
     np.testing.assert_allclose(observed.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
+    np.testing.assert_allclose(observed_gp_only.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
 
 
 def test_bgen_writer_roundtrips_variable_ploidy_unphased(tmp_path):

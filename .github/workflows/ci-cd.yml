@@ -52,6 +52,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"           # Enables automatic pip caching
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev
+
       # Cache test data
       - name: Cache test data
         uses: actions/cache@v5
@@ -86,6 +91,11 @@ jobs:
         with:
           python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev
 
       - name: Install package with docs dependencies
         run: |
@@ -122,6 +132,11 @@ jobs:
         with:
           python-version: '3.14'  # Ensure this is the latest Python version so the cached deps are used
           cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev
 
       - name: Install build dependencies
         run: |

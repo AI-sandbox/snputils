@@ -60,6 +60,10 @@ def _variant_identifier(varid: str, rsid: str) -> str:
     return varid if varid and varid != "." else rsid
 
 
+def _is_full_ordered_selection(indices: np.ndarray, size: int) -> bool:
+    return indices.size == size and np.array_equal(indices, np.arange(size, dtype=indices.dtype))
+
+
 def _read_exact(handle, size: int, context: str) -> bytes:
     data = handle.read(size)
     if len(data) != size:
@@ -282,6 +286,10 @@ class BGENReader(SNPBaseReader):
             raise NotImplementedError(
                 "BGENReader preserves genotype probabilities in `calldata_gp` and does not hard-call GT."
             )
+        # The native BGEN decoder currently exposes probabilities/dosages only, not exact
+        # allele-level hardcalls or per-allele missingness. Collapsed GP/dosage values
+        # cannot losslessly distinguish non-diploid partial-missing calls such as 0/. or 1/.,
+        # so chromosome-specific strand summing is intentionally not implemented here.
 
         if self._can_use_native_bulk_gp(
             fields_set=fields_set,
@@ -439,17 +447,18 @@ class BGENReader(SNPBaseReader):
         found_ids: set[str] = set()
         requested_idx_set = set(int(idx) for idx in variant_idxs) if variant_idxs is not None else None
         scan_limit = int(np.max(variant_idxs)) if variant_idxs is not None and variant_idxs.size else None
+        all_samples_selected = _is_full_ordered_selection(sample_indices, bfile.header.n_samples)
 
         for record in bfile.records(read_probabilities=read_gp):
             include = False
-            aliases = {
-                _variant_identifier(record.varid, record.rsid),
-                record.rsid,
-                f"{record.chrom}:{record.pos}",
-            }
             if requested_idx_set is not None:
                 include = record.index in requested_idx_set
             elif requested_ids is not None:
+                aliases = {
+                    _variant_identifier(record.varid, record.rsid),
+                    record.rsid,
+                    f"{record.chrom}:{record.pos}",
+                }
                 include = bool(requested_ids.intersection(aliases))
                 if include:
                     found_ids.update(aliases)
@@ -457,7 +466,7 @@ class BGENReader(SNPBaseReader):
                 include = True
 
             if include:
-                if record.probabilities is not None:
+                if record.probabilities is not None and not all_samples_selected:
                     record = _BGENRecord(
                         index=record.index,
                         varid=record.varid,

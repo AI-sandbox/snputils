@@ -136,6 +136,79 @@ df = f2(snpobj, sample_labels=labels, ancestry="AFR", laiobj=laiobj)
 
 ## GWAS and Admixture Mapping
 
+### Genotype QC and preprocessing
+
+`SNPObject` exposes genotype QC checks used across association testing, admixture
+mapping, PCA and ancestry analysis, relatedness estimation, and population-genetic
+summaries. The right set depends on the analysis: duplicate checks and call-rate
+filters are broadly useful, differential missingness targets group-specific
+artifacts, MAF/MAC and HWE filters are common in variant-level association QC,
+imputation quality applies to imputed variants, and LD pruning is mainly for
+sample-level summaries such as PCA, relatedness, and heterozygosity.
+
+```python
+import snputils as su
+
+snpobj = su.read_snp("cohort.pgen")
+phen = su.read_pheno("phenotypes.tsv", col="trait")
+
+# Remove duplicate identifiers. Missing variant IDs such as "." are ignored by default.
+snpobj = snpobj.filter_duplicate_samples()
+snpobj = snpobj.filter_duplicate_variants(by="id")
+snpobj = snpobj.filter_duplicate_variants(
+    by="coordinates",
+    fields=("chrom", "pos", "ref", "alt"),
+)
+
+# Missingness and allele-frequency QC. These are common before association
+# testing and can also improve many downstream summaries.
+snpobj = snpobj.filter_variants_by_call_rate(min_call_rate=0.98)
+snpobj = snpobj.filter_samples_by_call_rate(min_call_rate=0.98)
+snpobj = snpobj.filter_maf(maf=0.01)
+snpobj = snpobj.filter_mac(mac=20)
+
+# Phenotype-, cohort-, ancestry-, or batch-specific missingness. Groups can be
+# a PhenotypeObject, sample-aligned labels, a mapping keyed by sample ID, or a
+# pandas object.
+snpobj = snpobj.filter_differential_missingness(phen, min_p=1e-5)
+
+# HWE is often checked in controls for case-control association studies.
+if not phen.is_quantitative:
+    snpobj = snpobj.filter_hwe(min_p=1e-6, samples=phen.controls)
+
+# Imputed data can be filtered using INFO/R2 fields, genotype probabilities, or
+# dosage-derived estimates.
+snpobj = snpobj.filter_imputation_quality(min_r2=0.8, source="auto")
+```
+
+For PCA, relatedness pruning, heterozygosity, and inbreeding QC, use autosomal,
+reasonably common, preferably LD-pruned variants. This pruned object is used to
+make sample-level QC decisions; those decisions can then be applied back to the
+full dataset used for association testing, admixture mapping, or other analyses:
+
+```python
+qc_snps = (
+    snpobj
+    .filter_maf(maf=0.05)
+    .filter_ld_pruned(window_size=50, step_size=5, r2_threshold=0.2)
+)
+
+het_report = qc_snps.flag_heterozygosity_outliers(n_sd=3)
+related_pairs = qc_snps.flag_related_pairs(threshold=0.0884)
+unrelated_qc_snps = qc_snps.prune_related_samples(threshold=0.0884)
+snpobj = snpobj.filter_samples(samples=unrelated_qc_snps.samples)
+```
+
+Use {meth}`~snputils.SNPObject.variant_call_rate`, {meth}`~snputils.SNPObject.sample_call_rate`,
+{meth}`~snputils.SNPObject.maf`, {meth}`~snputils.SNPObject.mac`,
+{meth}`~snputils.SNPObject.hwe_pvalue`, {meth}`~snputils.SNPObject.imputation_r2`,
+{meth}`~snputils.SNPObject.relatedness`, and related `as_dataframe=True` reports
+when you want to inspect QC metrics before filtering. Some filters, especially
+MAF/MAC and HWE, should be chosen with the analysis design in mind rather than
+applied as universal defaults.
+
+### Association testing
+
 ```python
 import snputils as su
 

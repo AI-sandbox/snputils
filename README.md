@@ -34,7 +34,7 @@ snp = su.read_snp("cohort.vcf.gz")                    # VCF, BCF, BGEN, BED, PGE
 snp = snp.filter_biallelic_variants()
 snp.save("cohort.pgen")                               # convert to PGEN
 
-lai = su.read_lai("local_ancestry.msp")               # MSP or FLARE local ancestry
+lai = su.read_lai("local_ancestry.msp")               # MSP, FLARE, or .lanc local ancestry
 adm = su.read_admixture("admixture_prefix")           # ADMIXTURE-style global ancestry
 pheno = su.read_pheno("phenotypes.tsv", col="trait")
 ibd = su.read_ibd("segments.hapibd")
@@ -80,13 +80,13 @@ Optional extras:
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets
 - **GRG**: Read and write graph-based genome representation files
-- **Local Ancestry**: Handle `.msp` and FLARE `.anc.vcf.gz` local ancestry formats
+- **Local Ancestry**: Handle `.msp`, FLARE `.anc.vcf.gz`, and admix-kit `.lanc` local ancestry formats
 - **Global Ancestry / ADMIXTURE**: Read and write `.Q` and `.P` files
 - **IBD**: Read `hap-IBD` and `ancIBD` outputs into a unified object
 
 ### Data Objects and Utilities
 
-- **SNPObject** for genotype data, including filtering, saving, and allele-frequency helpers
+- **SNPObject** for genotype data, including filtering, saving, allele-frequency helpers, and genotype QC
 - **LocalAncestryObject** and **GlobalAncestryObject** for ancestry-aware workflows
 - **PhenotypeObject**, **MultiPhenotypeObject**, and **CovariateObject** for trait data
 - **IBDObject** for segment filtering and ancestry-restricted trimming
@@ -99,6 +99,7 @@ Optional extras:
   - Filter variants and samples, correct SNP flips, and filter ambiguous SNPs
   - Compute cohort and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)`
   - Stream allele frequencies with `snputils.stats.allele_freq_stream(...)` for memory efficiency
+  - Run common genotype QC from `SNPObject`: duplicate sample/variant checks, call-rate filters, MAF/MAC filters, HWE, LD pruning, heterozygosity/inbreeding reports, imputation quality filters, relatedness pruning, and differential missingness by phenotype, cohort, or batch
 
 - **Dimensionality reduction**
   - Standard PCA with optional PyTorch acceleration

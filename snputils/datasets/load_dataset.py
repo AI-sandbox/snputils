@@ -136,6 +136,7 @@ def load_dataset(
         populations: Optional[Sequence[str]] = None,
         samples_per_population: Optional[int] = None,
         max_variants: Optional[int] = None,
+        maf: Optional[float] = None,
         require_biallelic: bool = False,
         require_complete: bool = False,
         require_polymorphic: bool = False,
@@ -165,6 +166,8 @@ def load_dataset(
         populations: Optional population labels to select from dataset metadata.
         samples_per_population: Optional number of samples to take from each selected population.
         max_variants: Optional maximum number of variants to read by streaming source files directly.
+        maf: Optional minor allele frequency threshold. In streaming reads, this is applied before
+            ``max_variants`` truncation.
         require_biallelic: When ``max_variants`` is set and source files are streamed, keep only variants with
             exactly one REF allele and one ALT allele.
         require_complete: When ``max_variants`` is set and source files are streamed, keep only variants with no
@@ -253,6 +256,7 @@ def load_dataset(
             require_biallelic=require_biallelic,
             require_complete=require_complete,
             require_polymorphic=require_polymorphic,
+            maf=maf,
             snv_only=snv_only,
             sum_strands=bool(read_kwargs.get("sum_strands", True)),
         )
@@ -301,6 +305,8 @@ def load_dataset(
     # Read PGEN fileset with PGENReader into SNPObject
     log.info("Reading PGEN fileset...")
     snpobj = PGENReader(data_path / dataset.name).read(**read_kwargs)
+    if maf is not None:
+        snpobj = snpobj.filter_maf(maf=maf)
     if sample_metadata is not None and snpobj.samples is not None:
         _attach_sample_metadata(snpobj, sample_metadata)
 
@@ -353,6 +359,7 @@ def _read_snp_subset(
     require_biallelic: bool,
     require_complete: bool,
     require_polymorphic: bool,
+    maf: Optional[float],
     snv_only: bool,
     sum_strands: bool,
     allow_fewer: bool = False,
@@ -376,6 +383,8 @@ def _read_snp_subset(
             chunk = chunk.filter_complete_genotypes()
         if require_polymorphic:
             chunk = chunk.filter_polymorphic_variants()
+        if maf is not None:
+            chunk = chunk.filter_maf(maf=maf)
         if chunk.n_snps == 0:
             continue
         remaining = max_variants - n_variants
@@ -405,6 +414,7 @@ def _read_snp_subset_sources(
     require_biallelic: bool,
     require_complete: bool,
     require_polymorphic: bool,
+    maf: Optional[float],
     snv_only: bool,
     sum_strands: bool,
 ) -> SNPObject:
@@ -426,6 +436,7 @@ def _read_snp_subset_sources(
                 require_biallelic=require_biallelic,
                 require_complete=require_complete,
                 require_polymorphic=require_polymorphic,
+                maf=maf,
                 snv_only=snv_only,
                 sum_strands=sum_strands,
                 allow_fewer=True,
@@ -453,6 +464,7 @@ def _read_snp_subset_sources(
             require_biallelic=require_biallelic,
             require_complete=require_complete,
             require_polymorphic=require_polymorphic,
+            maf=maf,
             snv_only=snv_only,
             sum_strands=sum_strands,
         )

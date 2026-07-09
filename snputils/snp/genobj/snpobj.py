@@ -1064,6 +1064,56 @@ class SNPObject:
         dosages = np.where(called, np.rint(subset), np.nan)
         return dosages, called
 
+    def _diploid_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        context: str = "Diploid dosage calculation",
+    ) -> np.ndarray:
+        sample_indexes = self._sample_subset_indices(samples)
+
+        if self.calldata_gp is not None:
+            dosage = np.asarray(self.dosage(), dtype=float)
+            if dosage.ndim != 2:
+                raise ValueError("Expected dosage data with shape (n_snps, n_samples).")
+            subset = dosage[:, sample_indexes]
+            called = np.isfinite(subset) & (subset >= 0)
+            called_dosages = subset[called]
+            if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
+                raise ValueError(f"{context} requires dosages between 0 and 2.")
+            return np.where(called, subset, np.nan)
+
+        if self.genotypes is None:
+            raise ValueError("SNPObject requires either `genotypes` or `calldata_gp` for dosage-based QC.")
+
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            gt = gt.astype(float, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'genotypes' must contain numeric values.") from exc
+
+        if gt.ndim == 3:
+            subset = gt[:, sample_indexes, :]
+            called_entries = np.isfinite(subset) & (subset >= 0)
+            called = np.all(called_entries, axis=2)
+            called_alleles = subset[called]
+            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
+                raise ValueError(f"{context} requires biallelic allele calls encoded as 0/1.")
+            dosages = np.full(called.shape, np.nan, dtype=float)
+            if called_alleles.size:
+                dosages[called] = called_alleles.sum(axis=1)
+            return dosages
+
+        subset = gt[:, sample_indexes]
+        called = np.isfinite(subset) & (subset >= 0)
+        called_dosages = subset[called]
+        if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
+            raise ValueError(f"{context} requires dosages between 0 and 2.")
+        return np.where(called, subset, np.nan)
+
     def _sample_heterozygosity_components(
         self,
         samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
@@ -1163,37 +1213,7 @@ class SNPObject:
         self,
         samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
     ) -> np.ndarray:
-        if self.genotypes is None:
-            raise ValueError("Genotype data `genotypes` is None.")
-
-        sample_indexes = self._sample_subset_indices(samples)
-        gt = np.asarray(self.genotypes)
-        if gt.ndim not in (2, 3):
-            raise ValueError("'genotypes' must be a 2D or 3D array.")
-
-        try:
-            gt = gt.astype(float, copy=False)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("'genotypes' must contain numeric values.") from exc
-
-        if gt.ndim == 3:
-            subset = gt[:, sample_indexes, :]
-            called_entries = np.isfinite(subset) & (subset >= 0)
-            called = np.all(called_entries, axis=2)
-            called_alleles = subset[called]
-            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
-                raise ValueError("LD pruning requires biallelic allele calls encoded as 0/1.")
-            dosages = np.full(called.shape, np.nan, dtype=float)
-            if called_alleles.size:
-                dosages[called] = called_alleles.sum(axis=1)
-            return dosages
-
-        subset = gt[:, sample_indexes]
-        called = np.isfinite(subset) & (subset >= 0)
-        called_dosages = subset[called]
-        if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
-            raise ValueError("LD pruning requires dosages between 0 and 2.")
-        return np.where(called, subset, np.nan)
+        return self._diploid_dosages(samples=samples, context="LD pruning")
 
     @staticmethod
     def _pairwise_r2_ignore_missing(
@@ -1216,6 +1236,99 @@ class SNPObject:
 
         r = np.dot(x_centered, y_centered) / np.sqrt(ssx * ssy)
         return min(1.0, float(r * r))
+
+    @staticmethod
+    def _validate_relatedness_method(method: str) -> str:
+        method = str(method).lower().replace("-", "_")
+        if method != "grm":
+            raise ValueError("'method' must be 'grm'.")
+        return method
+
+    @staticmethod
+    def _validate_relatedness_scale(scale: str) -> str:
+        aliases = {
+            "relationship": "relationship",
+            "grm": "relationship",
+            "kinship": "kinship",
+        }
+        key = str(scale).lower().replace("-", "_")
+        if key not in aliases:
+            raise ValueError("'scale' must be either 'relationship' or 'kinship'.")
+        return aliases[key]
+
+    def _format_relatedness_output(
+        self,
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        if self.samples is not None:
+            labels = np.asarray(self.samples)[sample_indexes]
+        else:
+            labels = sample_indexes
+        return pd.DataFrame(values, index=labels, columns=labels)
+
+    def _grm_relatedness_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        min_variants: int = 1,
+        block_size: int = 10000,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        min_variants = self._validate_integer_parameter("min_variants", min_variants, 1)
+        block_size = self._validate_integer_parameter("block_size", block_size, 1)
+        sample_indexes = self._sample_subset_indices(samples)
+        dosages = self._diploid_dosages(samples=sample_indexes, context="GRM relatedness")
+        n_samples = dosages.shape[1]
+
+        numerator = np.zeros((n_samples, n_samples), dtype=float)
+        counts = np.zeros((n_samples, n_samples), dtype=np.int64)
+
+        for start in range(0, dosages.shape[0], block_size):
+            stop = min(start + block_size, dosages.shape[0])
+            block = dosages[start:stop]
+            called = np.isfinite(block)
+            called_per_variant = called.sum(axis=1)
+            informative_input = called_per_variant > 0
+            if not np.any(informative_input):
+                continue
+
+            allele_sum = np.where(called, block, 0.0).sum(axis=1)
+            allele_freq = np.full(block.shape[0], np.nan, dtype=float)
+            allele_freq[informative_input] = (
+                allele_sum[informative_input] / (2.0 * called_per_variant[informative_input])
+            )
+            variance = 2.0 * allele_freq * (1.0 - allele_freq)
+            informative = np.isfinite(variance) & (variance > 0)
+            if not np.any(informative):
+                continue
+
+            block = block[informative].astype(float, copy=True)
+            called = called[informative]
+            allele_freq = allele_freq[informative]
+            scale = np.sqrt(2.0 * allele_freq * (1.0 - allele_freq))
+            standardized = (block - (2.0 * allele_freq[:, None])) / scale[:, None]
+            standardized[~called] = 0.0
+
+            called_int = called.astype(np.int64, copy=False)
+            numerator += standardized.T @ standardized
+            counts += called_int.T @ called_int
+
+        relatedness = np.full(numerator.shape, np.nan, dtype=float)
+        valid = counts >= min_variants
+        relatedness[valid] = numerator[valid] / counts[valid]
+        return sample_indexes, relatedness, counts
+
+    def _sample_call_rate_from_dosages(self, sample_indexes: np.ndarray) -> np.ndarray:
+        dosages = self._diploid_dosages(samples=sample_indexes, context="Relatedness pruning")
+        if dosages.shape[0] == 0:
+            return np.full(dosages.shape[1], np.nan, dtype=float)
+        return np.isfinite(dosages).mean(axis=0)
 
     @staticmethod
     def _normalize_imputation_info_keys(
@@ -1621,6 +1734,157 @@ class SNPObject:
             column="sample_call_rate",
             as_dataframe=as_dataframe,
         )
+
+    def relatedness(
+        self,
+        method: str = "grm",
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        scale: str = "relationship",
+        min_variants: int = 1,
+        block_size: int = 10000,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute genotype-derived sample relatedness.
+
+        The initial implementation supports a GRM-style estimator on diploid
+        biallelic dosages. Genotypes are standardized per variant as
+        ``(g - 2p) / sqrt(2p(1-p))`` and pairwise products are averaged over
+        variants where both samples are called. This is best run on autosomal,
+        reasonably common, LD-pruned variants.
+
+        Args:
+            method (str, default="grm"):
+                Relatedness estimator. Currently only ``"grm"`` is supported.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            scale (str, default="relationship"):
+                ``"relationship"`` returns the GRM relationship coefficient.
+                ``"kinship"`` returns half the relationship coefficient.
+            min_variants (int, default=1):
+                Minimum number of pairwise non-missing informative variants
+                required to report a finite value.
+            block_size (int, default=10000):
+                Number of variants per block used while accumulating the GRM.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame with sample labels.
+
+        Returns:
+            Square NumPy array of relatedness values, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        self._validate_relatedness_method(method)
+        scale = self._validate_relatedness_scale(scale)
+        sample_indexes, relationship, _ = self._grm_relatedness_components(
+            samples=samples,
+            min_variants=min_variants,
+            block_size=block_size,
+        )
+        values = relationship if scale == "relationship" else relationship / 2.0
+        return self._format_relatedness_output(
+            values,
+            sample_indexes=sample_indexes,
+            as_dataframe=as_dataframe,
+        )
+
+    def flag_related_pairs(
+        self,
+        threshold: float = 0.0884,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        min_variants: int = 1,
+        block_size: int = 10000,
+    ) -> Any:
+        """
+        Return sample pairs with GRM-derived kinship at or above ``threshold``.
+
+        The default threshold, 0.0884, is a commonly used second-degree kinship
+        cutoff. Input variants should already be appropriate for relatedness QC
+        (autosomal, reasonably common, and preferably LD-pruned).
+        """
+        threshold = self._validate_nonnegative_parameter("threshold", threshold)
+        sample_indexes, relationship, counts = self._grm_relatedness_components(
+            samples=samples,
+            min_variants=min_variants,
+            block_size=block_size,
+        )
+        kinship = relationship / 2.0
+
+        columns = ["sample_index_1", "sample_index_2"]
+        include_names = self.samples is not None
+        if include_names:
+            columns.extend(["sample_1", "sample_2"])
+            sample_names = np.asarray(self.samples)
+        columns.extend(["relationship", "kinship", "n_variants"])
+
+        records = []
+        n_samples = sample_indexes.size
+        for first in range(n_samples):
+            for second in range(first + 1, n_samples):
+                value = kinship[first, second]
+                if not np.isfinite(value) or value < threshold:
+                    continue
+                record = {
+                    "sample_index_1": int(sample_indexes[first]),
+                    "sample_index_2": int(sample_indexes[second]),
+                    "relationship": float(relationship[first, second]),
+                    "kinship": float(value),
+                    "n_variants": int(counts[first, second]),
+                }
+                if include_names:
+                    record["sample_1"] = sample_names[sample_indexes[first]]
+                    record["sample_2"] = sample_names[sample_indexes[second]]
+                records.append(record)
+
+        import pandas as pd
+
+        return pd.DataFrame.from_records(records, columns=columns)
+
+    def prune_related_samples(
+        self,
+        threshold: float = 0.0884,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        inplace: bool = False,
+    ) -> Optional['SNPObject']:
+        """
+        Greedily remove samples until no selected pair exceeds a kinship threshold.
+
+        At each step, the removed sample is chosen by: more flagged
+        relationships, then lower sample call rate, then later sample index.
+        Relatedness is estimated with the default GRM settings. Samples outside
+        the optional ``samples`` subset are kept.
+        """
+        threshold = self._validate_nonnegative_parameter("threshold", threshold)
+        sample_indexes, relationship, _ = self._grm_relatedness_components(samples=samples)
+        kinship = relationship / 2.0
+        keep = np.ones(sample_indexes.size, dtype=bool)
+        call_rate = self._sample_call_rate_from_dosages(sample_indexes)
+
+        while np.count_nonzero(keep) > 1:
+            active = np.flatnonzero(keep)
+            active_kinship = kinship[np.ix_(active, active)]
+            related = np.triu(np.isfinite(active_kinship) & (active_kinship >= threshold), k=1)
+            if not np.any(related):
+                break
+
+            pair_positions = np.argwhere(related)
+            first_positions = active[pair_positions[:, 0]]
+            second_positions = active[pair_positions[:, 1]]
+            degrees = np.zeros(sample_indexes.size, dtype=int)
+            np.add.at(degrees, first_positions, 1)
+            np.add.at(degrees, second_positions, 1)
+            candidates = np.unique(np.concatenate([first_positions, second_positions]))
+
+            def removal_key(position: int) -> Tuple[int, float, int]:
+                rate = call_rate[position]
+                rate_key = float(rate) if np.isfinite(rate) else -np.inf
+                return degrees[position], -rate_key, int(sample_indexes[position])
+
+            remove_position = max(candidates, key=removal_key)
+            keep[remove_position] = False
+
+        removed_indexes = sample_indexes[~keep]
+        return self.filter_samples(indexes=removed_indexes, include=False, inplace=inplace)
 
     def imputation_r2(
         self,

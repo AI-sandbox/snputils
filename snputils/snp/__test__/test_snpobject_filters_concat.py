@@ -97,6 +97,31 @@ def _call_rate_snpobj() -> SNPObject:
     )
 
 
+def _manual_grm(dosages: np.ndarray, min_variants: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    dosages = np.asarray(dosages, dtype=float)
+    called = np.isfinite(dosages)
+    called_per_variant = called.sum(axis=1)
+    allele_sum = np.where(called, dosages, 0.0).sum(axis=1)
+    allele_freq = np.full(dosages.shape[0], np.nan, dtype=float)
+    nonempty = called_per_variant > 0
+    allele_freq[nonempty] = allele_sum[nonempty] / (2.0 * called_per_variant[nonempty])
+    variance = 2.0 * allele_freq * (1.0 - allele_freq)
+    informative = np.isfinite(variance) & (variance > 0)
+
+    called = called[informative]
+    allele_freq = allele_freq[informative]
+    standardized = (
+        dosages[informative] - (2.0 * allele_freq[:, None])
+    ) / np.sqrt(2.0 * allele_freq[:, None] * (1.0 - allele_freq[:, None]))
+    standardized[~called] = 0.0
+    counts = called.astype(np.int64).T @ called.astype(np.int64)
+    numerator = standardized.T @ standardized
+    relatedness = np.full(numerator.shape, np.nan, dtype=float)
+    valid = counts >= min_variants
+    relatedness[valid] = numerator[valid] / counts[valid]
+    return relatedness, counts
+
+
 def test_call_rate_from_3d_genotypes_treats_partial_missing_and_nan_as_missing():
     snpobj = _call_rate_snpobj()
 
@@ -160,6 +185,195 @@ def test_call_rate_filters_validate_threshold(method_name, min_call_rate):
 
     with pytest.raises(ValueError, match="min_call_rate"):
         getattr(snpobj, method_name)(min_call_rate=min_call_rate)
+
+
+def test_relatedness_grm_from_dosages_matches_manual_standardization():
+    dosages = np.array(
+        [
+            [0.0, 0.0, 2.0, 2.0],
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 2.0, 0.0, 0.0],
+            [0.0, 1.0, np.nan, 2.0],
+        ]
+    )
+    snpobj = SNPObject(
+        genotypes=dosages,
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+    expected, _ = _manual_grm(dosages)
+
+    relatedness = snpobj.relatedness(block_size=2)
+    relatedness_df = snpobj.relatedness(block_size=2, as_dataframe=True)
+
+    np.testing.assert_allclose(relatedness, expected, equal_nan=True)
+    assert relatedness_df.index.tolist() == ["s1", "s2", "s3", "s4"]
+    assert relatedness_df.columns.tolist() == ["s1", "s2", "s3", "s4"]
+    np.testing.assert_allclose(relatedness_df.to_numpy(), expected, equal_nan=True)
+    np.testing.assert_allclose(relatedness, relatedness.T, equal_nan=True)
+
+
+def test_relatedness_kinship_scale_is_half_relationship():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [2.0, 2.0, 0.0],
+                [0.0, 1.0, 2.0],
+            ]
+        )
+    )
+
+    relationship = snpobj.relatedness(scale="relationship")
+    kinship = snpobj.relatedness(scale="kinship")
+
+    np.testing.assert_allclose(kinship, relationship / 2.0, equal_nan=True)
+
+
+def test_relatedness_respects_pairwise_missing_counts_and_min_variants():
+    dosages = np.array(
+        [
+            [0.0, 0.0, 2.0],
+            [0.0, np.nan, 2.0],
+            [2.0, 2.0, 0.0],
+        ]
+    )
+    snpobj = SNPObject(
+        genotypes=dosages,
+        samples=np.array(["dup1", "dup2", "other"], dtype=object),
+    )
+    expected, counts = _manual_grm(dosages)
+
+    relatedness = snpobj.relatedness()
+    min_count_relatedness = snpobj.relatedness(min_variants=3)
+    pairs = snpobj.flag_related_pairs(threshold=0.4)
+
+    np.testing.assert_allclose(relatedness, expected, equal_nan=True)
+    assert counts[0, 1] == 2
+    assert np.isnan(min_count_relatedness[0, 1])
+    assert pairs["sample_1"].tolist() == ["dup1"]
+    assert pairs["sample_2"].tolist() == ["dup2"]
+    assert pairs["n_variants"].tolist() == [2]
+    np.testing.assert_allclose(pairs["kinship"], np.array([0.5]))
+
+
+def test_relatedness_from_bgen_probabilities_matches_dosage_grm():
+    dosages = np.array(
+        [
+            [0.0, 1.0, 2.0],
+            [2.0, 1.0, 0.0],
+            [0.0, 0.0, 2.0],
+        ]
+    )
+    one_hot = np.eye(3, dtype=np.float32)
+    gp = one_hot[dosages.astype(int)]
+    dosage_snpobj = SNPObject(genotypes=dosages)
+    gp_snpobj = SNPObject(calldata_gp=gp)
+
+    np.testing.assert_allclose(
+        gp_snpobj.relatedness(),
+        dosage_snpobj.relatedness(),
+        equal_nan=True,
+    )
+
+
+def test_flag_related_pairs_returns_empty_dataframe_with_expected_columns():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 1.0, 2.0],
+                [2.0, 1.0, 0.0],
+            ]
+        )
+    )
+
+    pairs = snpobj.flag_related_pairs(threshold=1.0)
+
+    assert pairs.empty
+    assert pairs.columns.tolist() == [
+        "sample_index_1",
+        "sample_index_2",
+        "relationship",
+        "kinship",
+        "n_variants",
+    ]
+
+
+def test_prune_related_samples_removes_lower_call_rate_sample_and_preserves_metadata():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [0.0, np.nan, 2.0],
+                [2.0, 2.0, 0.0],
+            ]
+        ),
+        samples=np.array(["dup1", "dup2", "other"], dtype=object),
+        sample_fid=np.array(["F1", "F2", "F3"], dtype=object),
+    )
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["dup1", "dup2", "other"], "batch": ["A", "B", "C"]}
+    )
+
+    filtered = snpobj.prune_related_samples(threshold=0.4)
+
+    assert filtered.samples.tolist() == ["dup1", "other"]
+    assert filtered.sample_fid.tolist() == ["F1", "F3"]
+    assert filtered.sample_metadata["sample"].tolist() == ["dup1", "other"]
+
+
+def test_prune_related_samples_tie_breaks_by_later_sample_index():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [2.0, 2.0, 0.0],
+            ]
+        ),
+        samples=np.array(["first", "second", "other"], dtype=object),
+    )
+
+    filtered = snpobj.prune_related_samples(threshold=0.4)
+
+    assert filtered.samples.tolist() == ["first", "other"]
+
+
+def test_relatedness_methods_support_sample_subsets():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0.0, 0.0, 2.0, 2.0],
+                [2.0, 2.0, 0.0, 0.0],
+            ]
+        ),
+        samples=np.array(["s1", "s2", "s3", "s4"], dtype=object),
+    )
+
+    relatedness = snpobj.relatedness(samples=["s1", "s2", "s3"], as_dataframe=True)
+    pairs = snpobj.flag_related_pairs(threshold=0.4, samples=np.array([True, True, True, False]))
+
+    assert relatedness.index.tolist() == ["s1", "s2", "s3"]
+    assert relatedness.columns.tolist() == ["s1", "s2", "s3"]
+    assert pairs["sample_1"].tolist() == ["s1"]
+    assert pairs["sample_2"].tolist() == ["s2"]
+
+
+def test_relatedness_validates_parameters_and_sample_selector():
+    snpobj = _toy_snpobj()
+
+    with pytest.raises(ValueError, match="method"):
+        snpobj.relatedness(method="king")
+    with pytest.raises(ValueError, match="scale"):
+        snpobj.relatedness(scale="invalid")
+    with pytest.raises(ValueError, match="min_variants"):
+        snpobj.relatedness(min_variants=0)
+    with pytest.raises(ValueError, match="block_size"):
+        snpobj.relatedness(block_size=0)
+    with pytest.raises(ValueError, match="threshold"):
+        snpobj.flag_related_pairs(threshold=-0.01)
+    with pytest.raises(ValueError, match="threshold"):
+        snpobj.prune_related_samples(threshold=np.nan)
+    with pytest.raises(ValueError, match="not found"):
+        snpobj.relatedness(samples=["missing"])
 
 
 def test_imputation_r2_extracts_common_info_keys_and_filters_variants():

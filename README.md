@@ -86,7 +86,7 @@ Optional extras:
 
 ### Data Objects and Utilities
 
-- **SNPObject** for genotype data, including filtering, saving, and allele-frequency helpers
+- **SNPObject** for genotype data, including filtering, saving, allele-frequency helpers, and genotype QC
 - **LocalAncestryObject** and **GlobalAncestryObject** for ancestry-aware workflows
 - **PhenotypeObject**, **MultiPhenotypeObject**, and **CovariateObject** for trait data
 - **IBDObject** for segment filtering and ancestry-restricted trimming
@@ -99,6 +99,7 @@ Optional extras:
   - Filter variants and samples, correct SNP flips, and filter ambiguous SNPs
   - Compute cohort and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)`
   - Stream allele frequencies with `snputils.stats.allele_freq_stream(...)` for memory efficiency
+  - Run common genotype QC from `SNPObject`: duplicate sample/variant checks, call-rate filters, MAF/MAC filters, HWE, LD pruning, heterozygosity/inbreeding reports, imputation quality filters, relatedness pruning, and differential missingness by phenotype, cohort, or batch
 
 - **Dimensionality reduction**
   - Standard PCA with optional PyTorch acceleration

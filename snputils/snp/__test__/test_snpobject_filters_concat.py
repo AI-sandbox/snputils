@@ -1220,6 +1220,106 @@ def test_filter_samples_rejects_misaligned_sample_metadata():
         snpobj.filter_samples(indexes=[0])
 
 
+def test_duplicate_sample_ids_report_and_filter_preserves_metadata():
+    genotypes = np.arange(10, dtype=float).reshape(2, 5)
+    snpobj = SNPObject(
+        genotypes=genotypes,
+        samples=np.array(["s1", "s2", "s1", "s3", "s2"], dtype=object),
+        sample_fid=np.array(["F1a", "F2a", "F1b", "F3", "F2b"], dtype=object),
+        sample_sex=np.array(["1", "2", "1", "2", "1"], dtype=object),
+    )
+    snpobj.sample_metadata = pd.DataFrame(
+        {"sample": ["s1", "s2", "s1", "s3", "s2"], "row": [0, 1, 2, 3, 4]}
+    )
+
+    mask = snpobj.duplicate_sample_ids()
+    report = snpobj.duplicate_sample_ids(as_dataframe=True)
+    filtered_first = snpobj.filter_duplicate_samples()
+    filtered_last = snpobj.filter_duplicate_samples(keep="last")
+    filtered_all = snpobj.filter_duplicate_samples(keep=False)
+
+    np.testing.assert_array_equal(mask, np.array([False, False, True, False, True]))
+    assert report.columns.tolist() == ["sample_index", "sample", "is_duplicate", "duplicate_group"]
+    assert report["duplicate_group"].tolist() == [0, 1, 0, -1, 1]
+    assert filtered_first.samples.tolist() == ["s1", "s2", "s3"]
+    assert filtered_first.sample_fid.tolist() == ["F1a", "F2a", "F3"]
+    assert filtered_first.sample_sex.tolist() == ["1", "2", "2"]
+    assert filtered_first.sample_metadata["row"].tolist() == [0, 1, 3]
+    np.testing.assert_array_equal(filtered_first.genotypes, genotypes[:, [0, 1, 3]])
+    assert filtered_last.samples.tolist() == ["s1", "s3", "s2"]
+    np.testing.assert_array_equal(filtered_last.genotypes, genotypes[:, [2, 3, 4]])
+    assert filtered_all.samples.tolist() == ["s3"]
+    np.testing.assert_array_equal(filtered_all.genotypes, genotypes[:, [3]])
+
+
+def test_duplicate_variant_ids_ignore_missing_ids_and_filter():
+    snpobj = SNPObject(
+        genotypes=np.zeros((7, 2), dtype=float),
+        variants_id=np.array(["rs1", ".", "rs2", "rs1", "", "rs2", "."], dtype=object),
+        variants_pos=np.arange(7),
+    )
+
+    mask = snpobj.duplicate_variant_ids()
+    report = snpobj.duplicate_variant_ids(as_dataframe=True)
+    filtered = snpobj.filter_duplicate_variants(by="id")
+    all_missing_included = snpobj.duplicate_variant_ids(ignore_missing=False)
+
+    np.testing.assert_array_equal(mask, np.array([False, False, False, True, False, True, False]))
+    assert report["variant_id"].tolist() == ["rs1", ".", "rs2", "rs1", "", "rs2", "."]
+    assert report["duplicate_group"].tolist() == [0, -1, 1, 0, -1, 1, -1]
+    assert filtered.variants_id.tolist() == ["rs1", ".", "rs2", "", "."]
+    np.testing.assert_array_equal(
+        all_missing_included,
+        np.array([False, False, False, True, False, True, True]),
+    )
+
+
+def test_duplicate_variant_coordinates_support_configurable_fields_and_filter():
+    snpobj = SNPObject(
+        genotypes=np.zeros((5, 2), dtype=float),
+        variants_id=np.array(["v1", "v2", "v3", "v4", "v5"], dtype=object),
+        variants_chrom=np.array(["1", "1", "1", "1", "2"], dtype=object),
+        variants_pos=np.array([10, 10, 10, 20, 10], dtype=np.int32),
+        variants_ref=np.array(["A", "A", "T", "A", "A"], dtype=object),
+        variants_alt=np.array(["C", "C", "A", "C", "C"], dtype=object),
+    )
+
+    coordinate_mask = snpobj.duplicate_variant_coordinates()
+    position_mask = snpobj.duplicate_variant_coordinates(fields=("chrom", "pos"))
+    report = snpobj.duplicate_variant_coordinates(fields="chrom,pos", as_dataframe=True)
+    filtered = snpobj.filter_duplicate_variants(by="coordinates")
+
+    np.testing.assert_array_equal(coordinate_mask, np.array([False, True, False, False, False]))
+    np.testing.assert_array_equal(position_mask, np.array([False, True, True, False, False]))
+    assert report.columns.tolist() == ["variant_index", "chrom", "pos", "is_duplicate", "duplicate_group"]
+    assert report["duplicate_group"].tolist() == [0, 0, 0, -1, -1]
+    assert filtered.variants_id.tolist() == ["v1", "v3", "v4", "v5"]
+
+
+def test_duplicate_qc_validates_inputs():
+    with pytest.raises(ValueError, match="samples"):
+        SNPObject(genotypes=np.zeros((1, 2))).duplicate_sample_ids()
+
+    with pytest.raises(ValueError, match="variants_id"):
+        SNPObject(genotypes=np.zeros((1, 2))).duplicate_variant_ids()
+
+    snpobj = SNPObject(
+        genotypes=np.zeros((2, 2)),
+        variants_id=np.array(["v1", "v1"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_pos=np.array([1, 1], dtype=np.int32),
+    )
+
+    with pytest.raises(ValueError, match="keep"):
+        snpobj.duplicate_variant_ids(keep="middle")
+    with pytest.raises(ValueError, match="'by'"):
+        snpobj.filter_duplicate_variants(by="unknown")
+    with pytest.raises(ValueError, match="variants_ref"):
+        snpobj.duplicate_variant_coordinates()
+    with pytest.raises(ValueError, match="fields"):
+        snpobj.duplicate_variant_coordinates(fields=("chrom", "quality"))
+
+
 def test_filter_maf_from_3d_genotypes_ignores_missing_calls():
     snpobj = SNPObject(
         genotypes=np.array(

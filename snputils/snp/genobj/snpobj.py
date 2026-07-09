@@ -1051,6 +1051,215 @@ class SNPObject:
         return pd.DataFrame(data)
 
     @staticmethod
+    def _validate_duplicate_keep(keep: Union[str, bool]) -> Union[str, bool]:
+        if keep is False:
+            return False
+        if isinstance(keep, str):
+            normalized = keep.lower().replace("-", "_")
+            aliases: Dict[str, Union[str, bool]] = {
+                "first": "first",
+                "last": "last",
+                "false": False,
+                "all": False,
+                "none": False,
+            }
+            if normalized in aliases:
+                return aliases[normalized]
+        raise ValueError("'keep' must be 'first', 'last', or False.")
+
+    @staticmethod
+    def _duplicate_value_is_missing(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, np.generic):
+            value = value.item()
+        try:
+            if isinstance(value, float) and np.isnan(value):
+                return True
+        except TypeError:
+            pass
+        text = str(value).strip()
+        return text == "" or text == "."
+
+    @classmethod
+    def _duplicate_key(cls, value: Any) -> Any:
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, float) and np.isnan(value):
+            return ("__nan__",)
+        try:
+            hash(value)
+            return value
+        except TypeError:
+            return str(value)
+
+    @classmethod
+    def _duplicate_mask_and_groups(
+        cls,
+        keys: Sequence[Any],
+        keep: Union[str, bool],
+        valid: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        keep = cls._validate_duplicate_keep(keep)
+        n_values = len(keys)
+        if valid is None:
+            valid = np.ones(n_values, dtype=bool)
+        else:
+            valid = np.asarray(valid, dtype=bool).ravel()
+            if valid.shape[0] != n_values:
+                raise ValueError("'valid' must have the same length as duplicate keys.")
+
+        positions_by_key: Dict[Any, List[int]] = {}
+        for idx, key in enumerate(keys):
+            if not valid[idx]:
+                continue
+            positions_by_key.setdefault(key, []).append(idx)
+
+        duplicate_mask = np.zeros(n_values, dtype=bool)
+        duplicate_group = np.full(n_values, -1, dtype=int)
+        group_idx = 0
+        duplicate_groups = [
+            positions for positions in positions_by_key.values()
+            if len(positions) > 1
+        ]
+        duplicate_groups.sort(key=lambda positions: positions[0])
+        for positions in duplicate_groups:
+            duplicate_group[positions] = group_idx
+            group_idx += 1
+            if keep == "first":
+                marked = positions[1:]
+            elif keep == "last":
+                marked = positions[:-1]
+            else:
+                marked = positions
+            duplicate_mask[marked] = True
+
+        return duplicate_mask, duplicate_group
+
+    @classmethod
+    def _duplicate_mask_for_values(
+        cls,
+        values: np.ndarray,
+        keep: Union[str, bool],
+        ignore_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        values = np.asarray(values, dtype=object).ravel()
+        valid = np.ones(values.shape[0], dtype=bool)
+        if ignore_missing:
+            valid = np.array(
+                [not cls._duplicate_value_is_missing(value) for value in values],
+                dtype=bool,
+            )
+        keys = [cls._duplicate_key(value) for value in values]
+        return cls._duplicate_mask_and_groups(keys, keep=keep, valid=valid)
+
+    @staticmethod
+    def _normalize_variant_coordinate_fields(
+        fields: Union[str, Sequence[str]],
+    ) -> Tuple[Tuple[str, str], ...]:
+        if isinstance(fields, str):
+            raw_fields = [
+                field.strip()
+                for field in fields.replace("+", ",").split(",")
+                if field.strip()
+            ]
+        else:
+            raw_fields = [str(field).strip() for field in fields]
+
+        if not raw_fields:
+            raise ValueError("'fields' must include at least one variant metadata field.")
+
+        aliases = {
+            "chrom": ("variants_chrom", "chrom"),
+            "chromosome": ("variants_chrom", "chrom"),
+            "#chrom": ("variants_chrom", "chrom"),
+            "pos": ("variants_pos", "pos"),
+            "position": ("variants_pos", "pos"),
+            "ref": ("variants_ref", "ref"),
+            "reference": ("variants_ref", "ref"),
+            "alt": ("variants_alt", "alt"),
+            "alternate": ("variants_alt", "alt"),
+            "id": ("variants_id", "id"),
+            "variant_id": ("variants_id", "id"),
+        }
+
+        normalized: List[Tuple[str, str]] = []
+        seen: set[str] = set()
+        for field in raw_fields:
+            key = field.lower()
+            if key not in aliases:
+                raise ValueError(
+                    "'fields' entries must be among chrom, pos, ref, alt, or id."
+                )
+            attr, label = aliases[key]
+            if attr in seen:
+                continue
+            seen.add(attr)
+            normalized.append((attr, label))
+
+        return tuple(normalized)
+
+    def _variant_coordinate_arrays(
+        self,
+        fields: Union[str, Sequence[str]],
+    ) -> Tuple[Tuple[str, str], List[np.ndarray]]:
+        normalized_fields = self._normalize_variant_coordinate_fields(fields)
+        arrays: List[np.ndarray] = []
+        n_snps = self.n_snps
+        for attr, _ in normalized_fields:
+            values = getattr(self, attr)
+            if values is None:
+                raise ValueError(f"'{attr}' is required for duplicate variant coordinate QC.")
+            arr = np.asarray(values, dtype=object).ravel()
+            if arr.shape[0] != n_snps:
+                raise ValueError(
+                    f"'{attr}' must have length equal to the number of SNPs ({n_snps}); "
+                    f"got {arr.shape[0]}."
+                )
+            arrays.append(arr)
+        return normalized_fields, arrays
+
+    @classmethod
+    def _duplicate_mask_for_rows(
+        cls,
+        arrays: Sequence[np.ndarray],
+        keep: Union[str, bool],
+        ignore_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if not arrays:
+            raise ValueError("At least one array is required for duplicate row QC.")
+
+        n_values = arrays[0].shape[0]
+        valid = np.ones(n_values, dtype=bool)
+        keys: List[Tuple[Any, ...]] = []
+        for idx in range(n_values):
+            row = tuple(array[idx] for array in arrays)
+            if ignore_missing and any(cls._duplicate_value_is_missing(value) for value in row):
+                valid[idx] = False
+            keys.append(tuple(cls._duplicate_key(value) for value in row))
+
+        return cls._duplicate_mask_and_groups(keys, keep=keep, valid=valid)
+
+    @staticmethod
+    def _validate_duplicate_variant_by(by: str) -> str:
+        key = str(by).lower().replace("-", "_")
+        aliases = {
+            "id": "id",
+            "ids": "id",
+            "variant_id": "id",
+            "variant_ids": "id",
+            "coordinate": "coordinates",
+            "coordinates": "coordinates",
+            "coord": "coordinates",
+            "coords": "coordinates",
+            "position": "coordinates",
+            "positions": "coordinates",
+        }
+        if key not in aliases:
+            raise ValueError("'by' must be either 'id' or 'coordinates'.")
+        return aliases[key]
+
+    @staticmethod
     def _group_labels_missing_mask(labels: np.ndarray) -> np.ndarray:
         try:
             import pandas as pd
@@ -2298,6 +2507,165 @@ class SNPObject:
             as_dataframe=as_dataframe,
         )
 
+    def duplicate_sample_ids(
+        self,
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate sample IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                IDs.
+            as_dataframe (bool, default=False):
+                If True, return a report with sample indexes, IDs, duplicate
+                flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over samples, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        if self.samples is None:
+            raise ValueError("Sample IDs `samples` are required for duplicate sample ID QC.")
+
+        samples = np.asarray(self.samples, dtype=object).ravel()
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_values(
+            samples,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "sample_index": np.arange(samples.shape[0], dtype=int),
+                "sample": samples,
+                "is_duplicate": duplicate_mask,
+                "duplicate_group": duplicate_group,
+            }
+        )
+
+    def duplicate_variant_ids(
+        self,
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate variant IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                IDs.
+            as_dataframe (bool, default=False):
+                If True, return a report with variant indexes, IDs, duplicate
+                flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over variants, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        if self.variants_id is None:
+            raise ValueError("Variant IDs `variants_id` are required for duplicate variant ID QC.")
+
+        variant_ids = np.asarray(self.variants_id, dtype=object).ravel()
+        n_snps = self.n_snps
+        if variant_ids.shape[0] != n_snps:
+            raise ValueError(
+                f"'variants_id' must have length equal to the number of SNPs ({n_snps}); "
+                f"got {variant_ids.shape[0]}."
+            )
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_values(
+            variant_ids,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "variant_index": np.arange(variant_ids.shape[0], dtype=int),
+                "variant_id": variant_ids,
+                "is_duplicate": duplicate_mask,
+                "duplicate_group": duplicate_group,
+            }
+        )
+
+    def duplicate_variant_coordinates(
+        self,
+        fields: Union[str, Sequence[str]] = ("chrom", "pos", "ref", "alt"),
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate variants by metadata coordinates.
+
+        By default, variants are compared by chromosome, position, reference
+        allele, and alternate allele. Pass a narrower ``fields`` value such as
+        ``("chrom", "pos")`` to flag variants sharing only a genomic position.
+
+        Args:
+            fields (str or sequence of str, default=("chrom", "pos", "ref", "alt")):
+                Variant metadata fields used as the duplicate key. Supported
+                values are ``"chrom"``, ``"pos"``, ``"ref"``, ``"alt"``, and
+                ``"id"``.
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, rows with missing key fields are not considered
+                duplicates.
+            as_dataframe (bool, default=False):
+                If True, return a report with variant indexes, key fields,
+                duplicate flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over variants, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        normalized_fields, arrays = self._variant_coordinate_arrays(fields)
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_rows(
+            arrays,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        data: Dict[str, Any] = {
+            "variant_index": np.arange(arrays[0].shape[0], dtype=int)
+        }
+        for (_, label), array in zip(normalized_fields, arrays):
+            data[label] = array
+        data["is_duplicate"] = duplicate_mask
+        data["duplicate_group"] = duplicate_group
+        return pd.DataFrame(data)
+
     def differential_missingness(
         self,
         groups: Any,
@@ -3264,6 +3632,93 @@ class SNPObject:
         mask = np.isfinite(call_rate) & (call_rate >= threshold)
         indexes = np.where(mask)[0]
         return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
+
+    def filter_duplicate_samples(
+            self,
+            keep: Union[str, bool] = "first",
+            ignore_missing: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Remove duplicate sample IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which sample in each duplicate ID group to keep. False removes
+                every sample belonging to a duplicate group.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                sample IDs.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        duplicate_mask = np.asarray(
+            self.duplicate_sample_ids(
+                keep=keep,
+                ignore_missing=ignore_missing,
+            ),
+            dtype=bool,
+        )
+        return self.filter_samples(
+            indexes=np.flatnonzero(duplicate_mask),
+            include=False,
+            inplace=inplace,
+        )
+
+    def filter_duplicate_variants(
+            self,
+            by: str = "id",
+            fields: Union[str, Sequence[str]] = ("chrom", "pos", "ref", "alt"),
+            keep: Union[str, bool] = "first",
+            ignore_missing: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Remove duplicate variants by ID or coordinate key.
+
+        Args:
+            by (str, default="id"):
+                Duplicate key to use: ``"id"`` or ``"coordinates"``.
+            fields (str or sequence of str, default=("chrom", "pos", "ref", "alt")):
+                Coordinate fields used when ``by="coordinates"``.
+            keep ({"first", "last", False}, default="first"):
+                Which variant in each duplicate group to keep. False removes
+                every variant belonging to a duplicate group.
+            ignore_missing (bool, default=True):
+                If True, rows with missing key fields are not considered
+                duplicates.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        by = self._validate_duplicate_variant_by(by)
+        if by == "id":
+            duplicate_mask = self.duplicate_variant_ids(
+                keep=keep,
+                ignore_missing=ignore_missing,
+            )
+        else:
+            duplicate_mask = self.duplicate_variant_coordinates(
+                fields=fields,
+                keep=keep,
+                ignore_missing=ignore_missing,
+            )
+        return self.filter_variants(
+            indexes=np.flatnonzero(np.asarray(duplicate_mask, dtype=bool)),
+            include=False,
+            inplace=inplace,
+        )
 
     def filter_differential_missingness(
             self,

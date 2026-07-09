@@ -12,8 +12,8 @@ import numpy as np
 DEFAULT_FORMATS = ("bed", "pgen", "vcf", "bcf", "bgen")
 DEFAULT_TIME_NAMES = (
     "snputils",
-    "bgen",
     "pgenlib",
+    "bgen",
     "pysnptools",
     "pandas-plink",
     "sgkit",
@@ -26,8 +26,8 @@ DEFAULT_TIME_NAMES = (
 )
 DEFAULT_MEMORY_NAMES = (
     "snputils",
-    "bgen",
     "pgenlib",
+    "bgen",
     "pysnptools",
     "pandas-plink",
     "sgkit",

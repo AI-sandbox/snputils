@@ -1,11 +1,12 @@
 import logging
-from typing import Iterator, List, Optional
+from typing import Any, Iterator, List, Optional
 import os
 
 import numpy as np
 import polars as pl
 import pgenlib as pg
 
+from snputils._utils.genotypes import sum_diploid_alleles
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
@@ -14,6 +15,28 @@ from snputils.snp.io.read._pgenlib import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _normalized_non_diploid_chromosome(chrom: Any) -> Optional[str]:
+    value = str(chrom).strip().lower()
+    if value.startswith("chrom"):
+        value = value[5:]
+    elif value.startswith("chr"):
+        value = value[3:]
+    elif value.startswith("chm"):
+        value = value[3:]
+    if value in {"x", "y", "m", "mt", "mitochondria", "mitochondrial", "mitochondrion"}:
+        return value
+    return None
+
+
+def _non_diploid_chromosome_mask_or_none(chromosomes: np.ndarray) -> Optional[np.ndarray]:
+    mask = np.fromiter(
+        (_normalized_non_diploid_chromosome(chrom) is not None for chrom in chromosomes),
+        dtype=bool,
+        count=len(chromosomes),
+    )
+    return mask if np.any(mask) else None
 
 
 def _open_textfile(filename):
@@ -250,16 +273,29 @@ class PGENReader(SNPBaseReader):
                     num_variants = pgen_reader.get_variant_ct()
                     variant_idxs = np.arange(num_variants, dtype=np.uint32)
 
+                hardcall_phase_present = pgen_reader.hardcall_phase_present()
                 auto_sum_strands = sum_strands is None
                 effective_sum_strands = bool(sum_strands)
                 if auto_sum_strands:
-                    effective_sum_strands = not pgen_reader.hardcall_phase_present()
-                elif not effective_sum_strands and not pgen_reader.hardcall_phase_present():
+                    effective_sum_strands = not hardcall_phase_present
+                elif not effective_sum_strands and not hardcall_phase_present:
                     raise ValueError(
                         "This PGEN file does not contain hardcall phase information, so "
                         "`sum_strands=False` is not supported. Use `sum_strands=True` "
                         "to load 0/1/2 genotype dosages."
                     )
+
+                non_diploid_mask = None
+                if effective_sum_strands:
+                    if only_read_pgen:
+                        log.debug(
+                            "Skipping chromosome-specific non-diploid correction because "
+                            ".pvar metadata is unavailable in GT-only fast path."
+                        )
+                    elif "#CHROM" in pvar.columns:
+                        non_diploid_mask = _non_diploid_chromosome_mask_or_none(
+                            pvar.get_column("#CHROM").to_numpy()
+                        )
 
                 # required arrays: variant_idxs + sample_idxs + genotypes
                 if not effective_sum_strands:
@@ -269,6 +305,12 @@ class PGENReader(SNPBaseReader):
                     )
                 else:
                     required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
+                    if non_diploid_mask is not None and hardcall_phase_present:
+                        num_non_diploid = int(np.sum(non_diploid_mask))
+                        required_ram += estimate_separate_strands_peak_bytes(
+                            num_non_diploid,
+                            num_samples,
+                        )
                 log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
                 if not effective_sum_strands:
@@ -281,6 +323,29 @@ class PGENReader(SNPBaseReader):
                 else:
                     genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                     pgen_reader.read_list(variant_idxs, genotypes)
+                    if non_diploid_mask is not None:
+                        if hardcall_phase_present:
+                            non_diploid_output_rows = np.flatnonzero(non_diploid_mask)
+                            non_diploid_variant_idxs = np.asarray(
+                                variant_idxs[non_diploid_output_rows],
+                                dtype=np.uint32,
+                            )
+                            separate = read_separate_strands(
+                                pgen_reader,
+                                non_diploid_variant_idxs,
+                                non_diploid_variant_idxs.size,
+                                num_samples,
+                            )
+                            genotypes[non_diploid_output_rows] = sum_diploid_alleles(
+                                separate[:, :, 0],
+                                separate[:, :, 1],
+                                missing_as_haploid=True,
+                            )
+                        else:
+                            log.debug(
+                                "Skipping non-diploid haploid-missing correction because "
+                                "separate allele calls are unavailable."
+                            )
             finally:
                 pgen_reader.close()
         else:

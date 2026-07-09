@@ -47,6 +47,42 @@ snpobj.sum_strands(inplace=True)
 snpobj2 = snpobj.copy()
 ```
 
+**Genotype QC helpers:**
+
+```python
+# Duplicate ID and coordinate checks
+sample_dups = snpobj.duplicate_sample_ids(as_dataframe=True)
+variant_id_dups = snpobj.duplicate_variant_ids(as_dataframe=True)
+coord_dups = snpobj.duplicate_variant_coordinates(as_dataframe=True)
+
+snpobj = snpobj.filter_duplicate_samples()
+snpobj = snpobj.filter_duplicate_variants(by="id")
+
+# Missingness, allele frequency, and HWE
+snpobj.variant_call_rate(as_dataframe=True)
+snpobj.sample_call_rate(as_dataframe=True)
+snpobj.maf(as_dataframe=True)
+snpobj.mac(as_dataframe=True)
+snpobj.hwe_pvalue(samples=controls, as_dataframe=True)
+
+snpobj = snpobj.filter_variants_by_call_rate(min_call_rate=0.98)
+snpobj = snpobj.filter_samples_by_call_rate(min_call_rate=0.98)
+snpobj = snpobj.filter_maf(maf=0.01)
+snpobj = snpobj.filter_hwe(min_p=1e-6, samples=controls)
+
+# Group-specific missingness, imputation quality, and sample-level QC
+snpobj.differential_missingness(groups, as_dataframe=True)
+snpobj = snpobj.filter_differential_missingness(groups, min_p=1e-5)
+snpobj = snpobj.filter_imputation_quality(min_r2=0.8)
+
+ld_pruned = snpobj.filter_ld_pruned(window_size=50, step_size=5, r2_threshold=0.2)
+ld_pruned.flag_heterozygosity_outliers(n_sd=3)
+ld_pruned.flag_related_pairs(threshold=0.0884)
+```
+
+For full signatures and additional examples, see {doc}`../api/snp` and the
+genotype QC workflow in {doc}`analysis`.
+
 **Writing:**
 
 ```python

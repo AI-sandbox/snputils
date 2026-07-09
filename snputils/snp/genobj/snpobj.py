@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 import numpy as np
@@ -6,7 +7,7 @@ import copy
 import warnings
 import re
 from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECKING
-from scipy.stats import mode
+from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
 from snputils._utils.genotypes import sum_diploid_genotypes
@@ -24,6 +25,17 @@ class SNPObject:
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
     SNP-level Local Ancestry Information (LAI).
     """
+    _DEFAULT_IMPUTATION_INFO_KEYS = (
+        "INFO",
+        "R2",
+        "DR2",
+        "IMP",
+        "INFO_SCORE",
+        "IMPUTE2_INFO",
+        "RSQ",
+        "ER2",
+    )
+
     def __init__(
         self,
         genotypes: Optional[np.ndarray] = None,
@@ -865,6 +877,2439 @@ class SNPObject:
             return freq_out, count_out
         return freq_out
 
+    @staticmethod
+    def _format_allele_stat_output(
+        values: np.ndarray,
+        sample_labels: Optional[Sequence[Any]],
+        cohort_column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        if sample_labels is None:
+            return pd.DataFrame({cohort_column: np.asarray(values).ravel()})
+
+        labels = np.asarray(sample_labels)
+        if labels.ndim != 1:
+            labels = labels.ravel()
+        pops = np.unique(labels)
+        return pd.DataFrame(values, columns=pops)
+
+    def _called_genotype_mask(self) -> np.ndarray:
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            called_entries = np.isfinite(gt) & (gt >= 0)
+        except TypeError as exc:
+            raise ValueError("'genotypes' must contain numeric values.") from exc
+
+        if gt.ndim == 3:
+            return np.all(called_entries, axis=2)
+        return called_entries
+
+    def _called_mask_for_samples(
+        self,
+        sample_indexes: np.ndarray,
+        *,
+        context: str,
+    ) -> np.ndarray:
+        sample_indexes = np.asarray(sample_indexes, dtype=int)
+        if self.calldata_gp is not None:
+            dosages = self._diploid_dosages(samples=sample_indexes, context=context)
+            return np.isfinite(dosages)
+
+        called = self._called_genotype_mask()
+        return called[:, sample_indexes]
+
+    def _sample_subset_indices(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]],
+    ) -> np.ndarray:
+        n_samples = self.n_samples
+        if samples is None:
+            return np.arange(n_samples, dtype=int)
+
+        selector = np.atleast_1d(np.asarray(samples)).ravel()
+        if selector.size == 0:
+            return np.array([], dtype=int)
+
+        if np.issubdtype(selector.dtype, np.bool_):
+            if selector.shape[0] != n_samples:
+                raise ValueError(
+                    f"Boolean 'samples' mask must have length equal to the number of samples ({n_samples}); "
+                    f"got {selector.shape[0]}."
+                )
+            return np.flatnonzero(selector)
+
+        if np.issubdtype(selector.dtype, np.integer):
+            out_of_bounds = selector[(selector < -n_samples) | (selector >= n_samples)]
+            if out_of_bounds.size > 0:
+                raise ValueError("One or more sample indexes are out of bounds.")
+            indexes = np.mod(selector, n_samples).astype(int, copy=False)
+            return np.array(list(dict.fromkeys(indexes.tolist())), dtype=int)
+
+        if self.samples is None:
+            raise ValueError("Sample names are required when 'samples' is not an index or boolean mask.")
+
+        sample_names = np.asarray(self.samples)
+        name_to_idx = {name: idx for idx, name in enumerate(sample_names)}
+        missing = [sample for sample in selector if sample not in name_to_idx]
+        if missing:
+            raise ValueError(f"The following specified samples were not found: {missing}")
+        indexes = [name_to_idx[sample] for sample in selector]
+        return np.array(list(dict.fromkeys(indexes)), dtype=int)
+
+    @staticmethod
+    def _validate_probability_threshold(name: str, value: float) -> float:
+        try:
+            threshold = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a numeric value between 0 and 1.") from exc
+        if not 0 <= threshold <= 1:
+            raise ValueError(f"'{name}' must be between 0 and 1.")
+        return threshold
+
+    @staticmethod
+    def _validate_call_rate_threshold(min_call_rate: float) -> float:
+        return SNPObject._validate_probability_threshold("min_call_rate", min_call_rate)
+
+    @staticmethod
+    def _validate_differential_missingness_test(test: str) -> str:
+        test = str(test).lower().replace("-", "_")
+        aliases = {
+            "auto": "auto",
+            "chi2": "chi2",
+            "chi_square": "chi2",
+            "chisq": "chi2",
+            "fisher": "fisher",
+            "fisher_exact": "fisher",
+        }
+        if test not in aliases:
+            raise ValueError("'test' must be one of 'auto', 'chi2', or 'fisher'.")
+        return aliases[test]
+
+    @staticmethod
+    def _validate_integer_parameter(name: str, value: int, min_value: int) -> int:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be an integer greater than or equal to {min_value}.") from exc
+        if not parsed.is_integer():
+            raise ValueError(f"'{name}' must be an integer greater than or equal to {min_value}.")
+        parsed_int = int(parsed)
+        if parsed_int < min_value:
+            raise ValueError(f"'{name}' must be greater than or equal to {min_value}.")
+        return parsed_int
+
+    @staticmethod
+    def _validate_nonnegative_parameter(name: str, value: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a non-negative numeric value.") from exc
+        if not np.isfinite(parsed) or parsed < 0:
+            raise ValueError(f"'{name}' must be non-negative.")
+        return parsed
+
+    @staticmethod
+    def _format_call_rate_output(
+        values: np.ndarray,
+        column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        return pd.DataFrame({column: np.asarray(values, dtype=float).ravel()})
+
+    def _format_sample_stat_output(
+        self,
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        column: str,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        data = {"sample_index": np.asarray(sample_indexes, dtype=int)}
+        if self.samples is not None:
+            data["sample"] = np.asarray(self.samples)[sample_indexes]
+        data[column] = np.asarray(values, dtype=float).ravel()
+        return pd.DataFrame(data)
+
+    @staticmethod
+    def _validate_duplicate_keep(keep: Union[str, bool]) -> Union[str, bool]:
+        if keep is False:
+            return False
+        if isinstance(keep, str):
+            normalized = keep.lower().replace("-", "_")
+            aliases: Dict[str, Union[str, bool]] = {
+                "first": "first",
+                "last": "last",
+                "false": False,
+                "all": False,
+                "none": False,
+            }
+            if normalized in aliases:
+                return aliases[normalized]
+        raise ValueError("'keep' must be 'first', 'last', or False.")
+
+    @staticmethod
+    def _duplicate_value_is_missing(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, np.generic):
+            value = value.item()
+        try:
+            if isinstance(value, float) and np.isnan(value):
+                return True
+        except TypeError:
+            pass
+        text = str(value).strip()
+        return text == "" or text == "."
+
+    @classmethod
+    def _duplicate_key(cls, value: Any) -> Any:
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, float) and np.isnan(value):
+            return ("__nan__",)
+        try:
+            hash(value)
+            return value
+        except TypeError:
+            return str(value)
+
+    @classmethod
+    def _duplicate_mask_and_groups(
+        cls,
+        keys: Sequence[Any],
+        keep: Union[str, bool],
+        valid: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        keep = cls._validate_duplicate_keep(keep)
+        n_values = len(keys)
+        if valid is None:
+            valid = np.ones(n_values, dtype=bool)
+        else:
+            valid = np.asarray(valid, dtype=bool).ravel()
+            if valid.shape[0] != n_values:
+                raise ValueError("'valid' must have the same length as duplicate keys.")
+
+        positions_by_key: Dict[Any, List[int]] = {}
+        for idx, key in enumerate(keys):
+            if not valid[idx]:
+                continue
+            positions_by_key.setdefault(key, []).append(idx)
+
+        duplicate_mask = np.zeros(n_values, dtype=bool)
+        duplicate_group = np.full(n_values, -1, dtype=int)
+        group_idx = 0
+        duplicate_groups = [
+            positions for positions in positions_by_key.values()
+            if len(positions) > 1
+        ]
+        duplicate_groups.sort(key=lambda positions: positions[0])
+        for positions in duplicate_groups:
+            duplicate_group[positions] = group_idx
+            group_idx += 1
+            if keep == "first":
+                marked = positions[1:]
+            elif keep == "last":
+                marked = positions[:-1]
+            else:
+                marked = positions
+            duplicate_mask[marked] = True
+
+        return duplicate_mask, duplicate_group
+
+    @classmethod
+    def _duplicate_mask_for_values(
+        cls,
+        values: np.ndarray,
+        keep: Union[str, bool],
+        ignore_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        values = np.asarray(values, dtype=object).ravel()
+        valid = np.ones(values.shape[0], dtype=bool)
+        if ignore_missing:
+            valid = np.array(
+                [not cls._duplicate_value_is_missing(value) for value in values],
+                dtype=bool,
+            )
+        keys = [cls._duplicate_key(value) for value in values]
+        return cls._duplicate_mask_and_groups(keys, keep=keep, valid=valid)
+
+    @staticmethod
+    def _normalize_variant_coordinate_fields(
+        fields: Union[str, Sequence[str]],
+    ) -> Tuple[Tuple[str, str], ...]:
+        if isinstance(fields, str):
+            raw_fields = [
+                field.strip()
+                for field in fields.replace("+", ",").split(",")
+                if field.strip()
+            ]
+        else:
+            raw_fields = [str(field).strip() for field in fields]
+
+        if not raw_fields:
+            raise ValueError("'fields' must include at least one variant metadata field.")
+
+        aliases = {
+            "chrom": ("variants_chrom", "chrom"),
+            "chromosome": ("variants_chrom", "chrom"),
+            "#chrom": ("variants_chrom", "chrom"),
+            "pos": ("variants_pos", "pos"),
+            "position": ("variants_pos", "pos"),
+            "ref": ("variants_ref", "ref"),
+            "reference": ("variants_ref", "ref"),
+            "alt": ("variants_alt", "alt"),
+            "alternate": ("variants_alt", "alt"),
+            "id": ("variants_id", "id"),
+            "variant_id": ("variants_id", "id"),
+        }
+
+        normalized: List[Tuple[str, str]] = []
+        seen: set[str] = set()
+        for field in raw_fields:
+            key = field.lower()
+            if key not in aliases:
+                raise ValueError(
+                    "'fields' entries must be among chrom, pos, ref, alt, or id."
+                )
+            attr, label = aliases[key]
+            if attr in seen:
+                continue
+            seen.add(attr)
+            normalized.append((attr, label))
+
+        return tuple(normalized)
+
+    def _variant_coordinate_arrays(
+        self,
+        fields: Union[str, Sequence[str]],
+    ) -> Tuple[Tuple[str, str], List[np.ndarray]]:
+        normalized_fields = self._normalize_variant_coordinate_fields(fields)
+        arrays: List[np.ndarray] = []
+        n_snps = self.n_snps
+        for attr, _ in normalized_fields:
+            values = getattr(self, attr)
+            if values is None:
+                raise ValueError(f"'{attr}' is required for duplicate variant coordinate QC.")
+            arr = np.asarray(values, dtype=object).ravel()
+            if arr.shape[0] != n_snps:
+                raise ValueError(
+                    f"'{attr}' must have length equal to the number of SNPs ({n_snps}); "
+                    f"got {arr.shape[0]}."
+                )
+            arrays.append(arr)
+        return normalized_fields, arrays
+
+    @classmethod
+    def _duplicate_mask_for_rows(
+        cls,
+        arrays: Sequence[np.ndarray],
+        keep: Union[str, bool],
+        ignore_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if not arrays:
+            raise ValueError("At least one array is required for duplicate row QC.")
+
+        n_values = arrays[0].shape[0]
+        valid = np.ones(n_values, dtype=bool)
+        keys: List[Tuple[Any, ...]] = []
+        for idx in range(n_values):
+            row = tuple(array[idx] for array in arrays)
+            if ignore_missing and any(cls._duplicate_value_is_missing(value) for value in row):
+                valid[idx] = False
+            keys.append(tuple(cls._duplicate_key(value) for value in row))
+
+        return cls._duplicate_mask_and_groups(keys, keep=keep, valid=valid)
+
+    @staticmethod
+    def _validate_duplicate_variant_by(by: str) -> str:
+        key = str(by).lower().replace("-", "_")
+        aliases = {
+            "id": "id",
+            "ids": "id",
+            "variant_id": "id",
+            "variant_ids": "id",
+            "coordinate": "coordinates",
+            "coordinates": "coordinates",
+            "coord": "coordinates",
+            "coords": "coordinates",
+            "position": "coordinates",
+            "positions": "coordinates",
+        }
+        if key not in aliases:
+            raise ValueError("'by' must be either 'id' or 'coordinates'.")
+        return aliases[key]
+
+    @staticmethod
+    def _group_labels_missing_mask(labels: np.ndarray) -> np.ndarray:
+        try:
+            import pandas as pd
+
+            missing = np.asarray(pd.isna(labels), dtype=bool)
+        except Exception:
+            missing = np.zeros(labels.shape, dtype=bool)
+            for idx, value in enumerate(labels):
+                missing[idx] = value is None or (
+                    isinstance(value, float) and np.isnan(value)
+                )
+
+        string_labels = labels.astype(str)
+        missing |= np.char.strip(string_labels) == ""
+        return missing
+
+    @staticmethod
+    def _hashable_group_label(label: Any) -> Any:
+        if isinstance(label, np.generic):
+            label = label.item()
+        try:
+            hash(label)
+            return label
+        except TypeError:
+            return str(label)
+
+    @staticmethod
+    def _encode_group_labels(labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        group_to_index: Dict[Any, int] = {}
+        group_names: List[Any] = []
+        group_ids = np.empty(labels.shape[0], dtype=int)
+
+        for idx, label in enumerate(labels):
+            key = SNPObject._hashable_group_label(label)
+            if key not in group_to_index:
+                group_to_index[key] = len(group_names)
+                group_names.append(label)
+            group_ids[idx] = group_to_index[key]
+
+        if len(group_names) < 2:
+            raise ValueError("'groups' must contain at least two non-missing groups.")
+
+        return np.asarray(group_names, dtype=object), group_ids
+
+    def _align_group_labels_by_sample(
+        self,
+        source_samples: Sequence[Any],
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        *,
+        source_name: str,
+    ) -> np.ndarray:
+        if self.samples is None:
+            raise ValueError(
+                f"Sample names are required to align group labels from {source_name}."
+            )
+
+        values = np.asarray(values, dtype=object)
+        if values.ndim != 1:
+            values = values.ravel()
+
+        source_samples = np.asarray(source_samples, dtype=object).ravel()
+        if source_samples.shape[0] != values.shape[0]:
+            raise ValueError(
+                f"{source_name} sample/value length mismatch: "
+                f"{source_samples.shape[0]} samples but {values.shape[0]} values."
+            )
+
+        source_names = [str(sample) for sample in source_samples.tolist()]
+        if len(set(source_names)) != len(source_names):
+            raise ValueError(f"{source_name} sample IDs must be unique.")
+
+        value_by_sample = {
+            sample_name: values[idx] for idx, sample_name in enumerate(source_names)
+        }
+        selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+        missing = [
+            str(sample) for sample in selected_samples
+            if str(sample) not in value_by_sample
+        ]
+        if missing:
+            raise ValueError(
+                f"{source_name} is missing group labels for samples: {missing}"
+            )
+
+        return np.asarray(
+            [value_by_sample[str(sample)] for sample in selected_samples],
+            dtype=object,
+        )
+
+    def _extract_group_column_values(
+        self,
+        values: np.ndarray,
+        *,
+        group_column: Optional[str],
+        names: Optional[Sequence[str]],
+        source_name: str,
+    ) -> np.ndarray:
+        values = np.asarray(values, dtype=object)
+        if values.ndim == 1:
+            if group_column is not None and names is not None and group_column not in names:
+                raise ValueError(f"Group column '{group_column}' was not found in {source_name}.")
+            return values
+
+        if values.ndim != 2:
+            raise ValueError(f"{source_name} group values must be one- or two-dimensional.")
+
+        if group_column is None:
+            if values.shape[1] == 1:
+                return values[:, 0]
+            raise ValueError(
+                f"`group_column` is required when {source_name} contains multiple columns."
+            )
+
+        if names is None:
+            raise ValueError(f"{source_name} does not expose column names for `group_column`.")
+
+        names = [str(name) for name in names]
+        if str(group_column) not in names:
+            raise ValueError(f"Group column '{group_column}' was not found in {source_name}.")
+        return values[:, names.index(str(group_column))]
+
+    def _group_labels_for_samples(
+        self,
+        groups: Any,
+        sample_indexes: np.ndarray,
+        *,
+        group_column: Optional[str] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes = np.asarray(sample_indexes, dtype=int)
+        n_selected = sample_indexes.shape[0]
+        if n_selected == 0:
+            raise ValueError("At least one sample is required for differential missingness.")
+
+        labels: np.ndarray
+
+        if isinstance(groups, Mapping):
+            if self.samples is None:
+                raise ValueError("Sample names are required when 'groups' is a mapping.")
+            selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+            string_mapping = {str(key): value for key, value in groups.items()}
+            missing = [
+                str(sample) for sample in selected_samples
+                if str(sample) not in string_mapping
+            ]
+            if missing:
+                raise ValueError(f"'groups' is missing labels for samples: {missing}")
+            labels = np.asarray(
+                [string_mapping[str(sample)] for sample in selected_samples],
+                dtype=object,
+            )
+        elif hasattr(groups, "phen_df"):
+            frame = groups.phen_df
+            names = [str(name) for name in getattr(groups, "phenotype_names", [])]
+            if group_column is None:
+                if len(names) != 1:
+                    raise ValueError(
+                        "`group_column` is required when a MultiPhenotypeObject "
+                        "contains multiple phenotype columns."
+                    )
+                group_column = names[0]
+            columns_by_name = {str(col): col for col in frame.columns}
+            if str(group_column) not in columns_by_name:
+                raise ValueError(f"Group column '{group_column}' was not found in 'groups'.")
+            resolved_group_column = columns_by_name[str(group_column)]
+            labels = self._align_group_labels_by_sample(
+                getattr(groups, "samples"),
+                np.asarray(frame.loc[:, resolved_group_column], dtype=object),
+                sample_indexes,
+                source_name="groups",
+            )
+        elif hasattr(groups, "columns") and hasattr(groups, "loc"):
+            if group_column is None:
+                raise ValueError("`group_column` is required when 'groups' is a DataFrame.")
+            columns_by_name = {str(col): col for col in groups.columns}
+            if str(group_column) not in columns_by_name:
+                raise ValueError(f"Group column '{group_column}' was not found in 'groups'.")
+            resolved_group_column = columns_by_name[str(group_column)]
+            values = np.asarray(groups.loc[:, resolved_group_column], dtype=object)
+            index_values = np.asarray(groups.index, dtype=object)
+            if self.samples is not None:
+                selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+                index_strings = {str(sample) for sample in index_values.tolist()}
+                if all(str(sample) in index_strings for sample in selected_samples):
+                    labels = self._align_group_labels_by_sample(
+                        index_values,
+                        values,
+                        sample_indexes,
+                        source_name="groups",
+                    )
+                elif values.shape[0] == self.n_samples:
+                    labels = values[sample_indexes]
+                else:
+                    raise ValueError(
+                        "'groups' DataFrame must be indexed by sample ID or have "
+                        "one row per SNPObject sample."
+                    )
+            elif values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            else:
+                raise ValueError(
+                    "'groups' DataFrame must have one row per SNPObject sample when "
+                    "SNPObject.samples is None."
+                )
+        elif hasattr(groups, "index") and hasattr(groups, "to_numpy"):
+            values = np.asarray(groups.to_numpy(), dtype=object).ravel()
+            index_values = np.asarray(groups.index, dtype=object)
+            if self.samples is not None:
+                selected_samples = np.asarray(self.samples, dtype=object)[sample_indexes]
+                index_strings = {str(sample) for sample in index_values.tolist()}
+                if all(str(sample) in index_strings for sample in selected_samples):
+                    labels = self._align_group_labels_by_sample(
+                        index_values,
+                        values,
+                        sample_indexes,
+                        source_name="groups",
+                    )
+                elif values.shape[0] == self.n_samples:
+                    labels = values[sample_indexes]
+                elif values.shape[0] == n_selected:
+                    labels = values
+                else:
+                    raise ValueError(
+                        "'groups' Series must be indexed by sample ID, have one "
+                        "entry per SNPObject sample, or have one entry per selected sample."
+                    )
+            elif values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            elif values.shape[0] == n_selected:
+                labels = values
+            else:
+                raise ValueError(
+                    "'groups' Series must have one entry per SNPObject sample or "
+                    "one entry per selected sample when SNPObject.samples is None."
+                )
+        elif hasattr(groups, "samples") and hasattr(groups, "values"):
+            names = (
+                getattr(groups, "phenotype_names", None)
+                or getattr(groups, "covariate_names", None)
+                or getattr(groups, "names", None)
+            )
+            values = self._extract_group_column_values(
+                np.asarray(getattr(groups, "values"), dtype=object),
+                group_column=group_column,
+                names=names,
+                source_name=type(groups).__name__,
+            )
+            labels = self._align_group_labels_by_sample(
+                getattr(groups, "samples"),
+                values,
+                sample_indexes,
+                source_name=type(groups).__name__,
+            )
+        else:
+            values = np.asarray(groups, dtype=object)
+            if values.ndim == 0:
+                raise ValueError("'groups' must contain one label per sample.")
+            if values.ndim != 1:
+                values = values.ravel()
+            if values.shape[0] == self.n_samples:
+                labels = values[sample_indexes]
+            elif values.shape[0] == n_selected:
+                labels = values
+            else:
+                raise ValueError(
+                    "'groups' must have length equal to the number of SNPObject "
+                    "samples or the number of selected samples."
+                )
+
+        missing = self._group_labels_missing_mask(labels)
+        if np.any(missing):
+            raise ValueError("'groups' contains missing labels for selected samples.")
+
+        group_names, group_ids = self._encode_group_labels(labels)
+        return labels, group_names, group_ids
+
+    @staticmethod
+    def _chi2_missingness_stats(
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        missing_counts = np.asarray(missing_counts, dtype=float)
+        called_counts = np.asarray(called_counts, dtype=float)
+        n_variants, n_groups = missing_counts.shape
+
+        p_values = np.full(n_variants, np.nan, dtype=float)
+        statistics = np.full(n_variants, np.nan, dtype=float)
+        min_expected = np.full(n_variants, np.nan, dtype=float)
+
+        group_totals = missing_counts + called_counts
+        row_missing = missing_counts.sum(axis=1)
+        row_called = called_counts.sum(axis=1)
+        grand_total = row_missing + row_called
+
+        degenerate = (grand_total > 0) & ((row_missing == 0) | (row_called == 0))
+        p_values[degenerate] = 1.0
+        statistics[degenerate] = 0.0
+        min_expected[degenerate] = 0.0
+
+        valid = (
+            (grand_total > 0)
+            & (row_missing > 0)
+            & (row_called > 0)
+            & np.all(group_totals > 0, axis=1)
+        )
+        if not np.any(valid):
+            return p_values, statistics, min_expected
+
+        expected_missing = (
+            row_missing[valid, None] * group_totals[valid] / grand_total[valid, None]
+        )
+        expected_called = (
+            row_called[valid, None] * group_totals[valid] / grand_total[valid, None]
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            stat = (
+                ((missing_counts[valid] - expected_missing) ** 2 / expected_missing).sum(axis=1)
+                + ((called_counts[valid] - expected_called) ** 2 / expected_called).sum(axis=1)
+            )
+        statistics[valid] = stat
+        p_values[valid] = chi2.sf(stat, df=n_groups - 1)
+        min_expected[valid] = np.minimum(
+            expected_missing.min(axis=1),
+            expected_called.min(axis=1),
+        )
+        return p_values, statistics, min_expected
+
+    @staticmethod
+    def _fisher_missingness_stats(
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if missing_counts.shape[1] != 2:
+            raise ValueError("Fisher exact differential missingness requires exactly two groups.")
+
+        n_variants = missing_counts.shape[0]
+        p_values = np.full(n_variants, np.nan, dtype=float)
+        statistics = np.full(n_variants, np.nan, dtype=float)
+
+        row_missing = missing_counts.sum(axis=1)
+        row_called = called_counts.sum(axis=1)
+        degenerate = (row_missing == 0) | (row_called == 0)
+        p_values[degenerate] = 1.0
+
+        for variant_idx in np.flatnonzero(~degenerate):
+            table = np.vstack(
+                [missing_counts[variant_idx], called_counts[variant_idx]]
+            ).astype(int, copy=False)
+            result = fisher_exact(table)
+            if hasattr(result, "statistic"):
+                statistics[variant_idx] = float(result.statistic)
+                p_values[variant_idx] = float(result.pvalue)
+            else:
+                odds_ratio, p_value = result
+                statistics[variant_idx] = float(odds_ratio)
+                p_values[variant_idx] = float(p_value)
+
+        return p_values, statistics
+
+    @staticmethod
+    def _differential_missingness_column_name(
+        prefix: str,
+        group_name: Any,
+        used: Dict[str, int],
+    ) -> str:
+        label = str(group_name).strip() or "group"
+        column = f"{prefix}_{label}"
+        seen = used.get(column, 0)
+        used[column] = seen + 1
+        if seen:
+            return f"{column}_{seen + 1}"
+        return column
+
+    def _format_differential_missingness_output(
+        self,
+        p_values: np.ndarray,
+        statistics: np.ndarray,
+        method_names: np.ndarray,
+        missing_counts: np.ndarray,
+        called_counts: np.ndarray,
+        group_names: np.ndarray,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return p_values
+
+        import pandas as pd
+
+        total_missing = missing_counts.sum(axis=1)
+        total_called = called_counts.sum(axis=1)
+        total = total_missing + total_called
+        data: Dict[str, Any] = {
+            "differential_missingness_pvalue": np.asarray(p_values, dtype=float),
+            "statistic": np.asarray(statistics, dtype=float),
+            "test": np.asarray(method_names, dtype=object),
+            "missing_count": total_missing.astype(int),
+            "called_count": total_called.astype(int),
+            "n_samples": total.astype(int),
+        }
+
+        column_counts = {column: 1 for column in data}
+        for group_idx, group_name in enumerate(group_names):
+            for prefix, values in (
+                ("missing_count", missing_counts[:, group_idx].astype(int)),
+                ("called_count", called_counts[:, group_idx].astype(int)),
+            ):
+                column = self._differential_missingness_column_name(
+                    prefix,
+                    group_name,
+                    column_counts,
+                )
+                data[column] = values
+
+            group_total = missing_counts[:, group_idx] + called_counts[:, group_idx]
+            rate = np.full(group_total.shape, np.nan, dtype=float)
+            nonzero = group_total > 0
+            rate[nonzero] = missing_counts[nonzero, group_idx] / group_total[nonzero]
+            column = self._differential_missingness_column_name(
+                "missing_rate",
+                group_name,
+                column_counts,
+            )
+            data[column] = rate
+
+        return pd.DataFrame(data)
+
+    def _hard_call_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        context: str = "HWE exact test",
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if self.genotypes is None:
+            raise ValueError("Genotype data `genotypes` is None.")
+
+        sample_indexes = self._sample_subset_indices(samples)
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            gt = gt.astype(float, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'genotypes' must contain numeric hard calls.") from exc
+
+        if gt.ndim == 3:
+            subset = gt[:, sample_indexes, :]
+            called_entries = np.isfinite(subset) & (subset >= 0)
+            called = np.all(called_entries, axis=2)
+            called_alleles = subset[called]
+            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
+                raise ValueError(f"{context} requires biallelic hard calls encoded as 0/1 alleles.")
+            dosages = np.full(called.shape, np.nan, dtype=float)
+            if called_alleles.size:
+                dosages[called] = called_alleles.sum(axis=1)
+            return dosages, called
+
+        subset = gt[:, sample_indexes]
+        called = np.isfinite(subset) & (subset >= 0)
+        called_dosages = subset[called]
+        valid_dosages = (
+            np.isclose(called_dosages, 0)
+            | np.isclose(called_dosages, 1)
+            | np.isclose(called_dosages, 2)
+        )
+        if called_dosages.size and not np.all(valid_dosages):
+            raise ValueError(f"{context} requires hard-call dosages encoded as 0, 1, or 2.")
+        dosages = np.where(called, np.rint(subset), np.nan)
+        return dosages, called
+
+    def _diploid_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        context: str = "Diploid dosage calculation",
+    ) -> np.ndarray:
+        sample_indexes = self._sample_subset_indices(samples)
+
+        if self.calldata_gp is not None:
+            dosage = np.asarray(self.dosage(), dtype=float)
+            if dosage.ndim != 2:
+                raise ValueError("Expected dosage data with shape (n_snps, n_samples).")
+            subset = dosage[:, sample_indexes]
+            called = np.isfinite(subset) & (subset >= 0)
+            called_dosages = subset[called]
+            if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
+                raise ValueError(f"{context} requires dosages between 0 and 2.")
+            return np.where(called, subset, np.nan)
+
+        if self.genotypes is None:
+            raise ValueError("SNPObject requires either `genotypes` or `calldata_gp` for dosage-based QC.")
+
+        gt = np.asarray(self.genotypes)
+        if gt.ndim not in (2, 3):
+            raise ValueError("'genotypes' must be a 2D or 3D array.")
+
+        try:
+            gt = gt.astype(float, copy=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'genotypes' must contain numeric values.") from exc
+
+        if gt.ndim == 3:
+            subset = gt[:, sample_indexes, :]
+            called_entries = np.isfinite(subset) & (subset >= 0)
+            called = np.all(called_entries, axis=2)
+            called_alleles = subset[called]
+            if called_alleles.size and not np.all(np.isclose(called_alleles, 0) | np.isclose(called_alleles, 1)):
+                raise ValueError(f"{context} requires biallelic allele calls encoded as 0/1.")
+            dosages = np.full(called.shape, np.nan, dtype=float)
+            if called_alleles.size:
+                dosages[called] = called_alleles.sum(axis=1)
+            return dosages
+
+        subset = gt[:, sample_indexes]
+        called = np.isfinite(subset) & (subset >= 0)
+        called_dosages = subset[called]
+        if called_dosages.size and np.any((called_dosages < 0) | (called_dosages > 2)):
+            raise ValueError(f"{context} requires dosages between 0 and 2.")
+        return np.where(called, subset, np.nan)
+
+    def _sample_heterozygosity_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes = self._sample_subset_indices(samples)
+        dosages, called = self._hard_call_dosages(
+            samples=sample_indexes,
+            context="Sample heterozygosity",
+        )
+        heterozygous = called & (dosages == 1)
+        called_counts = called.sum(axis=0).astype(float)
+        observed_hets = heterozygous.sum(axis=0).astype(float)
+        heterozygosity = np.full(called_counts.shape, np.nan, dtype=float)
+        nonzero = called_counts > 0
+        heterozygosity[nonzero] = observed_hets[nonzero] / called_counts[nonzero]
+        return sample_indexes, dosages, called, observed_hets, called_counts, heterozygosity
+
+    def _sample_inbreeding_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        sample_indexes, dosages, called, observed_hets, called_counts, _ = (
+            self._sample_heterozygosity_components(samples=samples)
+        )
+        called_alleles = called.sum(axis=1).astype(float) * 2.0
+        alt_counts = np.where(called, dosages, 0.0).sum(axis=1)
+        allele_freq = np.full(called_alleles.shape, np.nan, dtype=float)
+        variant_called = called_alleles > 0
+        allele_freq[variant_called] = alt_counts[variant_called] / called_alleles[variant_called]
+        expected_per_variant = 2.0 * allele_freq * (1.0 - allele_freq)
+        expected_hets = np.where(
+            called,
+            np.nan_to_num(expected_per_variant, nan=0.0)[:, None],
+            0.0,
+        ).sum(axis=0)
+
+        inbreeding = np.full(observed_hets.shape, np.nan, dtype=float)
+        informative = expected_hets > 0
+        inbreeding[informative] = 1.0 - (observed_hets[informative] / expected_hets[informative])
+        return sample_indexes, inbreeding, expected_hets, observed_hets, called_counts
+
+    @staticmethod
+    def _hwe_exact_pvalue(obs_hets: int, obs_hom_ref: int, obs_hom_alt: int) -> float:
+        genotypes = obs_hets + obs_hom_ref + obs_hom_alt
+        if genotypes == 0:
+            return np.nan
+
+        obs_hom_rare = min(obs_hom_ref, obs_hom_alt)
+        rare_copies = 2 * obs_hom_rare + obs_hets
+        probs = np.zeros(rare_copies + 1, dtype=float)
+
+        mid = int(rare_copies * (2 * genotypes - rare_copies) / (2 * genotypes))
+        if (rare_copies & 1) != (mid & 1):
+            mid += 1
+
+        probs[mid] = 1.0
+        total = probs[mid]
+
+        curr_hets = mid
+        curr_hom_rare = (rare_copies - curr_hets) // 2
+        curr_hom_common = genotypes - curr_hets - curr_hom_rare
+        while curr_hets > 1:
+            prob = (
+                probs[curr_hets]
+                * curr_hets
+                * (curr_hets - 1)
+                / (4.0 * (curr_hom_rare + 1) * (curr_hom_common + 1))
+            )
+            curr_hets -= 2
+            curr_hom_rare += 1
+            curr_hom_common += 1
+            probs[curr_hets] = prob
+            total += prob
+
+        curr_hets = mid
+        curr_hom_rare = (rare_copies - curr_hets) // 2
+        curr_hom_common = genotypes - curr_hets - curr_hom_rare
+        while curr_hets <= rare_copies - 2:
+            prob = (
+                probs[curr_hets]
+                * 4.0
+                * curr_hom_rare
+                * curr_hom_common
+                / ((curr_hets + 2) * (curr_hets + 1))
+            )
+            curr_hets += 2
+            curr_hom_rare -= 1
+            curr_hom_common -= 1
+            probs[curr_hets] = prob
+            total += prob
+
+        probs /= total
+        p_value = probs[probs <= probs[obs_hets] + 1e-12].sum()
+        return min(1.0, float(p_value))
+
+    def _ld_dosages(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> np.ndarray:
+        return self._diploid_dosages(samples=samples, context="LD pruning")
+
+    @staticmethod
+    def _pairwise_r2_ignore_missing(
+        first: np.ndarray,
+        second: np.ndarray,
+        min_samples: int,
+    ) -> float:
+        valid = np.isfinite(first) & np.isfinite(second)
+        if np.count_nonzero(valid) < min_samples:
+            return np.nan
+
+        x = first[valid]
+        y = second[valid]
+        x_centered = x - x.mean()
+        y_centered = y - y.mean()
+        ssx = np.dot(x_centered, x_centered)
+        ssy = np.dot(y_centered, y_centered)
+        if ssx <= 0 or ssy <= 0:
+            return np.nan
+
+        r = np.dot(x_centered, y_centered) / np.sqrt(ssx * ssy)
+        return min(1.0, float(r * r))
+
+    @staticmethod
+    def _validate_relatedness_method(method: str) -> str:
+        method = str(method).lower().replace("-", "_")
+        if method not in {"grm", "ibd"}:
+            raise ValueError("'method' must be either 'grm' or 'ibd'.")
+        return method
+
+    @staticmethod
+    def _validate_relatedness_scale(scale: str) -> str:
+        aliases = {
+            "relationship": "relationship",
+            "grm": "relationship",
+            "kinship": "kinship",
+        }
+        key = str(scale).lower().replace("-", "_")
+        if key not in aliases:
+            raise ValueError("'scale' must be either 'relationship' or 'kinship'.")
+        return aliases[key]
+
+    @staticmethod
+    def _validate_positive_parameter(name: str, value: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{name}' must be a positive numeric value.") from exc
+        if not np.isfinite(parsed) or parsed <= 0:
+            raise ValueError(f"'{name}' must be positive.")
+        return parsed
+
+    @staticmethod
+    def _validate_optional_nonnegative_parameter(name: str, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        return SNPObject._validate_nonnegative_parameter(name, value)
+
+    def _format_relatedness_output(
+        self,
+        values: np.ndarray,
+        sample_indexes: np.ndarray,
+        as_dataframe: bool,
+    ) -> Any:
+        if not as_dataframe:
+            return values
+
+        import pandas as pd
+
+        if self.samples is not None:
+            labels = np.asarray(self.samples)[sample_indexes]
+        else:
+            labels = sample_indexes
+        return pd.DataFrame(values, index=labels, columns=labels)
+
+    def _grm_relatedness_components(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        min_variants: int = 1,
+        block_size: int = 10000,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        min_variants = self._validate_integer_parameter("min_variants", min_variants, 1)
+        block_size = self._validate_integer_parameter("block_size", block_size, 1)
+        sample_indexes = self._sample_subset_indices(samples)
+        dosages = self._diploid_dosages(samples=sample_indexes, context="GRM relatedness")
+        n_samples = dosages.shape[1]
+
+        numerator = np.zeros((n_samples, n_samples), dtype=float)
+        counts = np.zeros((n_samples, n_samples), dtype=np.int64)
+
+        for start in range(0, dosages.shape[0], block_size):
+            stop = min(start + block_size, dosages.shape[0])
+            block = dosages[start:stop]
+            called = np.isfinite(block)
+            called_per_variant = called.sum(axis=1)
+            informative_input = called_per_variant > 0
+            if not np.any(informative_input):
+                continue
+
+            allele_sum = np.where(called, block, 0.0).sum(axis=1)
+            allele_freq = np.full(block.shape[0], np.nan, dtype=float)
+            allele_freq[informative_input] = (
+                allele_sum[informative_input] / (2.0 * called_per_variant[informative_input])
+            )
+            variance = 2.0 * allele_freq * (1.0 - allele_freq)
+            informative = np.isfinite(variance) & (variance > 0)
+            if not np.any(informative):
+                continue
+
+            block = block[informative].astype(float, copy=True)
+            called = called[informative]
+            allele_freq = allele_freq[informative]
+            scale = np.sqrt(2.0 * allele_freq * (1.0 - allele_freq))
+            standardized = (block - (2.0 * allele_freq[:, None])) / scale[:, None]
+            standardized[~called] = 0.0
+
+            called_int = called.astype(np.int64, copy=False)
+            numerator += standardized.T @ standardized
+            counts += called_int.T @ called_int
+
+        relatedness = np.full(numerator.shape, np.nan, dtype=float)
+        valid = counts >= min_variants
+        relatedness[valid] = numerator[valid] / counts[valid]
+        return sample_indexes, relatedness, counts
+
+    def _ibd_relatedness_components(
+        self,
+        ibdobj: Any,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        *,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+        if ibdobj is None:
+            raise ValueError("`ibdobj` is required when method='ibd'.")
+        if self.samples is None:
+            raise ValueError("Sample names are required on `SNPObject.samples` when method='ibd'.")
+
+        genome_length_cm = self._validate_positive_parameter("genome_length_cm", genome_length_cm)
+        min_segment_cm = self._validate_optional_nonnegative_parameter("min_segment_cm", min_segment_cm)
+        sample_indexes = self._sample_subset_indices(samples)
+        sample_names = np.asarray(self.samples)
+        sample_to_position = {str(sample_names[idx]): pos for pos, idx in enumerate(sample_indexes)}
+        n_samples = sample_indexes.size
+
+        length_cm = getattr(ibdobj, "length_cm", None)
+        if length_cm is None:
+            raise ValueError("`ibdobj.length_cm` is required for IBD relatedness.")
+        length_cm = np.asarray(length_cm, dtype=float)
+
+        sample_id_1 = np.asarray(getattr(ibdobj, "sample_id_1"))
+        sample_id_2 = np.asarray(getattr(ibdobj, "sample_id_2"))
+        if sample_id_1.shape[0] != length_cm.shape[0] or sample_id_2.shape[0] != length_cm.shape[0]:
+            raise ValueError("IBD sample ID arrays must have the same length as `ibdobj.length_cm`.")
+
+        segment_type = getattr(ibdobj, "segment_type", None)
+        if segment_type is not None:
+            segment_type = np.asarray(segment_type)
+            if segment_type.shape[0] != length_cm.shape[0]:
+                raise ValueError("`ibdobj.segment_type` must have the same length as `ibdobj.length_cm`.")
+        elif segment_types is not None:
+            raise ValueError("`ibdobj.segment_type` is required when filtering by `segment_types`.")
+
+        mask = np.isfinite(length_cm) & (length_cm > 0)
+        if min_segment_cm is not None:
+            mask &= length_cm >= min_segment_cm
+        if segment_types is not None:
+            allowed_types = np.char.upper(np.atleast_1d(np.asarray(segment_types, dtype=str)))
+            observed_types = np.char.upper(segment_type.astype(str))
+            mask &= np.isin(observed_types, allowed_types)
+
+        ibd1_cm = np.zeros((n_samples, n_samples), dtype=float)
+        ibd2_cm = np.zeros((n_samples, n_samples), dtype=float)
+        weighted_ibd_cm = np.zeros((n_samples, n_samples), dtype=float)
+        n_segments = np.zeros((n_samples, n_samples), dtype=np.int64)
+
+        for idx in np.flatnonzero(mask):
+            first = sample_to_position.get(str(sample_id_1[idx]))
+            second = sample_to_position.get(str(sample_id_2[idx]))
+            if first is None or second is None or first == second:
+                continue
+
+            segment_length = float(length_cm[idx])
+            type_label = "" if segment_type is None else str(segment_type[idx]).upper()
+            weight = 2.0 if type_label == "IBD2" else 1.0
+            i, j = (first, second) if first < second else (second, first)
+
+            if weight == 2.0:
+                ibd2_cm[i, j] += segment_length
+            else:
+                ibd1_cm[i, j] += segment_length
+            weighted_ibd_cm[i, j] += segment_length * weight
+            n_segments[i, j] += 1
+
+        for matrix in (ibd1_cm, ibd2_cm, weighted_ibd_cm, n_segments):
+            matrix += matrix.T
+
+        relationship = weighted_ibd_cm / (2.0 * genome_length_cm)
+        np.fill_diagonal(relationship, 1.0)
+
+        metrics = {
+            "n_segments": n_segments,
+            "ibd1_cm": ibd1_cm,
+            "ibd2_cm": ibd2_cm,
+            "weighted_ibd_cm": weighted_ibd_cm,
+        }
+        return sample_indexes, relationship, metrics
+
+    def _sample_call_rate_from_dosages(self, sample_indexes: np.ndarray) -> np.ndarray:
+        dosages = self._diploid_dosages(samples=sample_indexes, context="Relatedness pruning")
+        if dosages.shape[0] == 0:
+            return np.full(dosages.shape[1], np.nan, dtype=float)
+        return np.isfinite(dosages).mean(axis=0)
+
+    def _sample_call_rate_for_pruning(self, sample_indexes: np.ndarray) -> np.ndarray:
+        try:
+            return self._sample_call_rate_from_dosages(sample_indexes)
+        except ValueError:
+            return np.ones(sample_indexes.shape[0], dtype=float)
+
+    @staticmethod
+    def _normalize_imputation_info_keys(
+        info_keys: Optional[Union[str, Sequence[str]]],
+    ) -> Tuple[str, ...]:
+        if info_keys is None:
+            return SNPObject._DEFAULT_IMPUTATION_INFO_KEYS
+        if isinstance(info_keys, str):
+            return (info_keys,)
+        return tuple(str(key) for key in info_keys)
+
+    @staticmethod
+    def _coerce_info_float(value: Any) -> float:
+        if value is None:
+            return np.nan
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        if isinstance(value, (list, tuple, np.ndarray)):
+            arr = np.asarray(value, dtype=object).ravel()
+            if arr.size == 0:
+                return np.nan
+            value = arr[0]
+        if isinstance(value, str):
+            value = value.strip()
+            if "," in value:
+                value = value.split(",", 1)[0].strip()
+            if value in {"", ".", "NA", "NaN", "nan", "None"}:
+                return np.nan
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return np.nan
+        if not np.isfinite(parsed):
+            return np.nan
+        return parsed
+
+    @classmethod
+    def _parse_imputation_info_value(cls, info: Any, info_keys: Tuple[str, ...]) -> float:
+        if info is None:
+            return np.nan
+        if isinstance(info, bytes):
+            info = info.decode("utf-8", errors="ignore")
+        if isinstance(info, dict):
+            upper_map = {str(key).upper(): value for key, value in info.items()}
+            for key in info_keys:
+                if key in info:
+                    return cls._coerce_info_float(info[key])
+                value = upper_map.get(key.upper())
+                if value is not None:
+                    return cls._coerce_info_float(value)
+            return np.nan
+        if isinstance(info, (int, float, np.number)):
+            return cls._coerce_info_float(info)
+
+        info_str = str(info).strip()
+        if info_str in {"", ".", "NA", "NaN", "nan", "None"}:
+            return np.nan
+        bare_value = cls._coerce_info_float(info_str)
+        if np.isfinite(bare_value) and "=" not in info_str and ";" not in info_str:
+            return bare_value
+
+        fields = {}
+        for item in info_str.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            fields[key.strip()] = value.strip()
+        upper_fields = {key.upper(): value for key, value in fields.items()}
+        for key in info_keys:
+            if key in fields:
+                return cls._coerce_info_float(fields[key])
+            value = upper_fields.get(key.upper())
+            if value is not None:
+                return cls._coerce_info_float(value)
+        return np.nan
+
+    def _imputation_r2_from_info(
+        self,
+        info_keys: Optional[Union[str, Sequence[str]]] = None,
+    ) -> np.ndarray:
+        info = self.variants_info
+        values = np.full(self.n_snps, np.nan, dtype=float)
+        if info is None:
+            return values
+
+        info_array = np.asarray(info, dtype=object).ravel()
+        if info_array.size == 0:
+            return values
+        if info_array.shape[0] != self.n_snps:
+            raise ValueError(
+                "`variants_info` must have length equal to the number of variants "
+                "to extract imputation quality metrics."
+            )
+
+        keys = self._normalize_imputation_info_keys(info_keys)
+        for idx, info_value in enumerate(info_array):
+            values[idx] = self._parse_imputation_info_value(info_value, keys)
+        return values
+
+    @staticmethod
+    def _validate_bgen_probability_padding(probabilities: np.ndarray) -> np.ndarray:
+        finite = np.isfinite(probabilities)
+        widths = finite.sum(axis=1)
+        for sample_idx, width in enumerate(widths):
+            if width == 0:
+                continue
+            if finite[sample_idx, :width].all() and not finite[sample_idx, width:].any():
+                continue
+            raise ValueError(
+                "BGEN probability rows may only contain NaN values as all-missing rows "
+                "or as trailing padding for lower-ploidy samples."
+            )
+        return widths
+
+    def _imputation_r2_from_gp(self) -> np.ndarray:
+        if self.calldata_gp is None:
+            return np.full(self.n_snps, np.nan, dtype=float)
+
+        if self.variants_alt is not None:
+            alt = np.asarray(self.variants_alt, dtype=object).astype(str)
+            multiallelic = np.char.find(alt, ",") >= 0
+            if np.any(multiallelic):
+                first = int(np.flatnonzero(multiallelic)[0])
+                raise ValueError(
+                    "BGEN imputation R2 currently supports only biallelic variants; "
+                    f"variant {first} has ALT={alt[first]!r}."
+                )
+
+        gp = np.asarray(self.calldata_gp, dtype=np.float32)
+        if gp.ndim != 3:
+            raise ValueError("`calldata_gp` must have shape (n_snps, n_samples, n_probabilities).")
+
+        r2 = np.full(gp.shape[0], np.nan, dtype=float)
+        for variant_idx, probabilities in enumerate(gp):
+            widths = self._validate_bgen_probability_padding(probabilities)
+            phased = self._bgen_biallelic_rows_look_phased(probabilities, widths)
+            dosage_sum = 0.0
+            ploidy_sum = 0.0
+            posterior_var_sum = 0.0
+            called = 0
+
+            for sample_idx, width in enumerate(widths):
+                width = int(width)
+                if width == 0:
+                    continue
+
+                sample_probs = probabilities[sample_idx, :width].astype(float, copy=False)
+
+                if phased:
+                    if width % 2 != 0:
+                        raise ValueError(
+                            f"Cannot compute phased BGEN imputation R2 for variant {variant_idx}, "
+                            f"sample {sample_idx}: expected an even probability width, got {width}."
+                        )
+                    haplotypes = sample_probs.reshape(width // 2, 2)
+                    haplotype_sums = haplotypes.sum(axis=1)
+                    if not np.all(np.isfinite(haplotype_sums)) or np.any(haplotype_sums <= 0):
+                        continue
+                    haplotypes = haplotypes / haplotype_sums[:, None]
+                    alt_probs = haplotypes[:, 1]
+                    ploidy = alt_probs.size
+                    dosage = float(alt_probs.sum())
+                    posterior_var = float(np.sum(alt_probs * (1.0 - alt_probs)))
+                else:
+                    prob_sum = sample_probs.sum()
+                    if not np.isfinite(prob_sum) or prob_sum <= 0:
+                        continue
+                    sample_probs = sample_probs / prob_sum
+                    ploidy = width - 1
+                    if ploidy <= 0:
+                        continue
+                    genotype_values = np.arange(width, dtype=float)
+                    dosage = float(np.dot(sample_probs, genotype_values))
+                    expected_square = float(np.dot(sample_probs, genotype_values * genotype_values))
+                    posterior_var = max(0.0, expected_square - dosage * dosage)
+
+                dosage_sum += dosage
+                ploidy_sum += float(ploidy)
+                posterior_var_sum += posterior_var
+                called += 1
+
+            if called == 0 or ploidy_sum <= 0:
+                continue
+
+            allele_freq = dosage_sum / ploidy_sum
+            denominator = (ploidy_sum / called) * allele_freq * (1.0 - allele_freq)
+            if denominator <= 0:
+                continue
+
+            estimate = 1.0 - (posterior_var_sum / called) / denominator
+            r2[variant_idx] = min(1.0, max(0.0, float(estimate)))
+        return r2
+
+    def _imputation_r2_from_dosage(self) -> np.ndarray:
+        dosages = self._ld_dosages()
+        r2 = np.full(dosages.shape[0], np.nan, dtype=float)
+        for variant_idx, row in enumerate(dosages):
+            called = np.isfinite(row)
+            if np.count_nonzero(called) < 2:
+                continue
+
+            observed = row[called]
+            allele_freq = observed.mean() / 2.0
+            denominator = 2.0 * allele_freq * (1.0 - allele_freq)
+            if denominator <= 0:
+                continue
+
+            estimate = np.var(observed, ddof=0) / denominator
+            r2[variant_idx] = min(1.0, max(0.0, float(estimate)))
+        return r2
+
+    @staticmethod
+    def _validate_imputation_r2_source(source: str) -> str:
+        aliases = {
+            "auto": "auto",
+            "info": "info",
+            "gp": "gp",
+            "bgen": "gp",
+            "probability": "gp",
+            "probabilities": "gp",
+            "calldata_gp": "gp",
+            "dosage": "dosage",
+            "dosages": "dosage",
+            "ds": "dosage",
+        }
+        key = str(source).lower().replace("-", "_")
+        if key not in aliases:
+            raise ValueError("'source' must be one of 'auto', 'info', 'gp', or 'dosage'.")
+        return aliases[key]
+
+    def allele_counts(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        return_called: bool = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP alternate allele counts from observed calls.
+
+        This uses the same missing-data handling as :meth:`allele_freq`: missing
+        calls do not contribute to either the alternate allele count or the
+        called-allele denominator. For 2D dosage arrays, alternate allele counts
+        may be fractional when dosages are fractional.
+
+        Args:
+            sample_labels (sequence, optional):
+                Population label per sample. If None, computes cohort-level counts.
+            ancestry (str or int, optional):
+                If provided, compute ancestry-masked counts using SNP-level LAI.
+            laiobj (LocalAncestryObject, optional):
+                Optional LAI object used when `self.calldata_lai` is not set.
+            pseudohaploid (bool or int, default=False):
+                If True, detects pseudo-haploid samples using the same rule as
+                :meth:`allele_freq`. If an integer `n` is provided, checks the first
+                `n` SNPs.
+            return_called (bool, default=False):
+                If True, also return called-allele counts with the same shape as
+                the alternate allele counts.
+            as_dataframe (bool, default=False):
+                If True, return pandas DataFrame output.
+
+        Returns:
+            Alternate allele counts as a NumPy array (or DataFrame if
+            ``as_dataframe=True``). If ``return_called=True``, returns
+            ``(alt_counts, called_alleles)``.
+        """
+        allele_freq, called_alleles = self.allele_freq(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_counts=True,
+            as_dataframe=False,
+        )
+        allele_freq = np.asarray(allele_freq, dtype=float)
+        called_alleles = np.asarray(called_alleles)
+        called_float = called_alleles.astype(float, copy=False)
+
+        with np.errstate(invalid="ignore"):
+            alt_counts = allele_freq * called_float
+        alt_counts = np.where(called_float > 0, alt_counts, np.nan)
+
+        alt_out = self._format_allele_stat_output(
+            alt_counts,
+            sample_labels=sample_labels,
+            cohort_column="alt_allele_count",
+            as_dataframe=as_dataframe,
+        )
+        if not return_called:
+            return alt_out
+
+        called_out = self._format_allele_stat_output(
+            called_alleles,
+            sample_labels=sample_labels,
+            cohort_column="called_alleles",
+            as_dataframe=as_dataframe,
+        )
+        return alt_out, called_out
+
+    def maf(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP minor allele frequency from observed calls.
+
+        Missing calls are excluded from the denominator. Variants with no called
+        alleles return ``NaN``.
+        """
+        allele_freq = self.allele_freq(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_counts=False,
+            as_dataframe=False,
+        )
+        allele_freq = np.asarray(allele_freq, dtype=float)
+        with np.errstate(invalid="ignore"):
+            minor_af = np.minimum(allele_freq, 1.0 - allele_freq)
+        return self._format_allele_stat_output(
+            minor_af,
+            sample_labels=sample_labels,
+            cohort_column="maf",
+            as_dataframe=as_dataframe,
+        )
+
+    def mac(
+        self,
+        sample_labels: Optional[Sequence[Any]] = None,
+        ancestry: Optional[Union[str, int]] = None,
+        laiobj: Optional["LocalAncestryObject"] = None,
+        pseudohaploid: Union[bool, int] = False,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-SNP minor allele count from observed calls.
+
+        Missing calls are excluded from the denominator. Variants with no called
+        alleles return ``NaN``.
+        """
+        alt_counts, called_alleles = self.allele_counts(
+            sample_labels=sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+            return_called=True,
+            as_dataframe=False,
+        )
+        alt_counts = np.asarray(alt_counts, dtype=float)
+        called_alleles = np.asarray(called_alleles, dtype=float)
+        with np.errstate(invalid="ignore"):
+            minor_ac = np.minimum(alt_counts, called_alleles - alt_counts)
+        minor_ac = np.where(called_alleles > 0, minor_ac, np.nan)
+        return self._format_allele_stat_output(
+            minor_ac,
+            sample_labels=sample_labels,
+            cohort_column="mac",
+            as_dataframe=as_dataframe,
+        )
+
+    def variant_call_rate(self, as_dataframe: bool = False) -> Any:
+        """
+        Compute the fraction of samples with non-missing genotype calls per variant.
+
+        Missing calls are represented as negative values or NaN. For 3D genotype
+        arrays, a sample is counted as called only when all allele entries are
+        non-missing.
+        """
+        called = self._called_genotype_mask()
+        if called.shape[1] == 0:
+            call_rate = np.full(called.shape[0], np.nan, dtype=float)
+        else:
+            call_rate = called.mean(axis=1)
+        return self._format_call_rate_output(
+            call_rate,
+            column="variant_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def sample_call_rate(self, as_dataframe: bool = False) -> Any:
+        """
+        Compute the fraction of variants with non-missing genotype calls per sample.
+
+        Missing calls are represented as negative values or NaN. For 3D genotype
+        arrays, a genotype is counted as called only when all allele entries are
+        non-missing.
+        """
+        called = self._called_genotype_mask()
+        if called.shape[0] == 0:
+            call_rate = np.full(called.shape[1], np.nan, dtype=float)
+        else:
+            call_rate = called.mean(axis=0)
+        return self._format_call_rate_output(
+            call_rate,
+            column="sample_call_rate",
+            as_dataframe=as_dataframe,
+        )
+
+    def duplicate_sample_ids(
+        self,
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate sample IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                IDs.
+            as_dataframe (bool, default=False):
+                If True, return a report with sample indexes, IDs, duplicate
+                flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over samples, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        if self.samples is None:
+            raise ValueError("Sample IDs `samples` are required for duplicate sample ID QC.")
+
+        samples = np.asarray(self.samples, dtype=object).ravel()
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_values(
+            samples,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "sample_index": np.arange(samples.shape[0], dtype=int),
+                "sample": samples,
+                "is_duplicate": duplicate_mask,
+                "duplicate_group": duplicate_group,
+            }
+        )
+
+    def duplicate_variant_ids(
+        self,
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate variant IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                IDs.
+            as_dataframe (bool, default=False):
+                If True, return a report with variant indexes, IDs, duplicate
+                flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over variants, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        if self.variants_id is None:
+            raise ValueError("Variant IDs `variants_id` are required for duplicate variant ID QC.")
+
+        variant_ids = np.asarray(self.variants_id, dtype=object).ravel()
+        n_snps = self.n_snps
+        if variant_ids.shape[0] != n_snps:
+            raise ValueError(
+                f"'variants_id' must have length equal to the number of SNPs ({n_snps}); "
+                f"got {variant_ids.shape[0]}."
+            )
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_values(
+            variant_ids,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "variant_index": np.arange(variant_ids.shape[0], dtype=int),
+                "variant_id": variant_ids,
+                "is_duplicate": duplicate_mask,
+                "duplicate_group": duplicate_group,
+            }
+        )
+
+    def duplicate_variant_coordinates(
+        self,
+        fields: Union[str, Sequence[str]] = ("chrom", "pos", "ref", "alt"),
+        keep: Union[str, bool] = "first",
+        ignore_missing: bool = True,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Identify duplicate variants by metadata coordinates.
+
+        By default, variants are compared by chromosome, position, reference
+        allele, and alternate allele. Pass a narrower ``fields`` value such as
+        ``("chrom", "pos")`` to flag variants sharing only a genomic position.
+
+        Args:
+            fields (str or sequence of str, default=("chrom", "pos", "ref", "alt")):
+                Variant metadata fields used as the duplicate key. Supported
+                values are ``"chrom"``, ``"pos"``, ``"ref"``, ``"alt"``, and
+                ``"id"``.
+            keep ({"first", "last", False}, default="first"):
+                Which duplicate entry to keep unmarked. ``"first"`` marks all
+                but the first entry in each duplicate group, ``"last"`` marks
+                all but the last, and False marks all members of duplicate
+                groups.
+            ignore_missing (bool, default=True):
+                If True, rows with missing key fields are not considered
+                duplicates.
+            as_dataframe (bool, default=False):
+                If True, return a report with variant indexes, key fields,
+                duplicate flags, and duplicate group IDs.
+
+        Returns:
+            Boolean duplicate mask over variants, or a pandas DataFrame if
+            ``as_dataframe=True``.
+        """
+        normalized_fields, arrays = self._variant_coordinate_arrays(fields)
+        duplicate_mask, duplicate_group = self._duplicate_mask_for_rows(
+            arrays,
+            keep=keep,
+            ignore_missing=ignore_missing,
+        )
+        if not as_dataframe:
+            return duplicate_mask
+
+        import pandas as pd
+
+        data: Dict[str, Any] = {
+            "variant_index": np.arange(arrays[0].shape[0], dtype=int)
+        }
+        for (_, label), array in zip(normalized_fields, arrays):
+            data[label] = array
+        data["is_duplicate"] = duplicate_mask
+        data["duplicate_group"] = duplicate_group
+        return pd.DataFrame(data)
+
+    def differential_missingness(
+        self,
+        groups: Any,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        test: str = "auto",
+        min_expected: float = 5.0,
+        group_column: Optional[str] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Test whether genotype missingness differs across sample groups per variant.
+
+        Missingness is computed from genotype calls or BGEN genotype
+        probabilities. For 3D genotype arrays, a sample is counted as called
+        only when all allele entries are non-missing. ``groups`` may be a
+        sequence aligned to samples, a mapping keyed by sample ID, a pandas
+        Series/DataFrame, or a snputils phenotype/covariate-style object with
+        ``samples`` and ``values`` attributes.
+
+        Args:
+            groups:
+                Group labels, such as case/control status or genotyping batch.
+            samples (str or array_like, optional):
+                Optional sample IDs, sample indexes, or boolean mask selecting
+                samples used for the test.
+            test (str, default="auto"):
+                Statistical test. ``"chi2"`` uses the chi-square test of
+                independence for 2xK tables. ``"fisher"`` uses Fisher's exact
+                test and requires exactly two groups. ``"auto"`` uses chi-square
+                except for two-group variants with any expected cell below
+                ``min_expected``, where it uses Fisher's exact test.
+            min_expected (float, default=5.0):
+                Expected cell-count cutoff used by ``test="auto"``.
+            group_column (str, optional):
+                Column name to use when ``groups`` contains multiple columns.
+            as_dataframe (bool, default=False):
+                If True, return p-values, test names, statistics, and per-group
+                missing/called counts as a pandas DataFrame.
+
+        Returns:
+            NumPy array of p-values, or a DataFrame if ``as_dataframe=True``.
+        """
+        test = self._validate_differential_missingness_test(test)
+        min_expected = self._validate_nonnegative_parameter("min_expected", min_expected)
+        sample_indexes = self._sample_subset_indices(samples)
+        _, group_names, group_ids = self._group_labels_for_samples(
+            groups,
+            sample_indexes,
+            group_column=group_column,
+        )
+        n_groups = group_names.shape[0]
+        if test == "fisher" and n_groups != 2:
+            raise ValueError("Fisher exact differential missingness requires exactly two groups.")
+
+        called = self._called_mask_for_samples(
+            sample_indexes,
+            context="Differential missingness",
+        )
+        if called.shape[1] != group_ids.shape[0]:
+            raise ValueError("Internal error: group labels and selected samples are misaligned.")
+
+        group_one_hot = np.zeros((group_ids.shape[0], n_groups), dtype=np.int64)
+        group_one_hot[np.arange(group_ids.shape[0]), group_ids] = 1
+        missing_counts = (~called).astype(np.int64, copy=False) @ group_one_hot
+        called_counts = called.astype(np.int64, copy=False) @ group_one_hot
+
+        chi2_p, chi2_stat, expected_min = self._chi2_missingness_stats(
+            missing_counts,
+            called_counts,
+        )
+        method_names = np.full(called.shape[0], "chi2", dtype=object)
+
+        if test == "chi2" or (test == "auto" and n_groups > 2):
+            p_values = chi2_p
+            statistics = chi2_stat
+        elif test == "fisher":
+            p_values, statistics = self._fisher_missingness_stats(
+                missing_counts,
+                called_counts,
+            )
+            method_names[:] = "fisher"
+        else:
+            p_values = chi2_p.copy()
+            statistics = chi2_stat.copy()
+            row_missing = missing_counts.sum(axis=1)
+            row_called = called_counts.sum(axis=1)
+            use_fisher = (
+                np.isfinite(expected_min)
+                & (expected_min < min_expected)
+                & (row_missing > 0)
+                & (row_called > 0)
+            )
+            if np.any(use_fisher):
+                fisher_p, fisher_stat = self._fisher_missingness_stats(
+                    missing_counts,
+                    called_counts,
+                )
+                p_values[use_fisher] = fisher_p[use_fisher]
+                statistics[use_fisher] = fisher_stat[use_fisher]
+                method_names[use_fisher] = "fisher"
+
+        return self._format_differential_missingness_output(
+            p_values,
+            statistics,
+            method_names,
+            missing_counts,
+            called_counts,
+            group_names,
+            as_dataframe=as_dataframe,
+        )
+
+    def relatedness(
+        self,
+        method: str = "grm",
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        scale: str = "relationship",
+        min_variants: int = 1,
+        block_size: int = 10000,
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute sample relatedness.
+
+        ``method="grm"`` computes genotype-derived relatedness from diploid
+        biallelic dosages. Genotypes are standardized per variant as
+        ``(g - 2p) / sqrt(2p(1-p))`` and pairwise products are averaged over
+        variants where both samples are called. ``method="ibd"`` summarizes
+        already-called IBD segments from an ``IBDObject`` as
+        ``(IBD1 cM + 2 * IBD2 cM) / (2 * genome_length_cm)``.
+
+        Args:
+            method (str, default="grm"):
+                Relatedness estimator. Supported values are ``"grm"`` and ``"ibd"``.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            scale (str, default="relationship"):
+                ``"relationship"`` returns the relationship coefficient.
+                ``"kinship"`` returns half the relationship coefficient.
+            min_variants (int, default=1):
+                Minimum number of pairwise non-missing informative variants
+                required to report a finite GRM value.
+            block_size (int, default=10000):
+                Number of variants per block used while accumulating the GRM.
+            ibdobj (IBDObject, optional):
+                IBD segments used when ``method="ibd"``.
+            genome_length_cm (float, default=3400.0):
+                Diploid genome length denominator for IBD normalization.
+            min_segment_cm (float, optional):
+                Minimum IBD segment length to include.
+            segment_types (sequence of str, optional):
+                IBD segment types to include, such as ``["IBD1", "IBD2"]``.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame with sample labels.
+
+        Returns:
+            Square NumPy array of relatedness values, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        method = self._validate_relatedness_method(method)
+        scale = self._validate_relatedness_scale(scale)
+        if method == "grm":
+            sample_indexes, relationship, _ = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+        else:
+            sample_indexes, relationship, _ = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
+        values = relationship if scale == "relationship" else relationship / 2.0
+        return self._format_relatedness_output(
+            values,
+            sample_indexes=sample_indexes,
+            as_dataframe=as_dataframe,
+        )
+
+    def flag_related_pairs(
+        self,
+        threshold: float = 0.0884,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        min_variants: int = 1,
+        block_size: int = 10000,
+        method: str = "grm",
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
+    ) -> Any:
+        """
+        Return sample pairs with estimated kinship at or above ``threshold``.
+
+        The default threshold, 0.0884, is a commonly used second-degree kinship
+        cutoff. For ``method="grm"``, input variants should already be
+        appropriate for relatedness QC (autosomal, reasonably common, and
+        preferably LD-pruned). For ``method="ibd"``, pass an ``IBDObject`` via
+        ``ibdobj``.
+        """
+        threshold = self._validate_nonnegative_parameter("threshold", threshold)
+        method = self._validate_relatedness_method(method)
+        if method == "grm":
+            sample_indexes, relationship, counts = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+            extra_metrics = {"n_variants": counts}
+        else:
+            sample_indexes, relationship, extra_metrics = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
+        kinship = relationship / 2.0
+
+        columns = ["sample_index_1", "sample_index_2"]
+        include_names = self.samples is not None
+        if include_names:
+            columns.extend(["sample_1", "sample_2"])
+            sample_names = np.asarray(self.samples)
+        metric_columns = (
+            ["n_variants"]
+            if method == "grm"
+            else ["n_segments", "ibd1_cm", "ibd2_cm", "weighted_ibd_cm"]
+        )
+        columns.extend(["relationship", "kinship", *metric_columns])
+
+        records = []
+        n_samples = sample_indexes.size
+        for first in range(n_samples):
+            for second in range(first + 1, n_samples):
+                value = kinship[first, second]
+                if not np.isfinite(value) or value < threshold:
+                    continue
+                record = {
+                    "sample_index_1": int(sample_indexes[first]),
+                    "sample_index_2": int(sample_indexes[second]),
+                    "relationship": float(relationship[first, second]),
+                    "kinship": float(value),
+                }
+                if include_names:
+                    record["sample_1"] = sample_names[sample_indexes[first]]
+                    record["sample_2"] = sample_names[sample_indexes[second]]
+                for column in metric_columns:
+                    metric_value = extra_metrics[column][first, second]
+                    if column in {"n_variants", "n_segments"}:
+                        metric_value = int(metric_value)
+                    else:
+                        metric_value = float(metric_value)
+                    record[column] = metric_value
+                records.append(record)
+
+        import pandas as pd
+
+        return pd.DataFrame.from_records(records, columns=columns)
+
+    def prune_related_samples(
+        self,
+        threshold: float = 0.0884,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        inplace: bool = False,
+        method: str = "grm",
+        min_variants: int = 1,
+        block_size: int = 10000,
+        ibdobj: Any = None,
+        genome_length_cm: float = 3400.0,
+        min_segment_cm: Optional[float] = None,
+        segment_types: Optional[Sequence[str]] = None,
+    ) -> Optional['SNPObject']:
+        """
+        Greedily remove samples until no selected pair exceeds a kinship threshold.
+
+        At each step, the removed sample is chosen by: more flagged
+        relationships, then lower sample call rate, then later sample index.
+        Samples outside the optional ``samples`` subset are kept.
+        """
+        threshold = self._validate_nonnegative_parameter("threshold", threshold)
+        method = self._validate_relatedness_method(method)
+        if method == "grm":
+            sample_indexes, relationship, _ = self._grm_relatedness_components(
+                samples=samples,
+                min_variants=min_variants,
+                block_size=block_size,
+            )
+        else:
+            sample_indexes, relationship, _ = self._ibd_relatedness_components(
+                ibdobj=ibdobj,
+                samples=samples,
+                genome_length_cm=genome_length_cm,
+                min_segment_cm=min_segment_cm,
+                segment_types=segment_types,
+            )
+        kinship = relationship / 2.0
+        keep = np.ones(sample_indexes.size, dtype=bool)
+        call_rate = self._sample_call_rate_for_pruning(sample_indexes)
+
+        while np.count_nonzero(keep) > 1:
+            active = np.flatnonzero(keep)
+            active_kinship = kinship[np.ix_(active, active)]
+            related = np.triu(np.isfinite(active_kinship) & (active_kinship >= threshold), k=1)
+            if not np.any(related):
+                break
+
+            pair_positions = np.argwhere(related)
+            first_positions = active[pair_positions[:, 0]]
+            second_positions = active[pair_positions[:, 1]]
+            degrees = np.zeros(sample_indexes.size, dtype=int)
+            np.add.at(degrees, first_positions, 1)
+            np.add.at(degrees, second_positions, 1)
+            candidates = np.unique(np.concatenate([first_positions, second_positions]))
+
+            def removal_key(position: int) -> Tuple[int, float, int]:
+                rate = call_rate[position]
+                rate_key = float(rate) if np.isfinite(rate) else -np.inf
+                return degrees[position], -rate_key, int(sample_indexes[position])
+
+            remove_position = max(candidates, key=removal_key)
+            keep[remove_position] = False
+
+        removed_indexes = sample_indexes[~keep]
+        return self.filter_samples(indexes=removed_indexes, include=False, inplace=inplace)
+
+    def imputation_r2(
+        self,
+        source: str = "auto",
+        info_keys: Optional[Union[str, Sequence[str]]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-variant imputation quality R2/INFO values.
+
+        ``source="info"`` extracts scalar quality values from ``variants_info``
+        using common keys such as ``INFO``, ``R2``, ``DR2``, and ``IMP``.
+        ``source="gp"`` estimates an INFO-like value from genotype
+        probabilities as ``1 - mean(posterior variance) / expected genotype
+        variance``. ``source="dosage"`` computes empirical dosage R2 as
+        ``Var(DS) / expected genotype variance``. ``source="auto"`` uses INFO
+        values when available and fills missing values from genotype
+        probabilities, then dosages.
+
+        Args:
+            source (str, default="auto"):
+                One of ``"auto"``, ``"info"``, ``"gp"``, or ``"dosage"``.
+                Aliases such as ``"bgen"`` and ``"ds"`` are accepted.
+            info_keys (str or sequence of str, optional):
+                INFO field keys to search, in priority order. Defaults to common
+                imputation quality keys.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of imputation quality values, or a DataFrame if
+            ``as_dataframe=True``. Values unavailable from the selected source
+            are returned as NaN.
+        """
+        source = self._validate_imputation_r2_source(source)
+
+        if source == "info":
+            values = self._imputation_r2_from_info(info_keys=info_keys)
+        elif source == "gp":
+            values = self._imputation_r2_from_gp()
+        elif source == "dosage":
+            values = self._imputation_r2_from_dosage()
+        else:
+            values = np.full(self.n_snps, np.nan, dtype=float)
+
+            info_values = self._imputation_r2_from_info(info_keys=info_keys)
+            info_mask = np.isfinite(info_values)
+            values[info_mask] = info_values[info_mask]
+
+            missing = ~np.isfinite(values)
+            if np.any(missing) and self.calldata_gp is not None:
+                gp_values = self._imputation_r2_from_gp()
+                gp_mask = missing & np.isfinite(gp_values)
+                values[gp_mask] = gp_values[gp_mask]
+
+            missing = ~np.isfinite(values)
+            if np.any(missing) and self.genotypes is not None:
+                dosage_values = self._imputation_r2_from_dosage()
+                dosage_mask = missing & np.isfinite(dosage_values)
+                values[dosage_mask] = dosage_values[dosage_mask]
+
+        return self._format_call_rate_output(
+            np.asarray(values, dtype=float),
+            column="imputation_r2",
+            as_dataframe=as_dataframe,
+        )
+
+    def sample_heterozygosity(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute observed heterozygosity per sample.
+
+        The value is the fraction of called diploid biallelic genotypes that are
+        heterozygous. Missing calls are ignored. This QC statistic is typically
+        most useful after restricting to autosomal, reasonably common, LD-pruned
+        variants.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of per-sample heterozygosity, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        sample_indexes, _, _, _, _, heterozygosity = self._sample_heterozygosity_components(
+            samples=samples,
+        )
+        return self._format_sample_stat_output(
+            heterozygosity,
+            sample_indexes=sample_indexes,
+            column="heterozygosity",
+            as_dataframe=as_dataframe,
+        )
+
+    def sample_inbreeding_coefficient(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute per-sample inbreeding coefficients from observed and expected heterozygosity.
+
+        The coefficient is ``1 - observed_hets / expected_hets``, where expected
+        heterozygosity is summed from cohort allele frequencies estimated across
+        the selected samples. Missing calls are ignored per sample. This statistic
+        is typically most useful after restricting to autosomal, reasonably
+        common, LD-pruned variants.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of per-sample inbreeding coefficients, or a DataFrame if
+            ``as_dataframe=True``.
+        """
+        sample_indexes, inbreeding, _, _, _ = self._sample_inbreeding_components(
+            samples=samples,
+        )
+        return self._format_sample_stat_output(
+            inbreeding,
+            sample_indexes=sample_indexes,
+            column="inbreeding_coefficient",
+            as_dataframe=as_dataframe,
+        )
+
+    def flag_heterozygosity_outliers(
+        self,
+        n_sd: float = 3,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+    ) -> Any:
+        """
+        Build a per-sample heterozygosity outlier report.
+
+        Samples are flagged when their observed heterozygosity is more than
+        ``n_sd`` standard deviations from the mean among finite selected samples.
+        This is best run on autosomal, reasonably common, LD-pruned variants.
+
+        Args:
+            n_sd (float, default=3):
+                Number of standard deviations from the mean used for flagging.
+                Must be non-negative.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples.
+                If None, all samples are used.
+
+        Returns:
+            pandas.DataFrame:
+                Sample-level QC report with heterozygosity, inbreeding coefficient,
+                z-score, and outlier flag.
+        """
+        threshold = self._validate_nonnegative_parameter("n_sd", n_sd)
+        sample_indexes, _, _, observed_hets, called_counts, heterozygosity = (
+            self._sample_heterozygosity_components(samples=samples)
+        )
+        _, inbreeding, expected_hets, _, _ = self._sample_inbreeding_components(
+            samples=sample_indexes,
+        )
+
+        finite = np.isfinite(heterozygosity)
+        z_scores = np.full(heterozygosity.shape, np.nan, dtype=float)
+        outliers = np.zeros(heterozygosity.shape, dtype=bool)
+        if np.count_nonzero(finite) > 0:
+            mean = heterozygosity[finite].mean()
+            sd = heterozygosity[finite].std(ddof=0)
+            if sd > 0:
+                z_scores[finite] = (heterozygosity[finite] - mean) / sd
+                outliers[finite] = np.abs(z_scores[finite]) > threshold
+            else:
+                z_scores[finite] = 0.0
+
+        import pandas as pd
+
+        data = {
+            "sample_index": np.asarray(sample_indexes, dtype=int),
+            "called_genotypes": called_counts.astype(int),
+            "observed_heterozygotes": observed_hets.astype(int),
+            "expected_heterozygotes": expected_hets,
+            "heterozygosity": heterozygosity,
+            "inbreeding_coefficient": inbreeding,
+            "heterozygosity_z": z_scores,
+            "heterozygosity_outlier": outliers,
+        }
+        if self.samples is not None:
+            data = {
+                "sample_index": data["sample_index"],
+                "sample": np.asarray(self.samples)[sample_indexes],
+                **{key: value for key, value in data.items() if key != "sample_index"},
+            }
+        return pd.DataFrame(data)
+
+    def hwe_pvalue(
+        self,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        as_dataframe: bool = False,
+    ) -> Any:
+        """
+        Compute exact Hardy-Weinberg equilibrium p-values per variant.
+
+        HWE is computed from hard-called diploid biallelic genotypes only.
+        Missing calls are ignored. The optional ``samples`` argument can be used
+        to restrict the calculation to a control-only subset, using sample IDs,
+        sample indexes, or a boolean sample mask.
+
+        Args:
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting the samples
+                used for the HWE test. If None, all samples are used.
+            as_dataframe (bool, default=False):
+                If True, return a pandas DataFrame.
+
+        Returns:
+            NumPy array of HWE p-values, or a DataFrame if ``as_dataframe=True``.
+            Variants with no called genotypes in the selected samples return NaN.
+        """
+        dosages, called = self._hard_call_dosages(samples=samples)
+        p_values = np.full(dosages.shape[0], np.nan, dtype=float)
+
+        for variant_idx in range(dosages.shape[0]):
+            observed = dosages[variant_idx, called[variant_idx]]
+            if observed.size == 0:
+                continue
+
+            obs_hom_ref = int(np.count_nonzero(observed == 0))
+            obs_hets = int(np.count_nonzero(observed == 1))
+            obs_hom_alt = int(np.count_nonzero(observed == 2))
+            p_values[variant_idx] = self._hwe_exact_pvalue(
+                obs_hets=obs_hets,
+                obs_hom_ref=obs_hom_ref,
+                obs_hom_alt=obs_hom_alt,
+            )
+
+        return self._format_call_rate_output(
+            p_values,
+            column="hwe_pvalue",
+            as_dataframe=as_dataframe,
+        )
+
+    def ld_prune_mask(
+        self,
+        window_size: int = 50,
+        step_size: int = 5,
+        r2_threshold: float = 0.2,
+        samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+        min_samples: int = 3,
+    ) -> np.ndarray:
+        """
+        Build a greedy LD-pruning mask using sliding windows and pairwise r-squared.
+
+        Variants are processed in their current order. Within each window, the
+        earlier variant is kept and later variants with pairwise r-squared greater
+        than ``r2_threshold`` are removed. Windows advance by ``step_size`` and
+        previously removed variants stay removed.
+
+        Args:
+            window_size (int, default=50):
+                Number of variants per sliding window. Must be at least 2.
+            step_size (int, default=5):
+                Number of variants to advance the window each step. Must be at least 1.
+            r2_threshold (float, default=0.2):
+                Pairwise LD r-squared threshold. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples used
+                to estimate LD. If None, all samples are used.
+            min_samples (int, default=3):
+                Minimum number of pairwise non-missing samples needed to compute r-squared.
+
+        Returns:
+            np.ndarray:
+                Boolean mask aligned to variants, where True indicates retained variants.
+        """
+        window_size = self._validate_integer_parameter("window_size", window_size, 2)
+        step_size = self._validate_integer_parameter("step_size", step_size, 1)
+        min_samples = self._validate_integer_parameter("min_samples", min_samples, 2)
+        threshold = self._validate_probability_threshold("r2_threshold", r2_threshold)
+
+        dosages = self._ld_dosages(samples=samples)
+        n_snps = dosages.shape[0]
+        keep = np.ones(n_snps, dtype=bool)
+
+        for start in range(0, n_snps, step_size):
+            stop = min(start + window_size, n_snps)
+            if stop - start < 2:
+                continue
+
+            window_indexes = np.arange(start, stop)
+            for offset, first_idx in enumerate(window_indexes[:-1]):
+                if not keep[first_idx]:
+                    continue
+                for second_idx in window_indexes[offset + 1:]:
+                    if not keep[second_idx]:
+                        continue
+                    r2 = self._pairwise_r2_ignore_missing(
+                        dosages[first_idx],
+                        dosages[second_idx],
+                        min_samples=min_samples,
+                    )
+                    if np.isfinite(r2) and r2 > threshold:
+                        keep[second_idx] = False
+
+        return keep
+
     def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
         """
         Sum paternal and maternal strands.
@@ -1131,6 +3576,341 @@ class SNPObject:
             mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
+    def filter_variants_by_call_rate(
+            self,
+            min_call_rate: float = 0.98,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by genotype call rate.
+
+        Args:
+            min_call_rate (float, default=0.98):
+                Minimum fraction of samples with non-missing genotype calls.
+                Must be between 0 and 1.
+            include (bool, default=True):
+                If True, keeps variants with call rate greater than or equal to
+                ``min_call_rate``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_call_rate_threshold(min_call_rate)
+        call_rate = np.asarray(self.variant_call_rate(), dtype=float).ravel()
+        mask = np.isfinite(call_rate) & (call_rate >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_samples_by_call_rate(
+            self,
+            min_call_rate: float = 0.98,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter samples by genotype call rate.
+
+        Args:
+            min_call_rate (float, default=0.98):
+                Minimum fraction of variants with non-missing genotype calls.
+                Must be between 0 and 1.
+            include (bool, default=True):
+                If True, keeps samples with call rate greater than or equal to
+                ``min_call_rate``. If False, excludes those samples.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_call_rate_threshold(min_call_rate)
+        call_rate = np.asarray(self.sample_call_rate(), dtype=float).ravel()
+        mask = np.isfinite(call_rate) & (call_rate >= threshold)
+        indexes = np.where(mask)[0]
+        return self.filter_samples(indexes=indexes, include=include, inplace=inplace)
+
+    def filter_duplicate_samples(
+            self,
+            keep: Union[str, bool] = "first",
+            ignore_missing: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Remove duplicate sample IDs.
+
+        Args:
+            keep ({"first", "last", False}, default="first"):
+                Which sample in each duplicate ID group to keep. False removes
+                every sample belonging to a duplicate group.
+            ignore_missing (bool, default=True):
+                If True, empty strings and ``"."`` are not considered duplicate
+                sample IDs.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        duplicate_mask = np.asarray(
+            self.duplicate_sample_ids(
+                keep=keep,
+                ignore_missing=ignore_missing,
+            ),
+            dtype=bool,
+        )
+        return self.filter_samples(
+            indexes=np.flatnonzero(duplicate_mask),
+            include=False,
+            inplace=inplace,
+        )
+
+    def filter_duplicate_variants(
+            self,
+            by: str = "id",
+            fields: Union[str, Sequence[str]] = ("chrom", "pos", "ref", "alt"),
+            keep: Union[str, bool] = "first",
+            ignore_missing: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Remove duplicate variants by ID or coordinate key.
+
+        Args:
+            by (str, default="id"):
+                Duplicate key to use: ``"id"`` or ``"coordinates"``.
+            fields (str or sequence of str, default=("chrom", "pos", "ref", "alt")):
+                Coordinate fields used when ``by="coordinates"``.
+            keep ({"first", "last", False}, default="first"):
+                Which variant in each duplicate group to keep. False removes
+                every variant belonging to a duplicate group.
+            ignore_missing (bool, default=True):
+                If True, rows with missing key fields are not considered
+                duplicates.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        by = self._validate_duplicate_variant_by(by)
+        if by == "id":
+            duplicate_mask = self.duplicate_variant_ids(
+                keep=keep,
+                ignore_missing=ignore_missing,
+            )
+        else:
+            duplicate_mask = self.duplicate_variant_coordinates(
+                fields=fields,
+                keep=keep,
+                ignore_missing=ignore_missing,
+            )
+        return self.filter_variants(
+            indexes=np.flatnonzero(np.asarray(duplicate_mask, dtype=bool)),
+            include=False,
+            inplace=inplace,
+        )
+
+    def filter_differential_missingness(
+            self,
+            groups: Any,
+            min_p: float = 1e-5,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            test: str = "auto",
+            min_expected: float = 5.0,
+            group_column: Optional[str] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by differential missingness p-value.
+
+        Args:
+            groups:
+                Group labels passed to :meth:`differential_missingness`.
+            min_p (float, default=1e-5):
+                Minimum differential missingness p-value. Must be between 0
+                and 1. Variants below this threshold show evidence that
+                missingness differs by group.
+            samples (str or array_like, optional):
+                Optional sample IDs, sample indexes, or boolean mask selecting
+                samples used for the test.
+            test (str, default="auto"):
+                Statistical test passed to :meth:`differential_missingness`.
+            min_expected (float, default=5.0):
+                Expected cell-count cutoff used by ``test="auto"``.
+            group_column (str, optional):
+                Column name to use when ``groups`` contains multiple columns.
+            include (bool, default=True):
+                If True, keeps variants with p-value greater than or equal to
+                ``min_p``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a
+                filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies
+                ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_p", min_p)
+        p_values = np.asarray(
+            self.differential_missingness(
+                groups,
+                samples=samples,
+                test=test,
+                min_expected=min_expected,
+                group_column=group_column,
+            ),
+            dtype=float,
+        ).ravel()
+        mask = np.isfinite(p_values) & (p_values >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_imputation_quality(
+            self,
+            min_r2: float = 0.8,
+            source: str = "auto",
+            info_keys: Optional[Union[str, Sequence[str]]] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by imputation quality R2/INFO.
+
+        Args:
+            min_r2 (float, default=0.8):
+                Minimum imputation quality value. Must be between 0 and 1.
+            source (str, default="auto"):
+                Source used by :meth:`imputation_r2`: ``"auto"``, ``"info"``,
+                ``"gp"``, or ``"dosage"``.
+            info_keys (str or sequence of str, optional):
+                INFO field keys to search when extracting values from
+                ``variants_info``.
+            include (bool, default=True):
+                If True, keeps variants with imputation quality greater than or
+                equal to ``min_r2``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_r2", min_r2)
+        r2 = np.asarray(
+            self.imputation_r2(source=source, info_keys=info_keys),
+            dtype=float,
+        ).ravel()
+        mask = np.isfinite(r2) & (r2 >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_hwe(
+            self,
+            min_p: float = 1e-6,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by exact Hardy-Weinberg equilibrium p-value.
+
+        Args:
+            min_p (float, default=1e-6):
+                Minimum HWE p-value. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting the samples
+                used for the HWE test. This is intended for control-only HWE QC
+                in case-control GWAS.
+            include (bool, default=True):
+                If True, keeps variants with HWE p-value greater than or equal to
+                ``min_p``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        threshold = self._validate_probability_threshold("min_p", min_p)
+        p_values = np.asarray(self.hwe_pvalue(samples=samples), dtype=float).ravel()
+        mask = np.isfinite(p_values) & (p_values >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_ld_pruned(
+            self,
+            window_size: int = 50,
+            step_size: int = 5,
+            r2_threshold: float = 0.2,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            min_samples: int = 3,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants using greedy sliding-window LD pruning.
+
+        Args:
+            window_size (int, default=50):
+                Number of variants per sliding window. Must be at least 2.
+            step_size (int, default=5):
+                Number of variants to advance the window each step. Must be at least 1.
+            r2_threshold (float, default=0.2):
+                Pairwise LD r-squared threshold. Must be between 0 and 1.
+            samples (str or array_like, optional):
+                Sample IDs, sample indexes, or boolean mask selecting samples used
+                to estimate LD. If None, all samples are used.
+            min_samples (int, default=3):
+                Minimum number of pairwise non-missing samples needed to compute r-squared.
+            include (bool, default=True):
+                If True, keeps retained variants. If False, excludes retained variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        mask = self.ld_prune_mask(
+            window_size=window_size,
+            step_size=step_size,
+            r2_threshold=r2_threshold,
+            samples=samples,
+            min_samples=min_samples,
+        )
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def ld_prune(
+            self,
+            window_size: int = 50,
+            step_size: int = 5,
+            r2_threshold: float = 0.2,
+            samples: Optional[Union[str, Sequence[str], np.ndarray]] = None,
+            min_samples: int = 3,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Alias for :meth:`filter_ld_pruned`.
+        """
+        return self.filter_ld_pruned(
+            window_size=window_size,
+            step_size=step_size,
+            r2_threshold=r2_threshold,
+            samples=samples,
+            min_samples=min_samples,
+            include=True,
+            inplace=inplace,
+        )
+
     def filter_maf(
             self,
             maf: float = 0.01,
@@ -1163,11 +3943,44 @@ class SNPObject:
         if not 0 <= threshold <= 0.5:
             raise ValueError("'maf' must be between 0 and 0.5.")
 
-        allele_freq, called_alleles = self.allele_freq(return_counts=True)
-        allele_freq = np.asarray(allele_freq, dtype=float).ravel()
-        called_alleles = np.asarray(called_alleles).ravel()
-        minor_af = np.minimum(allele_freq, 1.0 - allele_freq)
-        mask = np.isfinite(minor_af) & (called_alleles > 0) & (minor_af >= threshold)
+        minor_af = np.asarray(self.maf(), dtype=float).ravel()
+        mask = np.isfinite(minor_af) & (minor_af >= threshold)
+        return self.filter_variants(mask=mask, include=include, inplace=inplace)
+
+    def filter_mac(
+            self,
+            mac: Union[int, float] = 20,
+            include: bool = True,
+            inplace: bool = False,
+        ) -> Optional['SNPObject']:
+        """
+        Filter variants by minor allele count.
+
+        The count is computed from observed allele calls only; missing calls do
+        not contribute to the denominator.
+
+        Args:
+            mac (int or float, default=20):
+                Minor allele count threshold. Must be non-negative.
+            include (bool, default=True):
+                If True, keeps variants with minor allele count greater than or
+                equal to ``mac``. If False, excludes those variants.
+            inplace (bool, default=False):
+                If True, modifies ``self`` in place. If False, returns a filtered copy.
+
+        Returns:
+            Optional[SNPObject]:
+                A filtered SNPObject if ``inplace=False``; otherwise modifies ``self`` and returns None.
+        """
+        try:
+            threshold = float(mac)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("'mac' must be a non-negative numeric value.") from exc
+        if threshold < 0:
+            raise ValueError("'mac' must be non-negative.")
+
+        minor_ac = np.asarray(self.mac(), dtype=float).ravel()
+        mask = np.isfinite(minor_ac) & (minor_ac >= threshold)
         return self.filter_variants(mask=mask, include=include, inplace=inplace)
 
     def filter_samples(

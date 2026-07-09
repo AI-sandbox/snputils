@@ -9,9 +9,10 @@ from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 
-DEFAULT_FORMATS = ("bed", "pgen", "vcf", "bcf")
+DEFAULT_FORMATS = ("bed", "pgen", "vcf", "bcf", "bgen")
 DEFAULT_TIME_NAMES = (
     "snputils",
+    "bgen",
     "pgenlib",
     "pysnptools",
     "pandas-plink",
@@ -25,6 +26,7 @@ DEFAULT_TIME_NAMES = (
 )
 DEFAULT_MEMORY_NAMES = (
     "snputils",
+    "bgen",
     "pgenlib",
     "pysnptools",
     "pandas-plink",
@@ -257,7 +259,7 @@ def plot_time_memory(
     fig, axs = plt.subplots(
         len(DEFAULT_FORMATS),
         2,
-        figsize=(17.75, 12.4),
+        figsize=(17.75, 15.3),
         sharex="col",
         gridspec_kw={"width_ratios": [1.35, 1.0]},
     )

@@ -9,7 +9,7 @@ from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 
-DEFAULT_FORMATS = ("bed", "pgen", "bgen", "vcf", "bcf")
+DEFAULT_FORMATS = ("bed", "pgen", "vcf", "bcf", "bgen")
 DEFAULT_TIME_NAMES = (
     "snputils",
     "pgenlib",

@@ -13,7 +13,12 @@ import numpy as np
 from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
-from snputils.snp.io.read.vcf import _parse_vcf_region, _vcf_region_matches
+from snputils.snp.io.read.vcf import (
+    _non_diploid_chromosome_mask_or_none,
+    _normalized_non_diploid_chromosome,
+    _parse_vcf_region,
+    _vcf_region_matches,
+)
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +165,28 @@ def _parse_bcf_header(text: str) -> _BCFHeader:
         info=info,
         formats=formats,
     )
+
+
+def _header_has_non_diploid_contigs(header: _BCFHeader) -> bool:
+    return any(
+        _normalized_non_diploid_chromosome(chrom) is not None
+        for chrom in header.contigs.values()
+    )
+
+
+def _non_diploid_contig_mask_or_none(
+    contig_ids: np.ndarray,
+    header: _BCFHeader,
+) -> Optional[np.ndarray]:
+    unique_ids = np.unique(contig_ids)
+    non_diploid_ids = {
+        int(contig_id)
+        for contig_id in unique_ids
+        if _normalized_non_diploid_chromosome(header.contigs[int(contig_id)]) is not None
+    }
+    if not non_diploid_ids:
+        return None
+    return np.isin(contig_ids, list(non_diploid_ids))
 
 
 def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
@@ -871,6 +898,7 @@ def _batch_decode_gt(
     n_records: int,
     sample_index_array: np.ndarray,
     sum_strands: bool,
+    missing_as_haploid: Optional[Union[bool, np.ndarray]] = None,
 ) -> np.ndarray:
     """Batch-decode GT data for all records using vectorized numpy operations.
 
@@ -942,7 +970,15 @@ def _batch_decode_gt(
             continue
 
         if sum_strands:
-            out[start:stop] = sum_diploid_genotypes(decoded)
+            chunk_missing_as_haploid = None
+            if missing_as_haploid is not None:
+                chunk_missing_as_haploid = missing_as_haploid
+                if not np.isscalar(missing_as_haploid):
+                    chunk_missing_as_haploid = np.asarray(missing_as_haploid)[start:stop]
+            out[start:stop] = sum_diploid_genotypes(
+                decoded,
+                missing_as_haploid=chunk_missing_as_haploid,
+            )
         else:
             _raise_if_unphased_bcf_gt(raw.reshape(-1, n_vals), decoded.reshape(-1, n_vals))
             out[start:stop] = decoded.astype(np.int8, copy=False)
@@ -1150,6 +1186,9 @@ class BCFReader(SNPBaseReader):
         need_gp = "GP" in selected_fields
         genotypes = None
         calldata_gp = None
+        non_diploid_chromosomes = None
+        if need_gt and sum_strands:
+            non_diploid_chromosomes = _non_diploid_contig_mask_or_none(contig_ids, header)
 
         # Batch GT decode
         if need_gt and n_records > 0:
@@ -1175,6 +1214,7 @@ class BCFReader(SNPBaseReader):
                     genotypes = _batch_decode_gt(
                         data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
                         n_file_samples, n_records, sample_index_array, sum_strands,
+                        missing_as_haploid=non_diploid_chromosomes,
                     )
                 else:
                     # Fallback: per-record GT decode
@@ -1200,7 +1240,14 @@ class BCFReader(SNPBaseReader):
                         )
                         gt = gt[sample_index_array]
                         if sum_strands:
-                            genotypes[i] = sum_diploid_genotypes(gt)
+                            missing_as_haploid = (
+                                non_diploid_chromosomes is not None
+                                and bool(non_diploid_chromosomes[i])
+                            )
+                            genotypes[i] = sum_diploid_genotypes(
+                                gt,
+                                missing_as_haploid=missing_as_haploid,
+                            )
                         else:
                             genotypes[i] = gt
 
@@ -1403,6 +1450,8 @@ class BCFReader(SNPBaseReader):
         """
         if body_offset >= len(data):
             return self._empty_snpobject(["GT"], file_samples, sample_index_array, sum_strands)
+        if sum_strands and _header_has_non_diploid_contigs(header):
+            return None
 
         first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
         n_fmt_n_samples = _U32.unpack_from(data, body_offset + 8 + 20)[0]
@@ -1479,6 +1528,8 @@ class BCFReader(SNPBaseReader):
         """Fast path for full-file GT plus core variant metadata reads."""
         if body_offset >= len(data):
             return self._empty_snpobject(selected_fields, file_samples, sample_index_array, sum_strands)
+        if sum_strands and _header_has_non_diploid_contigs(header):
+            return None
 
         first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
         n_fmt_n_samples = _U32.unpack_from(data, body_offset + 8 + 20)[0]
@@ -1652,6 +1703,10 @@ class BCFReader(SNPBaseReader):
             n_info = _U32.unpack_from(data, base + 16)[0] & 0xFFFF
             n_fmt = _U32.unpack_from(data, base + 20)[0] >> 24
             n_samples = _U32.unpack_from(data, base + 20)[0] & 0xFFFFFF
+            missing_as_haploid = (
+                sum_strands
+                and _normalized_non_diploid_chromosome(header.contigs[contig_id]) is not None
+            )
 
             if n_samples != n_file_samples:
                 raise ValueError(
@@ -1809,7 +1864,10 @@ class BCFReader(SNPBaseReader):
                     )
                     gt = gt[sample_index_array]
                     if sum_strands:
-                        genotypes[out_idx] = sum_diploid_genotypes(gt)
+                        genotypes[out_idx] = sum_diploid_genotypes(
+                            gt,
+                            missing_as_haploid=missing_as_haploid,
+                        )
                     else:
                         genotypes[out_idx] = gt
                     gt_seen = True

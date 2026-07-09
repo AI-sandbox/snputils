@@ -47,6 +47,18 @@ def _non_diploid_chromosome_mask_or_none(chromosomes: np.ndarray) -> Optional[np
     return mask if np.any(mask) else None
 
 
+def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
+    if value is None:
+        return "auto"
+
+    value = str(value).strip().lower()
+    if value not in {"auto", "autosomal", "mixed"}:
+        raise ValueError(
+            "chromosome_ploidy must be one of None, 'auto', 'autosomal', or 'mixed'."
+        )
+    return value
+
+
 def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):
     """
     Get the column names and separator used in the VCF file.
@@ -571,7 +583,7 @@ def _parse_gt_sample_bytes(
     n_samples_total: int,
     sample_idxs: np.ndarray,
     sum_strands: bool,
-    non_diploid_chromosome: bool = False,
+    non_diploid_chromosome: Optional[bool] = None,
 ) -> np.ndarray:
     sample_bytes = sample_bytes.rstrip(b"\r\n")
     n_selected = int(sample_idxs.size)
@@ -784,6 +796,7 @@ class VCFReader(SNPBaseReader):
         sample_columns: list[str],
         sample_idxs: np.ndarray,
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         if Path(self._filename).suffix != ".vcf":
             raise ValueError("The memory-mapped fast path only supports uncompressed .vcf files.")
@@ -856,7 +869,7 @@ class VCFReader(SNPBaseReader):
                             _non_diploid_chromosome_mask_or_none(
                                 _decode_fields(raw, body_starts[lo:hi], tabs[:, 0])
                             )
-                            if sum_strands
+                            if detect_non_diploid
                             else None
                         )
                         sample_starts = tabs[:, 8] + 1
@@ -984,6 +997,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
         if n_samples_total < 0:
@@ -1084,7 +1098,7 @@ class VCFReader(SNPBaseReader):
                             _non_diploid_chromosome_mask_or_none(
                                 _decode_fields(raw, line_starts, tabs[:, 0])
                             )
-                            if sum_strands
+                            if detect_non_diploid
                             else None
                         )
                         # This fast path is deliberately strict: every retained
@@ -1182,6 +1196,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
         if n_samples_total < 0:
@@ -1288,7 +1303,7 @@ class VCFReader(SNPBaseReader):
                             _non_diploid_chromosome_mask_or_none(
                                 _decode_fields(raw, line_starts, tabs[:, 0])
                             )
-                            if sum_strands
+                            if detect_non_diploid
                             else None
                         )
                         # Keep this fallback vectorized by supporting only the
@@ -1401,6 +1416,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
         if n_samples_total < 0:
@@ -1534,7 +1550,7 @@ class VCFReader(SNPBaseReader):
                             _non_diploid_chromosome_mask_or_none(
                                 _decode_fields(raw, line_starts, tabs[:, 0])
                             )
-                            if sum_strands
+                            if detect_non_diploid
                             else None
                         )
                         sample_starts = tabs[:, 8] + 1
@@ -1667,6 +1683,7 @@ class VCFReader(SNPBaseReader):
         sample_columns: list[str],
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         sum_strands: bool,
+        detect_non_diploid: bool,
         separator: str,
     ) -> SNPObject:
         import pandas as pd
@@ -1691,7 +1708,7 @@ class VCFReader(SNPBaseReader):
             filter_columns = ["POS"]
             if chrom_column is not None:
                 filter_columns.insert(0, chrom_column)
-        elif sum_strands:
+        elif detect_non_diploid:
             chrom_column = "#CHROM" if "#CHROM" in names else "CHROM" if "CHROM" in names else None
             filter_columns = [] if chrom_column is None else [chrom_column]
 
@@ -1724,7 +1741,7 @@ class VCFReader(SNPBaseReader):
                 continue
             if n_selected:
                 non_diploid_chromosomes = None
-                if sum_strands and ("#CHROM" in frame.columns or "CHROM" in frame.columns):
+                if detect_non_diploid and ("#CHROM" in frame.columns or "CHROM" in frame.columns):
                     chrom_column = "#CHROM" if "#CHROM" in frame.columns else "CHROM"
                     non_diploid_chromosomes = _non_diploid_chromosome_mask_or_none(
                         frame[chrom_column].to_numpy(dtype=object)
@@ -1761,6 +1778,7 @@ class VCFReader(SNPBaseReader):
         region: Optional[str] = None,
         samples: Optional[Sequence[Union[str, int]]] = None,
         sum_strands: Optional[bool] = None,
+        chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -1797,6 +1815,11 @@ class VCFReader(SNPBaseReader):
                 allele columns separate and reject unphased GT calls. If
                 ``None`` (default), preserve phased GT calls and fall back to
                 dosages for unphased GT calls.
+            chromosome_ploidy:
+                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                all selected variants should be treated as ordinary diploid/autosomal; this
+                skips non-diploid chromosome checks and can be faster. The default None/"auto"
+                preserves existing behavior.
             separator: Optional column separator. If omitted, the separator is
                 detected from the VCF header. Tab-delimited files use optimized
                 byte parsers when possible; other separators use the pandas
@@ -1806,6 +1829,7 @@ class VCFReader(SNPBaseReader):
             SNPObject: Object containing selected genotype, sample, and variant
             fields.
         """
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         if sum_strands is None:
             try:
                 return self.read(
@@ -1814,6 +1838,7 @@ class VCFReader(SNPBaseReader):
                     region=region,
                     samples=samples,
                     sum_strands=False,
+                    chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                 )
             except ValueError as exc:
@@ -1825,8 +1850,10 @@ class VCFReader(SNPBaseReader):
                     region=region,
                     samples=samples,
                     sum_strands=True,
+                    chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                 )
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
 
         region_filter = _parse_vcf_region(region)
         names, detected_separator = _get_vcf_col_names_and_sep(
@@ -1847,6 +1874,7 @@ class VCFReader(SNPBaseReader):
                 sample_columns=sample_columns,
                 region_filter=region_filter,
                 sum_strands=bool(sum_strands),
+                detect_non_diploid=detect_non_diploid,
                 separator=detected_separator,
             )
 
@@ -1859,6 +1887,7 @@ class VCFReader(SNPBaseReader):
                     sample_idxs=sample_idxs,
                     region_filter=region_filter,
                     sum_strands=bool(sum_strands),
+                    detect_non_diploid=detect_non_diploid,
                 )
             return self._read_block_gt_only(
                 names=names,
@@ -1867,6 +1896,7 @@ class VCFReader(SNPBaseReader):
                 sample_idxs=sample_idxs,
                 region_filter=region_filter,
                 sum_strands=bool(sum_strands),
+                detect_non_diploid=detect_non_diploid,
             )
         except ValueError as exc:
             log.debug("VCF fast block path unavailable for %s: %s", self._filename, exc)
@@ -1878,6 +1908,7 @@ class VCFReader(SNPBaseReader):
                     sample_idxs=sample_idxs,
                     region_filter=region_filter,
                     sum_strands=bool(sum_strands),
+                    detect_non_diploid=detect_non_diploid,
                 )
             except ValueError as fallback_exc:
                 log.debug(
@@ -1891,6 +1922,7 @@ class VCFReader(SNPBaseReader):
                     sample_columns=sample_columns,
                     region_filter=region_filter,
                     sum_strands=bool(sum_strands),
+                    detect_non_diploid=detect_non_diploid,
                     separator=detected_separator,
                 )
 
@@ -1905,9 +1937,21 @@ class VCFReader(SNPBaseReader):
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
         sum_strands: bool = False,
+        chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
+        """
+        Stream a VCF in variant chunks.
+
+        chromosome_ploidy:
+            Optional hint for chromosome-specific strand summing. Use "autosomal" when
+            all selected variants should be treated as ordinary diploid/autosomal; this
+            skips non-diploid chromosome checks and can be faster. The default None/"auto"
+            preserves existing behavior.
+        """
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
         if separator not in (None, "\t"):
@@ -2037,8 +2081,11 @@ class VCFReader(SNPBaseReader):
                             sample_idxs=sample_indices,
                             sum_strands=bool(sum_strands),
                             non_diploid_chromosome=(
-                                bool(sum_strands)
-                                and _normalized_non_diploid_chromosome(_decode_vcf_value(parts[0])) is not None
+                                (
+                                    _normalized_non_diploid_chromosome(_decode_vcf_value(parts[0])) is not None
+                                )
+                                if detect_non_diploid
+                                else None
                             ),
                         )
                     )
@@ -2233,6 +2280,7 @@ class VCFReaderPolars(SNPBaseReader):
         field_columns: List[str],
         sample_columns: List[str],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         if "#CHROM" in vcf.columns:
             chrom_column = "#CHROM"
@@ -2242,7 +2290,7 @@ class VCFReaderPolars(SNPBaseReader):
             chrom_column = None
 
         non_diploid_chromosomes = None
-        if sum_strands and chrom_column is not None:
+        if detect_non_diploid and chrom_column is not None:
             non_diploid_chromosomes = _non_diploid_chromosome_mask_or_none(
                 vcf[chrom_column].to_numpy()
             )
@@ -2277,6 +2325,7 @@ class VCFReaderPolars(SNPBaseReader):
              region: Optional[str] = None,
              samples: Optional[List[str]] = None,
              sum_strands: Optional[bool] = None,
+             chromosome_ploidy: Optional[str] = None,
              separator: Optional[str] = None
              ) -> SNPObject:
         """
@@ -2302,6 +2351,11 @@ class VCFReaderPolars(SNPBaseReader):
                 False if phased alleles are to be stored separately and
                 unphased GT calls should be rejected. None preserves phased GT
                 calls and falls back to dosages for unphased GT calls.
+            chromosome_ploidy:
+                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                all selected variants should be treated as ordinary diploid/autosomal; this
+                skips non-diploid chromosome checks and can be faster. The default None/"auto"
+                preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -2310,6 +2364,7 @@ class VCFReaderPolars(SNPBaseReader):
                 of this object depend on the specified parameters and the content of the VCF file.
         """
         # TODO: add support for excluding GT
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         if sum_strands is None:
             try:
                 return self.read(
@@ -2318,6 +2373,7 @@ class VCFReaderPolars(SNPBaseReader):
                     region=region,
                     samples=samples,
                     sum_strands=False,
+                    chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                 )
             except ValueError as exc:
@@ -2329,8 +2385,10 @@ class VCFReaderPolars(SNPBaseReader):
                     region=region,
                     samples=samples,
                     sum_strands=True,
+                    chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                 )
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
 
         log.info(f"Reading {self._filename}")
 
@@ -2341,7 +2399,7 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 separator=separator,
             )
-            if sum_strands:
+            if detect_non_diploid:
                 chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
                 if chrom_column is not None:
                     chrom_idx = list(col_dtypes).index(chrom_column)
@@ -2364,6 +2422,7 @@ class VCFReaderPolars(SNPBaseReader):
                 field_columns=field_columns,
                 sample_columns=sample_columns,
                 sum_strands=bool(sum_strands),
+                detect_non_diploid=detect_non_diploid,
             )
 
             log.info(f"Finished reading {self.filename}")
@@ -2385,6 +2444,7 @@ class VCFReaderPolars(SNPBaseReader):
                 region=region,
                 samples=samples,
                 sum_strands=bool(sum_strands),
+                chromosome_ploidy=chromosome_ploidy,
             )
 
             return snpobj
@@ -2400,12 +2460,21 @@ class VCFReaderPolars(SNPBaseReader):
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
         sum_strands: Optional[bool] = False,
+        chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
         """
         Stream a VCF in variant chunks using the Polars backend.
+
+        chromosome_ploidy:
+            Optional hint for chromosome-specific strand summing. Use "autosomal" when
+            all selected variants should be treated as ordinary diploid/autosomal; this
+            skips non-diploid chromosome checks and can be faster. The default None/"auto"
+            preserves existing behavior.
         """
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
         if region is not None:
@@ -2434,7 +2503,7 @@ class VCFReaderPolars(SNPBaseReader):
         selected_columns = field_columns + sample_columns
         filter_columns = []
         chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
-        if sum_strands and chrom_column is not None:
+        if detect_non_diploid and chrom_column is not None:
             filter_columns.append(chrom_column)
         if variant_ids is not None:
             filter_columns.extend(["ID", "POS", "REF", "ALT"])
@@ -2500,6 +2569,7 @@ class VCFReaderPolars(SNPBaseReader):
                     field_columns=field_columns,
                     sample_columns=sample_columns,
                     sum_strands=bool(sum_strands),
+                    detect_non_diploid=detect_non_diploid,
                 )
 
         if pending is not None and pending.height > 0:
@@ -2508,4 +2578,5 @@ class VCFReaderPolars(SNPBaseReader):
                 field_columns=field_columns,
                 sample_columns=sample_columns,
                 sum_strands=bool(sum_strands),
+                detect_non_diploid=detect_non_diploid,
             )

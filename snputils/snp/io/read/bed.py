@@ -39,6 +39,18 @@ def _non_diploid_chromosome_mask_or_none(chromosomes: np.ndarray) -> Optional[np
     return mask if np.any(mask) else None
 
 
+def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
+    if value is None:
+        return "auto"
+
+    value = str(value).strip().lower()
+    if value not in {"auto", "autosomal", "mixed"}:
+        raise ValueError(
+            "chromosome_ploidy must be one of None, 'auto', 'autosomal', or 'mixed'."
+        )
+    return value
+
+
 @SNPBaseReader.register
 class BEDReader(SNPBaseReader):
     def read(
@@ -50,6 +62,7 @@ class BEDReader(SNPBaseReader):
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
         sum_strands: bool = True,
+        chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -69,6 +82,11 @@ class BEDReader(SNPBaseReader):
             sum_strands: If True, read genotype dosages in a single `int8`
                 array with values `{0, 1, 2}`. PLINK BED/BIM/FAM does not
                 store phase, so `False` is not supported.
+            chromosome_ploidy:
+                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                all selected variants should be treated as ordinary diploid/autosomal; this
+                skips non-diploid chromosome checks and can be faster. The default None/"auto"
+                preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
 
@@ -82,6 +100,8 @@ class BEDReader(SNPBaseReader):
         assert (
             variant_idxs is None or variant_ids is None
         ), "Only one of variant_idxs and variant_ids can be specified"
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
 
         if isinstance(fields, str):
             fields = [fields]
@@ -206,7 +226,7 @@ class BEDReader(SNPBaseReader):
                 variant_idxs = np.arange(num_variants, dtype=np.uint32)
 
             non_diploid_mask = None
-            if sum_strands and "bim" in locals() and "#CHROM" in bim.columns:
+            if detect_non_diploid and "bim" in locals() and "#CHROM" in bim.columns:
                 non_diploid_mask = _non_diploid_chromosome_mask_or_none(
                     bim.get_column("#CHROM").to_numpy()
                 )
@@ -234,11 +254,11 @@ class BEDReader(SNPBaseReader):
             else:
                 genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                 pgen_reader.read_list(variant_idxs, genotypes)
-                if only_read_bed:
+                if detect_non_diploid and only_read_bed:
                     log.debug(
                         "Skipping non-diploid BED strand-summing correction because BIM chromosome metadata was not loaded."
                     )
-                elif non_diploid_mask is not None:
+                elif detect_non_diploid and non_diploid_mask is not None:
                     non_diploid_output_rows = np.flatnonzero(non_diploid_mask)
                     non_diploid_variant_idxs = np.asarray(
                         variant_idxs[non_diploid_output_rows],
@@ -350,6 +370,7 @@ class BEDReader(SNPBaseReader):
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
         sum_strands: bool = True,
+        chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
@@ -357,7 +378,14 @@ class BEDReader(SNPBaseReader):
         Stream the BED fileset in variant chunks.
 
         This yields a sequence of SNPObject chunks along the SNP axis.
+
+        chromosome_ploidy:
+            Optional hint for chromosome-specific strand summing. Use "autosomal" when
+            all selected variants should be treated as ordinary diploid/autosomal; this
+            skips non-diploid chromosome checks and can be faster. The default None/"auto"
+            preserves existing behavior.
         """
+        _normalize_chromosome_ploidy(chromosome_ploidy)
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
         if sample_idxs is not None and sample_ids is not None:
@@ -382,5 +410,6 @@ class BEDReader(SNPBaseReader):
                 sample_idxs=sample_idxs,
                 variant_idxs=selector_chunk,
                 sum_strands=sum_strands,
+                chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
             )

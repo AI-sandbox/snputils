@@ -189,6 +189,18 @@ def _non_diploid_contig_mask_or_none(
     return np.isin(contig_ids, list(non_diploid_ids))
 
 
+def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
+    if value is None:
+        return "auto"
+
+    value = str(value).strip().lower()
+    if value not in {"auto", "autosomal", "mixed"}:
+        raise ValueError(
+            "chromosome_ploidy must be one of None, 'auto', 'autosomal', or 'mixed'."
+        )
+    return value
+
+
 def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
     """Read a BGZF-compressed file, falling back to generic gzip.
 
@@ -1043,6 +1055,7 @@ class BCFReader(SNPBaseReader):
         variant_idxs: Optional[Sequence[int]] = None,
         region: Optional[str] = None,
         sum_strands: Optional[bool] = None,
+        chromosome_ploidy: Optional[str] = None,
     ) -> SNPObject:
         """
         Read a BCF file into a SNPObject.
@@ -1068,6 +1081,11 @@ class BCFReader(SNPBaseReader):
                 columns separate; unphased GT calls are rejected because their
                 allele order is not meaningful. If None, preserve phased GT
                 calls and fall back to dosages for unphased GT calls.
+            chromosome_ploidy:
+                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                all selected variants should be treated as ordinary diploid/autosomal; this
+                skips non-diploid chromosome checks and can be faster. The default None/"auto"
+                preserves existing behavior.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant
@@ -1078,6 +1096,7 @@ class BCFReader(SNPBaseReader):
         if variant_idxs is not None and variant_ids is not None:
             raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
 
+        chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         if sum_strands is None:
             try:
                 return self.read(
@@ -1089,6 +1108,7 @@ class BCFReader(SNPBaseReader):
                     variant_idxs=variant_idxs,
                     region=region,
                     sum_strands=False,
+                    chromosome_ploidy=chromosome_ploidy,
                 )
             except ValueError as exc:
                 if "Cannot read unphased BCF genotypes" not in str(exc):
@@ -1102,7 +1122,9 @@ class BCFReader(SNPBaseReader):
                     variant_idxs=variant_idxs,
                     region=region,
                     sum_strands=True,
+                    chromosome_ploidy=chromosome_ploidy,
                 )
+        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
 
         selected_fields = _normalize_fields(fields, exclude_fields)
         region_filter = _parse_vcf_region(region)
@@ -1116,11 +1138,12 @@ class BCFReader(SNPBaseReader):
             return self._read_filtered(
                 data, body_offset, header, file_samples, sample_index_array,
                 selected_fields, region_filter, variant_ids, variant_idxs, sum_strands,
+                detect_non_diploid,
             )
 
         return self._read_all(
             data, body_offset, header, file_samples, sample_index_array,
-            selected_fields, sum_strands,
+            selected_fields, sum_strands, detect_non_diploid,
         )
 
     def _read_all(
@@ -1132,17 +1155,20 @@ class BCFReader(SNPBaseReader):
         sample_index_array: np.ndarray,
         selected_fields: list[str],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         """Optimized bulk read of all records with no variant filtering."""
         if selected_fields == ["GT"]:
             gt_only = self._try_read_gt_only_all(
-                data, body_offset, header, file_samples, sample_index_array, sum_strands
+                data, body_offset, header, file_samples, sample_index_array, sum_strands,
+                detect_non_diploid,
             )
             if gt_only is not None:
                 return gt_only
         elif "GT" in selected_fields and set(selected_fields).issubset(_CORE_FIELDS):
             core = self._try_read_core_all(
-                data, body_offset, header, file_samples, sample_index_array, selected_fields, sum_strands
+                data, body_offset, header, file_samples, sample_index_array, selected_fields, sum_strands,
+                detect_non_diploid,
             )
             if core is not None:
                 return core
@@ -1187,7 +1213,7 @@ class BCFReader(SNPBaseReader):
         genotypes = None
         calldata_gp = None
         non_diploid_chromosomes = None
-        if need_gt and sum_strands:
+        if need_gt and detect_non_diploid:
             non_diploid_chromosomes = _non_diploid_contig_mask_or_none(contig_ids, header)
 
         # Batch GT decode
@@ -1240,10 +1266,9 @@ class BCFReader(SNPBaseReader):
                         )
                         gt = gt[sample_index_array]
                         if sum_strands:
-                            missing_as_haploid = (
-                                non_diploid_chromosomes is not None
-                                and bool(non_diploid_chromosomes[i])
-                            )
+                            missing_as_haploid = None
+                            if non_diploid_chromosomes is not None:
+                                missing_as_haploid = bool(non_diploid_chromosomes[i])
                             genotypes[i] = sum_diploid_genotypes(
                                 gt,
                                 missing_as_haploid=missing_as_haploid,
@@ -1441,6 +1466,7 @@ class BCFReader(SNPBaseReader):
         file_samples: np.ndarray,
         sample_index_array: np.ndarray,
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> Optional[SNPObject]:
         """Fast path for full-file genotype-only reads.
 
@@ -1450,7 +1476,7 @@ class BCFReader(SNPBaseReader):
         """
         if body_offset >= len(data):
             return self._empty_snpobject(["GT"], file_samples, sample_index_array, sum_strands)
-        if sum_strands and _header_has_non_diploid_contigs(header):
+        if detect_non_diploid and _header_has_non_diploid_contigs(header):
             return None
 
         first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
@@ -1524,11 +1550,12 @@ class BCFReader(SNPBaseReader):
         sample_index_array: np.ndarray,
         selected_fields: list[str],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> Optional[SNPObject]:
         """Fast path for full-file GT plus core variant metadata reads."""
         if body_offset >= len(data):
             return self._empty_snpobject(selected_fields, file_samples, sample_index_array, sum_strands)
-        if sum_strands and _header_has_non_diploid_contigs(header):
+        if detect_non_diploid and _header_has_non_diploid_contigs(header):
             return None
 
         first_l_shared, first_l_indiv = _U32_PAIR.unpack_from(data, body_offset)
@@ -1636,6 +1663,7 @@ class BCFReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]],
         variant_idxs: Optional[Sequence[int]],
         sum_strands: bool,
+        detect_non_diploid: bool,
     ) -> SNPObject:
         """Read with variant filtering - uses the original per-record approach."""
         n_records, selected_offsets, requested_offsets = _resolve_variant_request(
@@ -1651,7 +1679,8 @@ class BCFReader(SNPBaseReader):
         if record_offsets_list is None:
             # No filtering was actually applied - redirect to fast path
             return self._read_all(data, body_offset, header, file_samples,
-                                  sample_index_array, selected_fields, sum_strands)
+                                  sample_index_array, selected_fields, sum_strands,
+                                  detect_non_diploid)
 
         n_selected_records = len(record_offsets_list)
         n_selected_samples = len(sample_index_array)
@@ -1703,10 +1732,11 @@ class BCFReader(SNPBaseReader):
             n_info = _U32.unpack_from(data, base + 16)[0] & 0xFFFF
             n_fmt = _U32.unpack_from(data, base + 20)[0] >> 24
             n_samples = _U32.unpack_from(data, base + 20)[0] & 0xFFFFFF
-            missing_as_haploid = (
-                sum_strands
-                and _normalized_non_diploid_chromosome(header.contigs[contig_id]) is not None
-            )
+            missing_as_haploid = None
+            if detect_non_diploid:
+                missing_as_haploid = (
+                    _normalized_non_diploid_chromosome(header.contigs[contig_id]) is not None
+                )
 
             if n_samples != n_file_samples:
                 raise ValueError(

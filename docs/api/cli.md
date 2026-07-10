@@ -16,6 +16,7 @@ snputils --version
 | `maasmds` | Multi-array ancestry-specific MDS |
 | `gwas` | Variant-level association testing |
 | `admixture-map` | Admixture mapping from local ancestry |
+| `sex-check` | Genetic sex checking from chromosome-X zygosity distributions |
 | `simulate` | Simulate admixed haplotype batches (requires `[torch]`) |
 | `plot-manhattan` | Manhattan plot from association results |
 | `plot-qq` | Q–Q plot from association results |
@@ -70,6 +71,20 @@ snputils admixture-map \
     --covar-path covariates.txt \
     --results-path admixmap.tsv.gz
 ```
+
+**Sex check** — infer genetic sex and optionally compare it with reported sex:
+
+```bash
+snputils sex-check \
+    --snp-path cohort.pgen \
+    --sex-path reported_sex.tsv \
+    --results-path sex_check.tsv
+```
+
+The optional sex table must have a sample column (`IID`, `Individual ID`, or
+`sample`) and a sex column (`SEX` or `Gender`). PLINK FAM/PSAM sex metadata is
+used automatically when available. See {doc}`../user_guide/analysis` for result
+columns, low-information handling, limitations, and the Zigo citation.
 
 **Simulation** — generate admixed haplotype batches (PyTorch required):
 

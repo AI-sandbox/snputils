@@ -16,6 +16,7 @@ pheno = su.read_pheno("phenotypes.tsv", col="trait")
 ibd = su.read_ibd("hap.ibd")
 
 af = snp.allele_freq()                               # per-SNP allele frequencies
+sex_report = su.sex_check(snp)                       # chromosome-X genetic sex QC
 pcs = su.PCA(n_components=2).fit_transform(snp)
 afr_af = snp.allele_freq(ancestry="AFR", laiobj=lai) # ancestry-specific AF
 

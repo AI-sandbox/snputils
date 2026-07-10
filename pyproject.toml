@@ -70,6 +70,9 @@ snputils = "snputils.tools.cli:main"
 where = ["."]
 include = ["snputils*"]
 
+[tool.setuptools.package-data]
+"snputils.snp" = ["models/*"]
+
 [[tool.setuptools.ext-modules]]
 name = "snputils.snp.io.read._bcf"
 sources = ["snputils/snp/io/read/_bcf.c"]

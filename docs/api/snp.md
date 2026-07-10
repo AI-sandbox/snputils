@@ -131,6 +131,16 @@ snpobj = snpobj.filter_samples(samples=unrelated.samples)
 ibd_pairs = snpobj.flag_related_pairs(method="ibd", ibdobj=ibdobj)
 ```
 
+## Genetic Sex Checking
+
+```{eval-rst}
+.. autofunction:: snputils.sex_check
+```
+
+The function uses the internally bundled Zigo distilled polynomial model. See
+{doc}`../user_guide/analysis` for output interpretation, limitations, and the
+Zigo paper citation.
+
 ## Objects
 
 ```{eval-rst}

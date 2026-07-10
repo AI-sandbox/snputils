@@ -26,6 +26,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "read_pgen": (".io", "read_pgen"),
     "read_vcf": (".io", "read_vcf"),
     "read_grg": (".io", "read_grg"),
+    "sex_check": ("._sex_check", "sex_check"),
 }
 
 __all__ = list(_LAZY_ATTRS.keys())

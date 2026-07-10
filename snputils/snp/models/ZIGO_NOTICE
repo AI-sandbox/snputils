@@ -1,0 +1,7 @@
+The bundled zigo.json coefficients are adapted from Zigo, "Sex Checking by
+Zygosity Distributions", by Oscar Molina-Sedano, Daniel Mas Montserrat, and
+Alexander G. Ioannidis.
+
+Zigo source: https://github.com/AI-sandbox/zigo
+Paper DOI: https://doi.org/10.64898/2026.03.15.711924
+Original license: Apache License 2.0

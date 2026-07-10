@@ -207,6 +207,78 @@ when you want to inspect QC metrics before filtering. Some filters, especially
 MAF/MAC and HWE, should be chosen with the analysis design in mind rather than
 applied as universal defaults.
 
+### Genetic sex checking with Zigo
+
+{func}`~snputils.sex_check` infers genetic sex from normalized chromosome-X
+genotype-class frequencies using the distilled Zigo polynomial model. It accepts
+an in-memory {class}`~snputils.SNPObject`, automatically recognizes chromosome
+labels `X`, `chrX`, and PLINK `23`, and supports either summed 0/1/2 dosages or
+separate biallelic allele calls.
+
+```python
+import snputils as su
+
+snpobj = su.read_snp("cohort.pgen")
+report = su.sex_check(snpobj)
+
+report[[
+    "sample", "reported_sex", "inferred_sex", "status",
+    "p_male", "p_female", "n_called", "qc_status",
+]]
+```
+
+When `SNPObject.sample_sex` is populated from a PLINK FAM/PSAM file, it is used
+as the reported sex automatically. A sample-aligned sequence or mapping can be
+provided explicitly with `reported_sex=...`. Recognized values are `1`, `M`, or
+`male`, and `2`, `F`, or `female`.
+
+The result is one row per sample:
+
+| Column | Meaning |
+|--------|---------|
+| `reported_sex` | Normalized sex supplied by the user or SNP metadata |
+| `inferred_sex` | Zigo inference (`male`, `female`, or missing when no X calls are available) |
+| `status` | `match`, `mismatch`, `not_compared`, or `unknown` |
+| `p_male`, `p_female` | Model probabilities, reported explicitly rather than as a PLINK-style `F` column |
+| `n_called` | Number of callable chromosome-X genotypes used |
+| `genotype_0_frequency`, `genotype_1_frequency`, `genotype_2_frequency` | Normalized Zigo model features |
+| `qc_status` | `pass`, `low_information`, or `no_data` |
+
+By default, non-empty samples with fewer than 500 calls are retained but marked
+`low_information`; pass `low_information_threshold=0` to disable that flag.
+Samples with zero callable X genotypes are never converted into a prediction.
+If chromosome metadata was deliberately omitted from an X-only object, use
+`assume_x=True` explicitly.
+
+For file-backed use, the CLI reads chromosome X through snputils' own readers:
+
+```bash
+snputils sex-check \
+    --snp-path cohort.pgen \
+    --sex-path reported_sex.tsv \
+    --results-path sex_check.tsv
+```
+
+`--sex-path` is optional and accepts a headered table with an `IID`,
+`Individual ID`, or `sample` column and a `SEX` or `Gender` column. BED and PGEN
+sex metadata are used automatically when no separate table is supplied. VCF,
+BCF, BED, and PGEN hard calls are supported; BGEN probabilities are not
+hard-called implicitly.
+
+The model is intended for sample QC, not diagnosis of sex-chromosome
+aneuploidies. If you use this sex-check functionality in research, please cite:
+
+```bibtex
+@article{zigo2026,
+    author  = {Molina-Sedano, Oscar and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
+    title   = {Sex checking by zygosity distributions},
+    year    = {2026},
+    doi     = {10.64898/2026.03.15.711924},
+    url     = {https://www.biorxiv.org/content/10.64898/2026.03.15.711924},
+    journal = {bioRxiv},
+}
+```
+
 ### Association testing
 
 ```python

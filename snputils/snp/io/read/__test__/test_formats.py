@@ -223,3 +223,47 @@ def test_bed_bim_fam_zst(data_path, snpobj_bed, tmp_path):
     assert np.array_equal(snpobj_bed.genotypes, snpobj_gz.genotypes)
     assert np.array_equal(snpobj_bed.variants_pos, snpobj_gz.variants_pos)
     assert np.array_equal(snpobj_bed.samples, snpobj_gz.samples)
+
+
+# PGEN with compressed pvar and psam
+def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
+    import gzip
+    import zstandard as zstd
+    from snputils import PGENReader
+    import shutil
+    import pathlib
+
+    pgen_src = pathlib.Path(data_path) / "pgen" / "subset.pgen"
+    pvar_src = pathlib.Path(data_path) / "pgen" / "subset.pvar"
+    psam_src = pathlib.Path(data_path) / "pgen" / "subset.psam"
+
+    # Test .zst fileset
+    # Copy pgen file
+    shutil.copy(pgen_src, tmp_path / "subset.pgen")
+    
+    # Compress pvar and psam to .zst in tmp_path
+    cctx = zstd.ZstdCompressor()
+    with open(pvar_src, "rb") as f_in, open(tmp_path / "subset.pvar.zst", "wb") as f_out:
+        cctx.copy_stream(f_in, f_out)
+    with open(psam_src, "rb") as f_in, open(tmp_path / "subset.psam.zst", "wb") as f_out:
+        cctx.copy_stream(f_in, f_out)
+
+    snpobj_zst = PGENReader(tmp_path / "subset").read(sum_strands=False)
+    assert np.array_equal(snpobj_pgen.genotypes, snpobj_zst.genotypes)
+    assert np.array_equal(snpobj_pgen.variants_pos, snpobj_zst.variants_pos)
+    assert np.array_equal(snpobj_pgen.samples, snpobj_zst.samples)
+
+    # Test .gz fileset
+    # Copy pgen file
+    shutil.copy(pgen_src, tmp_path / "subset_gz.pgen")
+    
+    # Compress pvar and psam to .gz in tmp_path
+    with open(pvar_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.pvar.gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+    with open(psam_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.psam.gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+
+    snpobj_gz = PGENReader(tmp_path / "subset_gz").read(sum_strands=False)
+    assert np.array_equal(snpobj_pgen.genotypes, snpobj_gz.genotypes)
+    assert np.array_equal(snpobj_pgen.variants_pos, snpobj_gz.variants_pos)
+    assert np.array_equal(snpobj_pgen.samples, snpobj_gz.samples)

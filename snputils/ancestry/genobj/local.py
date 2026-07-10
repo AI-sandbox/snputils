@@ -830,7 +830,13 @@ class LocalAncestryObject(AncestryObject):
         path = Path(file)
         suffixes = [suffix.lower() for suffix in path.suffixes]
 
-        if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
+        is_msp = (
+            suffixes[-1] == '.msp'
+            or (suffixes[-2:] == ['.msp', '.tsv'])
+            or (len(suffixes) >= 2 and suffixes[-1] in ('.zst', '.gz') and (suffixes[-2] == '.msp' or suffixes[-3:-1] == ['.msp', '.tsv']))
+        )
+
+        if is_msp:
             self.save_msp(file)
         elif suffixes[-1] == '.lanc':
             self.save_lanc(file)

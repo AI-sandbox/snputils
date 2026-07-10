@@ -62,3 +62,43 @@ def test_iter_windows_with_sample_subset(tmp_path: Path):
     hap_indices[1::2] = 2 * sample_indices + 1
     expected = full.lai[:, hap_indices]
     np.testing.assert_array_equal(streamed_lai, expected)
+
+
+def test_msp_zst_and_gz(tmp_path: Path):
+    import gzip
+    import zstandard as zstd
+    from snputils.ancestry.io.local.read import MSPReader
+    from snputils.ancestry.genobj.local import LocalAncestryObject
+    
+    sample_ids, lai, chromosomes, starts, ends, ancestry_map = make_small_dataset(
+        n_samples=5,
+        n_windows=10,
+        seed=42,
+    )
+    
+    # 1. Test Writing & Reading uncompressed
+    msp_path = tmp_path / "toy.msp"
+    write_msp(msp_path, sample_ids, lai, chromosomes, starts, ends, ancestry_map)
+    obj_uncompressed = MSPReader(msp_path).read()
+    
+    # 2. Test writing & reading .zst
+    zst_path = tmp_path / "toy.msp.zst"
+    obj_uncompressed.save(zst_path)
+    # Check that file exists and has .zst extension
+    assert zst_path.exists()
+    # Read it back and assert equality
+    obj_zst = MSPReader(zst_path).read()
+    np.testing.assert_array_equal(obj_uncompressed.lai, obj_zst.lai)
+    np.testing.assert_array_equal(obj_uncompressed.samples, obj_zst.samples)
+    assert obj_uncompressed.ancestry_map == obj_zst.ancestry_map
+    
+    # 3. Test writing & reading .gz
+    gz_path = tmp_path / "toy.msp.gz"
+    obj_uncompressed.save(gz_path)
+    # Check that file exists and has .gz extension
+    assert gz_path.exists()
+    # Read it back and assert equality
+    obj_gz = MSPReader(gz_path).read()
+    np.testing.assert_array_equal(obj_uncompressed.lai, obj_gz.lai)
+    np.testing.assert_array_equal(obj_uncompressed.samples, obj_gz.samples)
+    assert obj_uncompressed.ancestry_map == obj_gz.ancestry_map

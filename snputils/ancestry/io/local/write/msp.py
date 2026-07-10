@@ -11,6 +11,17 @@ from snputils.ancestry.genobj.local import LocalAncestryObject
 log = logging.getLogger(__name__)
 
 
+def _open_textfile(filename: Union[str, Path], mode: str = "rt"):
+    filename = str(filename)
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
 class MSPWriter(LAIBaseWriter):
     """
     A writer class for exporting local ancestry data from a `snputils.ancestry.genobj.LocalAncestryObject` 
@@ -80,10 +91,14 @@ class MSPWriter(LAIBaseWriter):
         log.info(f"LAI object contains: {self.laiobj.n_samples} samples, {self.laiobj.n_ancestries} ancestries.")
 
         # Define the valid file extensions
-        valid_extensions = ('.msp', '.msp.tsv')
+        valid_extensions = (
+            '.msp', '.msp.tsv',
+            '.msp.zst', '.msp.gz',
+            '.msp.tsv.zst', '.msp.tsv.gz'
+        )
 
         # Append '.msp' extension if not already present
-        if not self.file.name.endswith(valid_extensions):
+        if not any(self.file.name.lower().endswith(ext) for ext in valid_extensions):
             self.file = self.file.with_name(self.file.name + '.msp')
 
         # Check if file already exists
@@ -141,27 +156,23 @@ class MSPWriter(LAIBaseWriter):
 
         log.info(f"Writing MSP file to '{self.file}'...")
 
-        # Save the DataFrame to the .msp file in tab-separated format
-        lai_df.to_csv(self.file, sep="\t", index=False, header=False)
-        
         # Construct the second line for the output file containing the column headers
         second_line = "#chm" + "\t" + "\t".join(columns)
-        
-        # If an ancestry map is available, prepend it to the output file
-        if self.laiobj.ancestry_map is not None:
-            ancestries_codes = list(self.laiobj.ancestry_map.keys()) # Get corresponding codes
-            ancestries = list(self.laiobj.ancestry_map.values()) # Get ancestry names
-            
-            # Create the first line for the ancestry information, detailing subpopulation codes
-            first_line = "#Subpopulation order/codes: " + "\t".join(
-                f"{a}={ancestries_codes[ai]}" for ai, a in enumerate(ancestries)
-            )
 
-            # Open the file for reading and prepend the first line       
-            with open(self.__file, "r+") as f:
-                content = f.read()
-                f.seek(0,0)
-                f.write(first_line.rstrip('\r\n') + '\n' + second_line + '\n' + content)
+        # Save to file
+        with _open_textfile(self.file, "wt") as f:
+            if self.laiobj.ancestry_map is not None:
+                ancestries_codes = list(self.laiobj.ancestry_map.keys()) # Get corresponding codes
+                ancestries = list(self.laiobj.ancestry_map.values()) # Get ancestry names
+                
+                # Create the first line for the ancestry information, detailing subpopulation codes
+                first_line = "#Subpopulation order/codes: " + "\t".join(
+                    f"{a}={ancestries_codes[ai]}" for ai, a in enumerate(ancestries)
+                )
+                f.write(first_line.rstrip('\r\n') + '\n')
+                f.write(second_line + '\n')
+            
+            lai_df.to_csv(f, sep="\t", index=False, header=False)
 
         log.info(f"Finished writing MSP file to '{self.file}'.")
 

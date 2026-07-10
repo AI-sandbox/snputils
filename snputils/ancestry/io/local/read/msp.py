@@ -13,6 +13,17 @@ from snputils.ancestry.genobj.local import LocalAncestryObject
 log = logging.getLogger(__name__)
 
 
+def _open_textfile(filename: Union[str, Path], mode: str = "rt"):
+    filename = str(filename)
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
 @dataclass
 class MSPMetadata:
     header: List[str]
@@ -82,7 +93,7 @@ class MSPReader(LAIBaseReader):
         return [str(qs)[:-2] for qs in query_samples_sing]
 
     def _parse_header_and_comment(self) -> tuple[Optional[str], List[str]]:
-        with open(self.file) as f:
+        with _open_textfile(self.file, "rt") as f:
             first_line = f.readline()
             second_line = f.readline()
 
@@ -194,7 +205,7 @@ class MSPReader(LAIBaseReader):
             else None
         )
 
-        with open(self.file, "r", encoding="utf-8") as handle:
+        with _open_textfile(self.file, "rt") as handle:
             for line_no, raw_line in enumerate(handle, start=1):
                 if not raw_line:
                     continue

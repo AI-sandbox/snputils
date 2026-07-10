@@ -3,7 +3,9 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import zstandard as zstd
 
+from snputils.ibd.io.read import read_ibd
 from snputils.ibd.io.read.anc_ibd import AncIBDReader
 
 
@@ -30,6 +32,11 @@ def _write_text(path: Path, lines):
 
 def _write_gz(path: Path, lines):
     with gzip.open(path, "wt") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _write_zst(path: Path, lines):
+    with zstd.open(path, "wt", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -69,6 +76,17 @@ def test_ancibd_read_file_gz():
         assert ibd.end.tolist() == [2000, 4000]
 
 
+def test_ancibd_read_file_zst_through_public_dispatcher(tmp_path: Path):
+    file = tmp_path / "ch_all.tsv.zst"
+    _write_zst(file, _tsv_lines(ROWS))
+
+    ibd = read_ibd(file)
+
+    assert ibd.n_segments == 2
+    assert ibd.start.tolist() == [1000, 3000]
+    assert ibd.end.tolist() == [2000, 4000]
+
+
 def test_ancibd_read_directory_with_ch_files():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -84,6 +102,15 @@ def test_ancibd_read_directory_with_ch_files():
         assert ibd.chrom.tolist() == ["1", "2"]
 
 
+def test_ancibd_read_directory_with_zst_file(tmp_path: Path):
+    _write_zst(tmp_path / "ch1.tsv.zst", _tsv_lines([ROWS[0]]))
+
+    ibd = read_ibd(tmp_path)
+
+    assert ibd.n_segments == 1
+    assert ibd.chrom.tolist() == ["1"]
+
+
 def test_ancibd_filter_segment_type():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -97,4 +124,3 @@ def test_ancibd_filter_segment_type():
         assert ibd.sample_id_1.tolist() == ["A"]
         assert ibd.sample_id_2.tolist() == ["B"]
         assert ibd.chrom.tolist() == ["1"]
-

@@ -76,16 +76,16 @@ class AdmixtureReader(WideBaseReader):
         """
         q_path = Path(Q_file)
         p_path = Path(P_file) if P_file is not None else None
-        
+
         q_path = _resolve_compressed_path(q_path)
-        
+
         q_suffix_lower = q_path.name.lower()
         has_q_suffix = (
             q_suffix_lower.endswith(".q")
             or q_suffix_lower.endswith(".q.zst")
             or q_suffix_lower.endswith(".q.gz")
         )
-        
+
         if not q_path.exists() and not has_q_suffix:
             q_cand = _resolve_compressed_path(Path(str(q_path) + ".Q"))
             if q_cand.exists():

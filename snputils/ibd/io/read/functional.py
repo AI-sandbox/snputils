@@ -8,9 +8,8 @@ def read_ibd(file: Union[str, Path], **kwargs) -> IBDObject:
     """
     Automatically detect the IBD data file format from the file's extension and read it into an `IBDObject`.
 
-    Supported formats:
-    - Hap-IBD (no standard extension; defaults to tab-delimited columns without header).
-    - ancIBD (template only).
+    Supported formats are hap-IBD (``.ibd``) and ancIBD (``.tsv``). Text
+    inputs may be plain, gzip-compressed, or Zstandard-compressed.
 
     Args:
         file (str or pathlib.Path): Path to the file to be read.
@@ -19,5 +18,3 @@ def read_ibd(file: Union[str, Path], **kwargs) -> IBDObject:
     from snputils.ibd.io.read.auto import IBDReader
 
     return IBDReader(file).read(**kwargs)
-
-

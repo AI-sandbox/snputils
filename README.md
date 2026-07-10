@@ -11,7 +11,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/snputils.svg?color=green)](https://python.org)
 [![Test, Docs & Publish](https://github.com/AI-sandbox/snputils/actions/workflows/ci-cd.yml/badge.svg?event=release)](https://github.com/AI-sandbox/snputils/actions/workflows/ci-cd.yml)
 
-**snputils** is a Python package designed to ease the processing and analysis of genomic datasets, while handling all the complexities of different genome formats and operations very efficiently. The library provides robust tools for handling sequencing and ancestry data, with a focus on performance, ease of use, and advanced visualization capabilities. 
+**snputils** is a Python package designed to ease the processing and analysis of genomic datasets, while handling all the complexities of different genome formats and operations very efficiently. The library provides robust tools for handling sequencing and ancestry data, with a focus on performance, ease of use, and advanced visualization capabilities.
 
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and more collaborators worldwide.
 
@@ -74,15 +74,18 @@ Optional extras:
 
 **snputils** provides high-level dispatchers like `read_snp`, `read_lai`, `read_admixture`, `read_pheno`, and `read_ibd`, plus explicit reader and writer classes when you need finer control.
 
-- **VCF**: Support for `.vcf` and `.vcf.gz` files
+- **VCF**: Support for `.vcf` files
 - **BCF**: Read support for `.bcf` files
 - **BGEN**: Support for `.bgen` files
 - **PLINK1**: Support for `.bed`, `.bim`, `.fam` filesets
 - **PLINK2**: Support for `.pgen`, `.pvar`, `.psam` filesets
 - **GRG**: Read and write graph-based genome representation files
-- **Local Ancestry**: Handle `.msp`, FLARE `.anc.vcf.gz`, and admix-kit `.lanc` local ancestry formats
+- **Local Ancestry**: Handle `.msp` (RFMix, Gnomix), FLARE, and admix-kit `.lanc` local ancestry formats
 - **Global Ancestry / ADMIXTURE**: Read and write `.Q` and `.P` files
 - **IBD**: Read `hap-IBD` and `ancIBD` outputs into a unified object
+
+See the [file I/O guide](docs/user_guide/file-io.md)
+for the complete format and compression table.
 
 ### Data Objects and Utilities
 

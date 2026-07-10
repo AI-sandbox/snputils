@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import gzip
 from pathlib import Path
-from typing import Union
+from typing import TextIO, Union
+
+
+_COMPRESSION_SUFFIXES = ('.gz', '.zst')
+
+
+def _open_text(file: Path) -> TextIO:
+    if file.suffix.lower() == '.gz':
+        return gzip.open(file, 'rt', encoding='utf-8')
+    if file.suffix.lower() == '.zst':
+        import zstandard as zstd
+
+        return zstd.open(file, 'rt', encoding='utf-8')
+    return open(file, 'rt', encoding='utf-8')
 
 
 class LAIReader:
@@ -11,20 +24,18 @@ class LAIReader:
         file: Union[str, Path]
     ) -> object:
         """
-        A factory class that automatically detects the local ancestry data file format from the 
+        A factory class that automatically detects the local ancestry data file format from the
         file's extension and returns the corresponding reader object.
 
         **Supported formats:**
 
-        - `.msp`: Text-based MSP format.
-        - `.msp.tsv`: Text-based MSP format with TSV extension.
-        - `.anc.vcf` / `.anc.vcf.gz`: FLARE local ancestry VCF output.
-        - `.lanc`: admix-kit local ancestry change-point format.
+        Detect MSP (`.msp`, `.msp.tsv`), FLARE (`.anc.vcf`), or admix-kit
+        LANC (`.lanc`).
 
         Args:
-            file (str or pathlib.Path): 
-                Path to the file to be read. It should end with `.msp` or `.msp.tsv`.
-        
+            file (str or pathlib.Path):
+                Path to the file to be read.
+
         Returns:
             **object:** A reader object corresponding to the file format (e.g., `MSPReader`).
         """
@@ -33,18 +44,25 @@ class LAIReader:
         if not suffixes:
             raise ValueError(
                 "The file must have an extension. Supported extensions are: "
-                ".msp, .msp.tsv, .anc.vcf, .anc.vcf.gz, .lanc."
+                ".msp, .msp.tsv, .anc.vcf, and .lanc, optionally followed by .gz or .zst."
             )
 
-        if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
+        format_suffixes = suffixes[:-1] if suffixes[-1] in _COMPRESSION_SUFFIXES else suffixes
+        if not format_suffixes:
+            raise ValueError(
+                f"Unsupported file extension: {suffixes[-1]}. A format extension must precede "
+                "the compression extension."
+            )
+
+        if format_suffixes[-2:] == ['.msp', '.tsv'] or format_suffixes[-1] == '.msp':
             from snputils.ancestry.io.local.read.msp import MSPReader
 
             return MSPReader(file)
-        if suffixes[-1] == '.lanc':
+        if format_suffixes[-1] == '.lanc':
             from snputils.ancestry.io.local.read.lanc import LANCReader
 
             return LANCReader(file)
-        if suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
+        if format_suffixes[-1] == '.vcf':
             if not _looks_like_flare_vcf(file):
                 raise ValueError(
                     f"VCF file '{file}' does not look like FLARE local ancestry output. "
@@ -56,14 +74,14 @@ class LAIReader:
         else:
             raise ValueError(
                 f"Unsupported file extension: {suffixes[-1]}. "
-                "Supported extensions are: .msp, .msp.tsv, .anc.vcf, .anc.vcf.gz, .lanc."
+                "Supported extensions are: .msp, .msp.tsv, .anc.vcf, and .lanc, "
+                "optionally followed by .gz or .zst."
             )
 
 
 def _looks_like_flare_vcf(file: Path) -> bool:
-    opener = gzip.open if file.name.endswith(".gz") else open
     has_ancestry = False
-    with opener(file, "rt", encoding="utf-8") as handle:
+    with _open_text(file) as handle:
         for raw_line in handle:
             if raw_line.startswith("##ANCESTRY="):
                 has_ancestry = True

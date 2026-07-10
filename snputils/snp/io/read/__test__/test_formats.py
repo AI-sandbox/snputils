@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 from snputils import PGENReader
 
@@ -240,7 +242,7 @@ def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
     # Test .zst fileset
     # Copy pgen file
     shutil.copy(pgen_src, tmp_path / "subset.pgen")
-    
+
     # Compress pvar and psam to .zst in tmp_path
     cctx = zstd.ZstdCompressor()
     with open(pvar_src, "rb") as f_in, open(tmp_path / "subset.pvar.zst", "wb") as f_out:
@@ -256,7 +258,7 @@ def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
     # Test .gz fileset
     # Copy pgen file
     shutil.copy(pgen_src, tmp_path / "subset_gz.pgen")
-    
+
     # Compress pvar and psam to .gz in tmp_path
     with open(pvar_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.pvar.gz", "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
@@ -267,3 +269,42 @@ def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
     assert np.array_equal(snpobj_pgen.genotypes, snpobj_gz.genotypes)
     assert np.array_equal(snpobj_pgen.variants_pos, snpobj_gz.variants_pos)
     assert np.array_equal(snpobj_pgen.samples, snpobj_gz.samples)
+
+
+def test_bed_compressed_sidecar_path_dispatch(tmp_path):
+    import gzip
+
+    import zstandard as zstd
+
+    from snputils import read_snp
+
+    bim_contents = "1\trs1\t0\t100\tG\tA\n"
+    fam_contents = "F1\tS1\t0\t0\t0\t-9\n"
+
+    for compression_suffix in (".gz", ".zst"):
+        prefix = tmp_path / f"cohort_{compression_suffix[1:]}"
+        bim_path = Path(f"{prefix}.bim{compression_suffix}")
+        fam_path = Path(f"{prefix}.fam{compression_suffix}")
+        if compression_suffix == ".gz":
+            with gzip.open(bim_path, "wt", encoding="utf-8") as handle:
+                handle.write(bim_contents)
+            with gzip.open(fam_path, "wt", encoding="utf-8") as handle:
+                handle.write(fam_contents)
+        else:
+            with zstd.open(bim_path, "wt", encoding="utf-8") as handle:
+                handle.write(bim_contents)
+            with zstd.open(fam_path, "wt", encoding="utf-8") as handle:
+                handle.write(fam_contents)
+
+        snpobj = read_snp(bim_path, fields=["IID"])
+        np.testing.assert_array_equal(snpobj.samples, np.array(["S1"]))
+
+
+def test_snp_dispatcher_rejects_outer_compression_for_binary_formats():
+    import pytest
+
+    from snputils.snp.io.read.auto import SNPReader
+
+    for filename in ("cohort.bed.gz", "cohort.pgen.zst", "cohort.bgen.gz", "cohort.bcf.zst"):
+        with pytest.raises(ValueError, match="native binary"):
+            SNPReader(filename)

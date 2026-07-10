@@ -262,8 +262,8 @@ def test_local_ancestry_object_save_flare_requires_genotype_source(tmp_path: Pat
 
 def test_flare_zst(tmp_path: Path):
     import zstandard as zstd
-    from snputils.ancestry.io.local.read import read_flare
-    
+    from snputils.ancestry.io.local.read import read_flare, read_lai
+
     laiobj = LocalAncestryObject(
         haplotypes=["S1.0", "S1.1"],
         samples=["S1"],
@@ -285,11 +285,13 @@ def test_flare_zst(tmp_path: Path):
 
     out_path = tmp_path / "saved.anc.vcf.zst"
     laiobj.save_flare(out_path, snpobj=snpobj)
-    
+
     # Check that file exists
     assert out_path.exists()
-    
+
     # Check it can be read back
     loaded = read_flare(out_path)
+    loaded_auto = read_lai(out_path)
     np.testing.assert_array_equal(loaded.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_auto.lai, laiobj.lai)
     assert loaded.ancestry_map == laiobj.ancestry_map

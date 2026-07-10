@@ -44,7 +44,7 @@ class AdmixtureWriter(WideBaseWriter):
                 suffixes appended as described above (e.g., `file_prefix.n_ancestries.Q` for the Q matrix file).
         """
         super(AdmixtureWriter, self).__init__(wideobj, file_prefix)
-        
+
         file_prefix_str = str(self.file_prefix)
         comp_ext = ""
         for ext in (".zst", ".gz"):
@@ -54,7 +54,7 @@ class AdmixtureWriter(WideBaseWriter):
                 if file_prefix_str.endswith("."):
                     file_prefix_str = file_prefix_str[:-1]
                 break
-        
+
         base_prefix = Path(file_prefix_str)
         self.__Q_file = _append_admixture_suffix(
             base_prefix, f".{self.wideobj.n_ancestries}.Q{comp_ext}"

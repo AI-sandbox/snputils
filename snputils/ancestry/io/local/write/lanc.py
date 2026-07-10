@@ -71,7 +71,7 @@ class LANCWriter(LAIBaseWriter):
     def _sidecar_path(self, explicit: Optional[Path], suffix: str) -> Path:
         if explicit is not None:
             return explicit
-        
+
         file_str = str(self.file)
         comp_ext = ""
         for ext in (".zst", ".gz"):
@@ -79,10 +79,10 @@ class LANCWriter(LAIBaseWriter):
                 comp_ext = ext
                 file_str = file_str[:-len(ext)]
                 break
-        
+
         if file_str.lower().endswith(".lanc"):
             file_str = file_str[:-len(".lanc")]
-            
+
         return Path(file_str + suffix + comp_ext)
 
     def _coerce_lai(self) -> np.ndarray:

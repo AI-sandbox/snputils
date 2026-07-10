@@ -164,7 +164,7 @@ class MSPWriter(LAIBaseWriter):
             if self.laiobj.ancestry_map is not None:
                 ancestries_codes = list(self.laiobj.ancestry_map.keys()) # Get corresponding codes
                 ancestries = list(self.laiobj.ancestry_map.values()) # Get ancestry names
-                
+
                 # Create the first line for the ancestry information, detailing subpopulation codes
                 first_line = "#Subpopulation order/codes: " + "\t".join(
                     f"{a}={ancestries_codes[ai]}" for ai, a in enumerate(ancestries)

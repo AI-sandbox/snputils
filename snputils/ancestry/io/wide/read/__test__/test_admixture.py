@@ -21,15 +21,15 @@ def test_admixture_zst_and_gz(tmp_path):
     import zstandard as zstd
     from snputils.ancestry.io.wide.read import read_admixture
     from snputils.ancestry.genobj.wide import GlobalAncestryObject
-    
+
     q = np.array([[0.25, 0.75], [0.6, 0.4]])
     p = np.array([[0.1, 0.9], [0.8, 0.2], [0.3, 0.7]])
     samples = np.array(["S1", "S2"], dtype=object)
     snps = np.array(["rs1", "rs2", "rs3"], dtype=object)
     ancestries = np.array(["ANC1", "ANC2"], dtype=object)
-    
+
     obj = GlobalAncestryObject(q, p, samples=samples, snps=snps, ancestries=ancestries)
-    
+
     # 1. Save and read uncompressed
     prefix_uncompressed = tmp_path / "toy"
     obj.save(prefix_uncompressed)
@@ -38,7 +38,7 @@ def test_admixture_zst_and_gz(tmp_path):
     assert (tmp_path / "toy.sample_ids.txt").exists()
     assert (tmp_path / "toy.snp_ids.txt").exists()
     assert (tmp_path / "toy.map").exists()
-    
+
     loaded_uncompressed = read_admixture(
         tmp_path / "toy.2.Q",
         sample_file=tmp_path / "toy.sample_ids.txt",
@@ -50,7 +50,7 @@ def test_admixture_zst_and_gz(tmp_path):
     np.testing.assert_array_equal(loaded_uncompressed.samples, samples)
     np.testing.assert_array_equal(loaded_uncompressed.snps, snps)
     np.testing.assert_array_equal(loaded_uncompressed.ancestries, ancestries)
-    
+
     # 2. Save and read .zst
     prefix_zst = tmp_path / "toy.zst"
     obj.save(prefix_zst)
@@ -59,7 +59,7 @@ def test_admixture_zst_and_gz(tmp_path):
     assert (tmp_path / "toy.sample_ids.txt.zst").exists()
     assert (tmp_path / "toy.snp_ids.txt.zst").exists()
     assert (tmp_path / "toy.map.zst").exists()
-    
+
     loaded_zst = read_admixture(
         tmp_path / "toy.2.Q.zst",
         sample_file=tmp_path / "toy.sample_ids.txt.zst",
@@ -80,7 +80,7 @@ def test_admixture_zst_and_gz(tmp_path):
     assert (tmp_path / "toy.sample_ids.txt.gz").exists()
     assert (tmp_path / "toy.snp_ids.txt.gz").exists()
     assert (tmp_path / "toy.map.gz").exists()
-    
+
     loaded_gz = read_admixture(
         tmp_path / "toy.2.Q.gz",
         sample_file=tmp_path / "toy.sample_ids.txt.gz",

@@ -23,8 +23,17 @@ class SNPReader:
         if not suffixes:
             raise ValueError("The filename should have an extension when using SNPReader.")
 
-        extension = suffixes[-2] if suffixes[-1].lower() in (".zst", ".gz") else suffixes[-1]
+        compression_suffix = suffixes[-1].lower() if suffixes[-1].lower() in (".zst", ".gz") else None
+        if compression_suffix is not None and len(suffixes) < 2:
+            raise ValueError("A format extension must precede the compression extension.")
+        extension = suffixes[-2] if compression_suffix is not None else suffixes[-1]
         extension = extension.lower()
+
+        if compression_suffix is not None and extension in (".bed", ".pgen", ".bgen", ".bcf"):
+            raise ValueError(
+                f"Outer {compression_suffix} compression is not supported for native binary "
+                f"{extension} files. Provide the native {extension} file directly."
+            )
 
         if extension == ".vcf":
             if vcf_backend == 'default':
@@ -41,7 +50,7 @@ class SNPReader:
             from snputils.snp.io.read.bed import BEDReader
 
             return BEDReader(filename)
-        elif extension in (".pgen", ".pvar", ".psam", ".pvar.zst"):
+        elif extension in (".pgen", ".pvar", ".psam"):
             from snputils.snp.io.read.pgen import PGENReader
 
             return PGENReader(filename)

@@ -284,8 +284,8 @@ def test_lanc_writer_rejects_multi_digit_ancestry_codes(tmp_path: Path):
 def test_lanc_zst_and_gz(tmp_path: Path):
     import gzip
     import zstandard as zstd
-    from snputils.ancestry.io.local.read import read_lanc
-    
+    from snputils.ancestry.io.local.read import read_lai, read_lanc
+
     laiobj = LocalAncestryObject(
         haplotypes=["S1.0", "S1.1"],
         samples=["S1"],
@@ -309,9 +309,11 @@ def test_lanc_zst_and_gz(tmp_path: Path):
     assert zst_path.exists()
     assert (tmp_path / "toy.pvar.zst").exists()
     assert (tmp_path / "toy.psam.zst").exists()
-    
+
     loaded_zst = read_lanc(zst_path)
+    loaded_zst_auto = read_lai(zst_path)
     np.testing.assert_array_equal(loaded_zst.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_zst_auto.lai, laiobj.lai)
     np.testing.assert_array_equal(loaded_zst.physical_pos, laiobj.physical_pos)
     np.testing.assert_array_equal(loaded_zst.samples, laiobj.samples)
 
@@ -321,8 +323,10 @@ def test_lanc_zst_and_gz(tmp_path: Path):
     assert gz_path.exists()
     assert (tmp_path / "toy.pvar.gz").exists()
     assert (tmp_path / "toy.psam.gz").exists()
-    
+
     loaded_gz = read_lanc(gz_path)
+    loaded_gz_auto = read_lai(gz_path)
     np.testing.assert_array_equal(loaded_gz.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_gz_auto.lai, laiobj.lai)
     np.testing.assert_array_equal(loaded_gz.physical_pos, laiobj.physical_pos)
     np.testing.assert_array_equal(loaded_gz.samples, laiobj.samples)

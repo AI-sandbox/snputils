@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Iterator, List, Optional
+from pathlib import Path
+from typing import Any, Iterator, List, Optional, Union
 import csv
 
 import numpy as np
@@ -73,6 +74,23 @@ def _open_textfile(filename: str, mode: str = "rt"):
     return open(filename, mode)
 
 
+def _strip_bed_fileset_suffix(filename: Union[str, Path]) -> str:
+    filename_str = str(filename)
+    lower_filename = filename_str.lower()
+    for suffix in (
+        ".bim.zst",
+        ".bim.gz",
+        ".fam.zst",
+        ".fam.gz",
+        ".bed",
+        ".bim",
+        ".fam",
+    ):
+        if lower_filename.endswith(suffix):
+            return filename_str[:-len(suffix)]
+    return filename_str
+
+
 @SNPBaseReader.register
 class BEDReader(SNPBaseReader):
     def read(
@@ -113,7 +131,7 @@ class BEDReader(SNPBaseReader):
                 If the automatic detection fails, please specify the separator manually.
 
         Returns:
-            **SNPObject**: 
+            **SNPObject**:
                 A SNPObject instance.
         """
         assert (
@@ -140,9 +158,7 @@ class BEDReader(SNPBaseReader):
             )
         only_read_bed = fields == ["GT"] and variant_idxs is None and sample_idxs is None
 
-        filename_noext = str(self.filename)
-        if filename_noext[-4:].lower() in (".bed", ".bim", ".fam"):
-            filename_noext = filename_noext[:-4]
+        filename_noext = _strip_bed_fileset_suffix(self.filename)
 
         fam_filename = _resolve_compressed_path(filename_noext, ".fam")
         bim_filename = _resolve_compressed_path(filename_noext, ".bim")
@@ -337,9 +353,7 @@ class BEDReader(SNPBaseReader):
         """
         Resolve variant selectors to canonical file-order row indices.
         """
-        filename_noext = str(self.filename)
-        if filename_noext[-4:].lower() in (".bed", ".bim", ".fam"):
-            filename_noext = filename_noext[:-4]
+        filename_noext = _strip_bed_fileset_suffix(self.filename)
 
         bim_filename = _resolve_compressed_path(filename_noext, ".bim")
 

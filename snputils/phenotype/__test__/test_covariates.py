@@ -1,8 +1,10 @@
+import gzip
 from pathlib import Path
 from typing import Sequence
 
 import numpy as np
 import pytest
+import zstandard as zstd
 
 from snputils.ancestry.genobj.wide import GlobalAncestryObject
 from snputils.datasets import build_synthetic_snp_dataset
@@ -75,6 +77,21 @@ def test_from_file_drops_rows_with_missing_values(tmp_path: Path):
     covar = CovariateObject.from_file(path)
     assert covar.samples == ["s1"]
     assert covar.n_covariates == 1
+
+
+@pytest.mark.parametrize("compression_suffix", [".gz", ".zst"])
+def test_from_file_accepts_compressed_metadata(tmp_path: Path, compression_suffix: str):
+    path = tmp_path / f"covar.txt{compression_suffix}"
+    opener = gzip.open if compression_suffix == ".gz" else zstd.open
+    with opener(path, "wt", encoding="utf-8") as handle:
+        handle.write("#FID IID age sex\n")
+        handle.write("s1 s1 58 M\n")
+        handle.write("s2 s2 49 F\n")
+
+    covar = CovariateObject.from_file(path)
+
+    assert covar.samples == ["s1", "s2"]
+    assert covar.covariate_names == ["age", "sex"]
 
 
 def test_from_embedding_uses_sample_level_pca():

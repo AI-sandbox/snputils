@@ -203,6 +203,25 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
     np.testing.assert_array_equal(snpobj.samples, np.array(["HG00096", "HG00097"]))
 
 
+def test_read_snp_dispatches_zstandard_vcf(tmp_path: Path):
+    import zstandard as zstd
+
+    from snputils import read_snp
+
+    vcf_path = tmp_path / "gt_only.vcf.zst"
+    with zstd.open(vcf_path, "wt", encoding="utf-8") as file:
+        file.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+            "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|1\n"
+        )
+
+    snpobj = read_snp(vcf_path, sum_strands=False)
+
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[[0, 1]]], dtype=np.int8))
+    np.testing.assert_array_equal(snpobj.samples, np.array(["S1"]))
+
+
 def test_vcf_reader_read_supports_region(tmp_path: Path):
     vcf_path = tmp_path / "regions.vcf"
     vcf_path.write_text(

@@ -24,6 +24,13 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("Value must be a non-negative integer.")
+    return parsed
+
+
 def _run_pca(args: argparse.Namespace) -> int:
     from . import pca as pca_module
 
@@ -40,6 +47,12 @@ def _run_gwas(args: argparse.Namespace) -> int:
     from . import gwas as gwas_module
 
     return int(gwas_module.run_gwas_command(args))
+
+
+def _run_sex_check(args: argparse.Namespace) -> int:
+    from . import sex_check as sex_check_module
+
+    return int(sex_check_module.run_sex_check_command(args))
 
 
 def _run_simulate(args: argparse.Namespace) -> int:
@@ -652,6 +665,43 @@ def _add_plot_qq_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--title", default=None, help="Optional plot title.")
 
 
+def _add_sex_check_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--snp-path",
+        dest="snp_path",
+        required=True,
+        type=str,
+        help="Path to hard-call genotype input (VCF, BCF, BED, or PGEN).",
+    )
+    parser.add_argument(
+        "--results-path",
+        dest="results_path",
+        default="sex_check.tsv",
+        type=str,
+        help="Path for the tab-separated sex-check report (.gz is supported).",
+    )
+    parser.add_argument(
+        "--sex-path",
+        dest="sex_path",
+        default=None,
+        type=str,
+        help="Optional headered table with IID/sample and SEX/Gender columns.",
+    )
+    parser.add_argument(
+        "--low-information-threshold",
+        dest="low_information_threshold",
+        default=500,
+        type=_nonnegative_int,
+        help="Flag non-empty samples with fewer than this many callable X genotypes (0 disables).",
+    )
+    parser.add_argument(
+        "--assume-x",
+        dest="assume_x",
+        action="store_true",
+        help="Treat every variant as chromosome X when chromosome metadata is unavailable.",
+    )
+
+
 _COMMANDS: Dict[str, _Command] = {
     "pca": _Command(
         help="Run PCA and save plot/components.",
@@ -677,6 +727,11 @@ _COMMANDS: Dict[str, _Command] = {
         help="Run GWAS.",
         add_arguments=_add_gwas_arguments,
         run=_run_gwas,
+    ),
+    "sex-check": _Command(
+        help="Infer genetic sex from chromosome-X zygosity distributions.",
+        add_arguments=_add_sex_check_arguments,
+        run=_run_sex_check,
     ),
     "simulate": _Command(
         help="Simulate admixed haplotype batches.",

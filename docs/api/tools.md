@@ -1,6 +1,16 @@
-# Association and Utilities
+# Analysis Tools and Utilities
 
-High-level association testing helpers and label-table utilities used across plotting and dimensionality-reduction workflows.
+High-level file-backed analysis helpers and label-table utilities.
+
+## Genetic sex checking
+
+```{eval-rst}
+.. autofunction:: snputils.run_sex_check
+```
+
+For an already-loaded `SNPObject`, use {func}`~snputils.sex_check` directly.
+The file-backed helper accepts VCF, BCF, BED, and PGEN hard-call inputs and can
+write the resulting TSV through `results_path`.
 
 ## GWAS and admixture mapping
 

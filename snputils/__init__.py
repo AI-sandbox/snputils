@@ -32,6 +32,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "read_pgen": (".snp", "read_pgen"),
     "read_vcf": (".snp", "read_vcf"),
     "read_grg": (".snp", "read_grg"),
+    "sex_check": (".snp", "sex_check"),
     "LocalAncestryObject": (".ancestry", "LocalAncestryObject"),
     "GlobalAncestryObject": (".ancestry", "GlobalAncestryObject"),
     "MSPReader": (".ancestry", "MSPReader"),
@@ -75,6 +76,7 @@ _LAZY_ATTRS: Dict[str, Tuple[str, str]] = {
     "build_synthetic_snp_dataset": (".datasets", "build_synthetic_snp_dataset"),
     "run_admixture_mapping": (".tools", "run_admixture_mapping"),
     "run_gwas": (".tools", "run_gwas"),
+    "run_sex_check": (".tools", "run_sex_check"),
     "read_labels": ("._utils.labels", "read_labels"),
     "viz": (".visualization", ""),
 }

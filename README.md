@@ -100,6 +100,7 @@ Optional extras:
   - Compute cohort and ancestry-specific allele frequencies via `SNPObject.allele_freq(...)`
   - Stream allele frequencies with `snputils.stats.allele_freq_stream(...)` for memory efficiency
   - Run common genotype QC from `SNPObject`: duplicate sample/variant checks, call-rate filters, MAF/MAC filters, HWE, LD pruning, heterozygosity/inbreeding reports, imputation quality filters, relatedness pruning, and differential missingness by phenotype, cohort, or batch
+  - Infer genetic sex from chromosome-X zygosity distributions with the integrated Zigo model via `snputils.sex_check(...)` or `snputils sex-check`
 
 - **Dimensionality reduction**
   - Standard PCA with optional PyTorch acceleration
@@ -188,7 +189,7 @@ The Python API remains the full surface for low-level readers/writers, object ma
 Top-level imports include:
 
 - Readers and objects: `read_snp`, `read_lai`, `read_admixture`, `read_ibd`, `read_pheno`, `SNPObject`, `LocalAncestryObject`, `GlobalAncestryObject`, `IBDObject`
-- Analysis: `PCA`, `mdPCA`, `maasMDS`, `run_gwas`, `run_admixture_mapping`, `allele_freq_stream`
+- Analysis: `PCA`, `mdPCA`, `maasMDS`, `sex_check`, `run_sex_check`, `run_gwas`, `run_admixture_mapping`, `allele_freq_stream`
 - Datasets: `load_dataset`, `available_datasets_list`, `build_synthetic_*`
 - Visualization namespace: `snputils.viz`
 
@@ -207,6 +208,9 @@ If you use **snputils** in your research, please cite [our paper](https://www.bi
     publisher = {Cold Spring Harbor Laboratory},
 }
 ```
+
+If you use the integrated sex-check functionality, please also cite
+[Zigo: Sex checking by zygosity distributions](https://doi.org/10.64898/2026.03.15.711924).
 
 ## Acknowledgments
 

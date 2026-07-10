@@ -75,6 +75,10 @@ def _get_vcf_col_names_and_sep(vcf_path: str, separator: Optional[str] = None):
     if vcf_path.suffixes[-2:] == ['.vcf', '.gz']:
         open_func = gzip.open
         mode = 'rt'
+    elif vcf_path.suffixes[-2:] == ['.vcf', '.zst']:
+        import zstandard as zstd
+        open_func = lambda p, m: zstd.open(p, m, encoding="utf-8")
+        mode = 'rt'
     elif vcf_path.suffix == '.vcf':
         open_func = open
         mode = 'r'
@@ -111,6 +115,10 @@ def _open_vcf_binary(vcf_path: Union[str, pathlib.Path]):
     vcf_path = Path(vcf_path)
     if vcf_path.suffixes[-2:] == ['.vcf', '.gz']:
         return gzip.open(vcf_path, 'rb')
+    if vcf_path.suffixes[-2:] == ['.vcf', '.zst']:
+        import zstandard as zstd
+        import io
+        return io.BufferedReader(zstd.open(vcf_path, 'rb'))
     if vcf_path.suffix == '.vcf':
         return open(vcf_path, 'rb')
     raise ValueError(f"Unsupported file extension: {vcf_path.suffixes}")
@@ -316,7 +324,7 @@ def _concat_axis0_releasing(chunks: list[np.ndarray]) -> np.ndarray:
 
 def _initial_stream_capacity(vcf_path: Union[str, pathlib.Path]) -> int:
     path = Path(vcf_path)
-    if path.suffixes[-2:] == [".vcf", ".gz"]:
+    if path.suffixes[-2:] in ([".vcf", ".gz"], [".vcf", ".zst"]):
         try:
             # A gzip stream does not expose row count cheaply. The compressed
             # byte size is a conservative starting point that avoids an extra
@@ -1879,7 +1887,7 @@ class VCFReader(SNPBaseReader):
             )
 
         try:
-            if Path(self._filename).suffixes[-2:] == [".vcf", ".gz"]:
+            if Path(self._filename).suffixes[-2:] in ([".vcf", ".gz"], [".vcf", ".zst"]):
                 return self._read_block_gt_only_streaming(
                     names=names,
                     field_columns=field_columns,

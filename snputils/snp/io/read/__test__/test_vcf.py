@@ -83,6 +83,64 @@ def test_vcf_reader_reads_gt_when_format_field_is_not_first(tmp_path: Path):
     np.testing.assert_array_equal(snpobj.genotypes, expected)
 
 
+def test_vcf_reader_sums_autosomal_partial_missing_as_missing(tmp_path: Path):
+    vcf_path = tmp_path / "autosomal_partial_missing.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\tS4\n"
+        "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\t1|1\t.|.\n"
+    )
+
+    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[-1, -1, 2, -1]], dtype=np.int8))
+
+
+def test_vcf_reader_sums_non_diploid_partial_missing_as_haploid_dosage(tmp_path: Path):
+    vcf_path = tmp_path / "non_diploid_partial_missing.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\tS4\n"
+        "X\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\t.|.\t1|1\n"
+        "chrX\t150\trs1b\tA\tG\t.\tPASS\t.\tGT\t.|0\t.|1\t.|.\t0|0\n"
+        "chrY\t200\trs2\tA\tG\t.\tPASS\t.\tGT\t.|0\t.|1\t.|.\t0|1\n"
+        "MT\t250\trs2b\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\t.|.\t1|0\n"
+        "chromMT\t300\trs3\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\t.|.\t0|0\n"
+        "mitochondrial\t400\trs4\tA\tG\t.\tPASS\t.\tGT\t.|0\t.|1\t.|.\t1|0\n"
+    )
+
+    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+
+    expected = np.array(
+        [
+            [0, 2, -1, 2],
+            [0, 2, -1, 0],
+            [0, 2, -1, 1],
+            [0, 2, -1, 1],
+            [0, 2, -1, 0],
+            [0, 2, -1, 1],
+        ],
+        dtype=np.int8,
+    )
+    np.testing.assert_array_equal(snpobj.genotypes, expected)
+
+
+def test_vcf_reader_polars_uses_internal_chrom_for_non_diploid_summing(tmp_path: Path):
+    vcf_path = tmp_path / "polars_internal_chrom.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+        "chrX\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\n"
+        "1\t200\trs2\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\n"
+    )
+
+    snpobj = VCFReaderPolars(vcf_path).read(fields=["ID"], sum_strands=True)
+
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[0, 2], [-1, -1]], dtype=np.int8))
+    np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs1", "rs2"]))
+    assert snpobj.variants_chrom.size == 0
+
+
 def test_vcf_reader_normalizes_qual_and_filter_pass_like_vcf_reader(tmp_path: Path):
     vcf_path = tmp_path / "qual_filter.vcf"
     vcf_path.write_text(

@@ -127,8 +127,47 @@ def test_variants_alt_shape(snpobj_vcf):
 
 
 # Compressed VCF
-def test_vcf_gz(data_path):
-    pass  # TODO
+def test_vcf_gz_and_zst(data_path, snpobj_vcf):
+    import gzip
+    import zstandard as zstd
+    from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
+    import pathlib
+
+    vcf_path = pathlib.Path(data_path) / "vcf" / "subset.vcf"
+    gz_path = pathlib.Path(data_path) / "vcf" / "subset.vcf.gz"
+    zst_path = pathlib.Path(data_path) / "vcf" / "subset.vcf.zst"
+
+    # Create compressed files if they don't exist
+    if not gz_path.exists():
+        with open(vcf_path, "rb") as f_in:
+            with gzip.open(gz_path, "wb") as f_out:
+                f_out.writelines(f_in)
+
+    if not zst_path.exists():
+        with open(vcf_path, "rb") as f_in:
+            cctx = zstd.ZstdCompressor()
+            with open(zst_path, "wb") as f_out:
+                cctx.copy_stream(f_in, f_out)
+
+    # Test default VCFReader on .gz
+    snpobj_gz = VCFReader(gz_path).read(sum_strands=False)
+    assert np.array_equal(snpobj_vcf.genotypes, snpobj_gz.genotypes)
+    assert np.array_equal(snpobj_vcf.variants_pos, snpobj_gz.variants_pos)
+
+    # Test default VCFReader on .zst
+    snpobj_zst = VCFReader(zst_path).read(sum_strands=False)
+    assert np.array_equal(snpobj_vcf.genotypes, snpobj_zst.genotypes)
+    assert np.array_equal(snpobj_vcf.variants_pos, snpobj_zst.variants_pos)
+
+    # Test VCFReaderPolars on .gz
+    snpobj_polars_gz = VCFReaderPolars(gz_path).read(sum_strands=False)
+    assert np.array_equal(snpobj_vcf.genotypes, snpobj_polars_gz.genotypes)
+    assert np.array_equal(snpobj_vcf.variants_pos, snpobj_polars_gz.variants_pos)
+
+    # Test VCFReaderPolars on .zst
+    snpobj_polars_zst = VCFReaderPolars(zst_path).read(sum_strands=False)
+    assert np.array_equal(snpobj_vcf.genotypes, snpobj_polars_zst.genotypes)
+    assert np.array_equal(snpobj_vcf.variants_pos, snpobj_polars_zst.variants_pos)
 
 
 # PGEN with compressed pvar

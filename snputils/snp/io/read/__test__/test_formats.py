@@ -181,3 +181,45 @@ def test_pgen_pvar_zst(data_path, snpobj_pgen):
     assert np.array_equal(snpobj_pgen.variants_pos, snpobj.variants_pos)
     assert np.array_equal(snpobj_pgen.variants_filter_pass, snpobj.variants_filter_pass)
     assert np.array_equal(snpobj_pgen.variants_qual, snpobj.variants_qual)
+
+
+# BED with compressed bim and fam
+def test_bed_bim_fam_zst(data_path, snpobj_bed, tmp_path):
+    import gzip
+    import zstandard as zstd
+    from snputils import BEDReader
+    import shutil
+    import pathlib
+
+    bed_src = pathlib.Path(data_path) / "bed" / "subset.bed"
+    bim_src = pathlib.Path(data_path) / "bed" / "subset.bim"
+    fam_src = pathlib.Path(data_path) / "bed" / "subset.fam"
+
+    # Copy bed file to tmp_path
+    shutil.copy(bed_src, tmp_path / "subset.bed")
+
+    # Compress bim and fam to .zst in tmp_path
+    cctx = zstd.ZstdCompressor()
+    with open(bim_src, "rb") as f_in, open(tmp_path / "subset.bim.zst", "wb") as f_out:
+        cctx.copy_stream(f_in, f_out)
+    with open(fam_src, "rb") as f_in, open(tmp_path / "subset.fam.zst", "wb") as f_out:
+        cctx.copy_stream(f_in, f_out)
+
+    # Read from zst compressed bim/fam
+    snpobj_zst = BEDReader(tmp_path / "subset").read(sum_strands=True)
+    assert np.array_equal(snpobj_bed.genotypes, snpobj_zst.genotypes)
+    assert np.array_equal(snpobj_bed.variants_pos, snpobj_zst.variants_pos)
+    assert np.array_equal(snpobj_bed.samples, snpobj_zst.samples)
+
+    # Test .gz as well
+    # Compress bim and fam to .gz in tmp_path
+    with open(bim_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.bim.gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+    with open(fam_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.fam.gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+    shutil.copy(bed_src, tmp_path / "subset_gz.bed")
+
+    snpobj_gz = BEDReader(tmp_path / "subset_gz").read(sum_strands=True)
+    assert np.array_equal(snpobj_bed.genotypes, snpobj_gz.genotypes)
+    assert np.array_equal(snpobj_bed.variants_pos, snpobj_gz.variants_pos)
+    assert np.array_equal(snpobj_bed.samples, snpobj_gz.samples)

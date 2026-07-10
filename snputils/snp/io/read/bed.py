@@ -51,6 +51,28 @@ def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
     return value
 
 
+def _resolve_compressed_path(base_path: str, ext: str) -> str:
+    import os
+    candidate = base_path + ext
+    if os.path.exists(candidate):
+        return candidate
+    for comp_ext in (".zst", ".gz"):
+        candidate_compressed = base_path + ext + comp_ext
+        if os.path.exists(candidate_compressed):
+            return candidate_compressed
+    return candidate
+
+
+def _open_textfile(filename: str, mode: str = "rt"):
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode)
+
+
 @SNPBaseReader.register
 class BEDReader(SNPBaseReader):
     def read(
@@ -122,19 +144,22 @@ class BEDReader(SNPBaseReader):
         if filename_noext[-4:].lower() in (".bed", ".bim", ".fam"):
             filename_noext = filename_noext[:-4]
 
+        fam_filename = _resolve_compressed_path(filename_noext, ".fam")
+        bim_filename = _resolve_compressed_path(filename_noext, ".bim")
+
         if only_read_bed:
-            with open(filename_noext + '.fam', 'r') as f:
+            with _open_textfile(fam_filename, 'rt') as f:
                 file_num_samples = sum(1 for _ in f)  # Get sample count from fam file
             file_num_variants = None  # Not needed
         else:
-            log.info(f"Reading {filename_noext}.bim")
+            log.info(f"Reading {bim_filename}")
 
             if separator is None:
-                with open(filename_noext + ".bim", "r") as file:
+                with _open_textfile(bim_filename, "rt") as file:
                     separator = csv.Sniffer().sniff(file.readline()).delimiter
 
             bim = pl.read_csv(
-                filename_noext + ".bim",
+                bim_filename,
                 separator=separator,
                 has_header=False,
                 new_columns=["#CHROM", "ID", "CM", "POS", "ALT", "REF"],
@@ -182,10 +207,10 @@ class BEDReader(SNPBaseReader):
                 variant_idxs = requested_variant_idxs
                 num_variants = np.size(variant_idxs)
 
-            log.info(f"Reading {filename_noext}.fam")
+            log.info(f"Reading {fam_filename}")
 
             fam = pl.read_csv(
-                filename_noext + ".fam",
+                fam_filename,
                 separator=separator,
                 has_header=False,
                 new_columns=["Family ID", "IID", "Father ID",
@@ -316,13 +341,15 @@ class BEDReader(SNPBaseReader):
         if filename_noext[-4:].lower() in (".bed", ".bim", ".fam"):
             filename_noext = filename_noext[:-4]
 
+        bim_filename = _resolve_compressed_path(filename_noext, ".bim")
+
         local_separator = separator
         if local_separator is None:
-            with open(filename_noext + ".bim", "r") as file:
+            with _open_textfile(bim_filename, "rt") as file:
                 local_separator = csv.Sniffer().sniff(file.readline()).delimiter
 
         bim = pl.read_csv(
-            filename_noext + ".bim",
+            bim_filename,
             separator=local_separator,
             has_header=False,
             new_columns=["#CHROM", "ID", "CM", "POS", "ALT", "REF"],

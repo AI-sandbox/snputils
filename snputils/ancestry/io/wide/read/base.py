@@ -7,6 +7,26 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
+def _open_textfile(filename: Union[str, Path], mode: str = "rt"):
+    filename = str(filename)
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
+def _get_format_suffix(path: Path) -> str:
+    suffixes = [s.lower() for s in path.suffixes]
+    if not suffixes:
+        return ""
+    if suffixes[-1] in (".zst", ".gz") and len(suffixes) >= 2:
+        return suffixes[-2]
+    return suffixes[-1]
+
+
 class WideBaseReader(abc.ABC):
     """
     Abstract class for global ancestry readers.
@@ -121,14 +141,17 @@ class WideBaseReader(abc.ABC):
             return None
         
         log.info(f"Reading sample identifiers from '{self.sample_file}'...")
-        if self.sample_file.suffix == ".txt":
-            return np.genfromtxt(self.sample_file, dtype=str)
-        elif self.sample_file.suffix == ".fam":
-            return np.genfromtxt(self.sample_file, dtype=str, usecols=1)
+        suffix = _get_format_suffix(self.sample_file)
+        if suffix == ".txt":
+            with _open_textfile(self.sample_file, "rt") as f:
+                return np.genfromtxt(f, dtype=str)
+        elif suffix == ".fam":
+            with _open_textfile(self.sample_file, "rt") as f:
+                return np.genfromtxt(f, dtype=str, usecols=1)
         else:
             raise ValueError(
-                f"Unsupported file extension for sample identifiers: {self.sample_file.suffix}"
-                "Supported extensions are: .txt, .fam."
+                f"Unsupported file extension for sample identifiers: {self.sample_file.name} "
+                "Supported extensions are: .txt, .fam (optionally compressed with .zst or .gz)."
             )
     
     def _read_snps(self) -> Optional[np.ndarray]:
@@ -139,14 +162,17 @@ class WideBaseReader(abc.ABC):
             return None
         
         log.info(f"Reading SNP identifiers from '{self.snp_file}'...")
-        if self.snp_file.suffix == ".txt":
-            return np.genfromtxt(self.snp_file, dtype=str)
-        elif self.snp_file.suffix == ".bim":
-            return np.genfromtxt(self.snp_file, dtype=str, usecols=1)
+        suffix = _get_format_suffix(self.snp_file)
+        if suffix == ".txt":
+            with _open_textfile(self.snp_file, "rt") as f:
+                return np.genfromtxt(f, dtype=str)
+        elif suffix == ".bim":
+            with _open_textfile(self.snp_file, "rt") as f:
+                return np.genfromtxt(f, dtype=str, usecols=1)
         else:
             raise ValueError(
-                f"Unsupported file extension for SNP identifiers: {self.snp_file.suffix}"
-                "Supported extensions are: .txt, .bim."
+                f"Unsupported file extension for SNP identifiers: {self.snp_file.name} "
+                "Supported extensions are: .txt, .bim (optionally compressed with .zst or .gz)."
             )
 
     def _read_ancestries(self) -> Optional[np.ndarray]:
@@ -157,12 +183,14 @@ class WideBaseReader(abc.ABC):
             return None
         
         log.info(f"Reading ancestries for each sample from '{self.ancestry_file}'...")
-        if self.ancestry_file.suffix in [".map", ".txt"]:
-            return np.genfromtxt(self.ancestry_file, dtype=str)
+        suffix = _get_format_suffix(self.ancestry_file)
+        if suffix in (".map", ".txt"):
+            with _open_textfile(self.ancestry_file, "rt") as f:
+                return np.genfromtxt(f, dtype=str)
         else:
             raise ValueError(
-                f"Unsupported file extension for ancestries: {self.ancestry_file.suffix}"
-                "Supported extension: .map."
+                f"Unsupported file extension for ancestries: {self.ancestry_file.name} "
+                "Supported extension: .map, .txt (optionally compressed with .zst or .gz)."
             )
 
     @abc.abstractmethod

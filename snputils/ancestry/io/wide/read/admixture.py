@@ -5,6 +5,27 @@ from typing import Union, Optional
 
 log = logging.getLogger(__name__)
 
+
+def _open_textfile(filename: Union[str, Path], mode: str = "rt"):
+    filename = str(filename)
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
+def _resolve_compressed_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    for ext in (".zst", ".gz"):
+        candidate = Path(str(path) + ext)
+        if candidate.exists():
+            return candidate
+    return path
+
 from .base import WideBaseReader
 from snputils.ancestry.genobj.wide import GlobalAncestryObject
 
@@ -55,20 +76,38 @@ class AdmixtureReader(WideBaseReader):
         """
         q_path = Path(Q_file)
         p_path = Path(P_file) if P_file is not None else None
-        if not q_path.exists() and q_path.suffix != ".Q":
-            q_candidate = _append_admixture_suffix(q_path, ".Q")
-            if q_candidate.exists():
-                q_path = q_candidate
-                if p_path is None:
-                    p_candidate = _append_admixture_suffix(_strip_admixture_suffix(q_path, ".Q"), ".P")
-                    if p_candidate.exists():
-                        p_path = p_candidate
+
+        q_path = _resolve_compressed_path(q_path)
+
+        q_suffix_lower = q_path.name.lower()
+        has_q_suffix = (
+            q_suffix_lower.endswith(".q")
+            or q_suffix_lower.endswith(".q.zst")
+            or q_suffix_lower.endswith(".q.gz")
+        )
+
+        if not q_path.exists() and not has_q_suffix:
+            q_cand = _resolve_compressed_path(Path(str(q_path) + ".Q"))
+            if q_cand.exists():
+                q_path = q_cand
+
+        if p_path is None:
+            q_str = str(q_path)
+            for q_ext in (".Q.zst", ".Q.gz", ".Q", ".q.zst", ".q.gz", ".q"):
+                if q_str.endswith(q_ext):
+                    prefix = q_str[:-len(q_ext)]
+                    p_cand = _resolve_compressed_path(Path(prefix + ".P"))
+                    if p_cand.exists():
+                        p_path = p_cand
+                    break
+        else:
+            p_path = _resolve_compressed_path(p_path)
 
         self.__Q_file = q_path
         self.__P_file = p_path
-        self.__sample_file = Path(sample_file) if sample_file is not None else None
-        self.__snp_file = Path(snp_file) if snp_file is not None else None
-        self.__ancestry_file = Path(ancestry_file) if ancestry_file is not None else None
+        self.__sample_file = _resolve_compressed_path(Path(sample_file)) if sample_file is not None else None
+        self.__snp_file = _resolve_compressed_path(Path(snp_file)) if snp_file is not None else None
+        self.__ancestry_file = _resolve_compressed_path(Path(ancestry_file)) if ancestry_file is not None else None
 
     @property
     def Q_file(self) -> Path:
@@ -159,10 +198,12 @@ class AdmixtureReader(WideBaseReader):
                 A GlobalAncestryObject instance.
         """
         log.info(f"Reading Q matrix from '{self.Q_file}'...")
-        Q_mat = np.genfromtxt(self.Q_file, delimiter=' ')
+        with _open_textfile(self.Q_file, "rt") as f:
+            Q_mat = np.genfromtxt(f, delimiter=' ')
         if self.P_file is not None:
             log.info(f"Reading P matrix from '{self.P_file}'...")
-            P_mat = np.genfromtxt(self.P_file, delimiter=' ')
+            with _open_textfile(self.P_file, "rt") as f:
+                P_mat = np.genfromtxt(f, delimiter=' ')
         else:
             P_mat = None
 

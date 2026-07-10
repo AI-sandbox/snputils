@@ -14,6 +14,9 @@ def read_admixture(
     """
     Read ADMIXTURE files into a `snputils.ancestry.genobj.GlobalAncestryObject`.
 
+    All inputs are text and may be plain, gzip-compressed, or
+    Zstandard-compressed.
+
     Args:
         Q_file (str or pathlib.Path):
             Path to the file containing the Q matrix (per-sample ancestry proportions).
@@ -24,11 +27,11 @@ def read_admixture(
             It should end with .P or .txt.
             The file should use space (' ') as the delimiter. If None, P is not loaded.
         sample_file (str or pathlib.Path, optional):
-            Path to the single-column file containing sample identifiers. 
+            Path to the single-column file containing sample identifiers.
             It should end with .fam or .txt.
             If None, sample identifiers are not loaded.
         snp_file (str or pathlib.Path, optional):
-            Path to the single-column file containing SNP identifiers. 
+            Path to the single-column file containing SNP identifiers.
             It should end with .bim or .txt.
             If None, SNP identifiers are not loaded.
         ancestry_file (str or pathlib.Path, optional):

@@ -120,3 +120,45 @@ def test_bgen_dosage_rejects_multiallelic_probabilities():
 
     with pytest.raises(ValueError, match="biallelic"):
         snpobj.dosage()
+
+
+def test_bgen_sample_compression(data_path, tmp_path):
+    import gzip
+    import zstandard as zstd
+    from snputils import BGENReader
+    import shutil
+    import pathlib
+
+    bgen_src = pathlib.Path(data_path) / "bgen" / "subset.bgen"
+    sample_src = pathlib.Path(data_path) / "bgen" / "subset.sample"
+
+    # Copy files
+    shutil.copy(bgen_src, tmp_path / "subset.bgen")
+    shutil.copy(sample_src, tmp_path / "subset.sample")
+
+    # Read uncompressed
+    reader_uncompressed = BGENReader(tmp_path / "subset.bgen")
+    res_uncompressed = reader_uncompressed.read(sample_path=tmp_path / "subset.sample")
+
+    # Read .zst
+    # Compress sample to .zst in tmp_path
+    cctx = zstd.ZstdCompressor()
+    with open(sample_src, "rb") as f_in, open(tmp_path / "subset.sample.zst", "wb") as f_out:
+        cctx.copy_stream(f_in, f_out)
+
+    res_zst = reader_uncompressed.read(sample_path=tmp_path / "subset.sample.zst")
+    np.testing.assert_array_equal(res_uncompressed.samples, res_zst.samples)
+
+    # Read .gz
+    # Compress sample to .gz in tmp_path
+    with open(sample_src, "rb") as f_in, gzip.open(tmp_path / "subset.sample.gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+
+    res_gz = reader_uncompressed.read(sample_path=tmp_path / "subset.sample.gz")
+    np.testing.assert_array_equal(res_uncompressed.samples, res_gz.samples)
+
+    # Test auto-resolution of compressed path when passing base sample path
+    # Remove subset.sample to force resolution
+    (tmp_path / "subset.sample").unlink()
+    res_auto = reader_uncompressed.read(sample_path=tmp_path / "subset.sample")
+    np.testing.assert_array_equal(res_uncompressed.samples, res_auto.samples)

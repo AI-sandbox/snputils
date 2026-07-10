@@ -16,6 +16,9 @@ log = logging.getLogger(__name__)
 def _open_text(path: Path, mode: str = "wt") -> TextIO:
     if path.name.endswith(".gz"):
         return gzip.open(path, mode, encoding="utf-8")
+    if path.name.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(path, mode, encoding="utf-8")
     return open(path, mode, encoding="utf-8")
 
 
@@ -74,8 +77,10 @@ class FLAREWriter(LAIBaseWriter):
     def _ensure_path(self) -> None:
         valid_suffixes = (
             (".anc", ".vcf", ".gz"),
+            (".anc", ".vcf", ".zst"),
             (".anc", ".vcf"),
             (".vcf", ".gz"),
+            (".vcf", ".zst"),
             (".vcf",),
         )
         suffixes = tuple(s.lower() for s in self.file.suffixes)

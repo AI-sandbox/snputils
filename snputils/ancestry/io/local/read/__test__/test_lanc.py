@@ -279,3 +279,54 @@ def test_lanc_writer_rejects_multi_digit_ancestry_codes(tmp_path: Path):
 
     with pytest.raises(ValueError, match="single-digit ancestry codes"):
         LANCWriter(laiobj, tmp_path / "bad.lanc").write()
+
+
+def test_lanc_zst_and_gz(tmp_path: Path):
+    import gzip
+    import zstandard as zstd
+    from snputils.ancestry.io.local.read import read_lai, read_lanc
+
+    laiobj = LocalAncestryObject(
+        haplotypes=["S1.0", "S1.1"],
+        samples=["S1"],
+        chromosomes=np.array(["1", "1"], dtype=object),
+        physical_pos=np.array([[10, 10], [20, 20]], dtype=np.int64),
+        lai=np.array([[0, 1], [1, 1]], dtype=np.uint8),
+    )
+
+    # 1. Save and read uncompressed
+    uncompressed_path = tmp_path / "toy.lanc"
+    laiobj.save(uncompressed_path)
+    assert uncompressed_path.exists()
+    assert uncompressed_path.with_suffix(".pvar").exists()
+    assert uncompressed_path.with_suffix(".psam").exists()
+    loaded_uncompressed = read_lanc(uncompressed_path)
+    np.testing.assert_array_equal(loaded_uncompressed.lai, laiobj.lai)
+
+    # 2. Save and read .zst
+    zst_path = tmp_path / "toy.lanc.zst"
+    laiobj.save(zst_path)
+    assert zst_path.exists()
+    assert (tmp_path / "toy.pvar.zst").exists()
+    assert (tmp_path / "toy.psam.zst").exists()
+
+    loaded_zst = read_lanc(zst_path)
+    loaded_zst_auto = read_lai(zst_path)
+    np.testing.assert_array_equal(loaded_zst.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_zst_auto.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_zst.physical_pos, laiobj.physical_pos)
+    np.testing.assert_array_equal(loaded_zst.samples, laiobj.samples)
+
+    # 3. Save and read .gz
+    gz_path = tmp_path / "toy.lanc.gz"
+    laiobj.save(gz_path)
+    assert gz_path.exists()
+    assert (tmp_path / "toy.pvar.gz").exists()
+    assert (tmp_path / "toy.psam.gz").exists()
+
+    loaded_gz = read_lanc(gz_path)
+    loaded_gz_auto = read_lai(gz_path)
+    np.testing.assert_array_equal(loaded_gz.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_gz_auto.lai, laiobj.lai)
+    np.testing.assert_array_equal(loaded_gz.physical_pos, laiobj.physical_pos)
+    np.testing.assert_array_equal(loaded_gz.samples, laiobj.samples)

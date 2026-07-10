@@ -10,22 +10,21 @@ class IBDReader:
         file: Union[str, Path]
     ) -> object:
         """
-        A factory class that attempts to detect the IBD file format and returns the corresponding reader.
-
-        Supported detections:
-
-        - Hap-IBD: `.ibd` or `.ibd.gz` files (headerless, 8 columns)
-        - ancIBD: directories with `ch_all.tsv`/`ch*.tsv` or `.tsv` / `.tsv.gz` files with ancIBD schema
+        Detect hap-IBD or ancIBD input and return the corresponding reader.
         """
         file = Path(file)
         suffixes = [s.lower() for s in file.suffixes]
 
         # Directory-based detection for ancIBD
         if file.is_dir():
-            if (file / 'ch_all.tsv').exists() or (file / 'ch_all.tsv.gz').exists():
+            if any((file / name).exists() for name in ('ch_all.tsv', 'ch_all.tsv.gz', 'ch_all.tsv.zst')):
                 from snputils.ibd.io.read.anc_ibd import AncIBDReader
                 return AncIBDReader(file)
-            has_chr_files = list(file.glob('ch*.tsv')) or list(file.glob('ch*.tsv.gz'))
+            has_chr_files = (
+                list(file.glob('ch*.tsv'))
+                or list(file.glob('ch*.tsv.gz'))
+                or list(file.glob('ch*.tsv.zst'))
+            )
             if has_chr_files:
                 from snputils.ibd.io.read.anc_ibd import AncIBDReader
                 return AncIBDReader(file)
@@ -34,10 +33,16 @@ class IBDReader:
             return HapIBDReader(file)
 
         # File-based detection
-        if suffixes[-2:] == ['.ibd', '.gz'] or suffixes[-1:] == ['.ibd']:
+        if (
+            suffixes[-1:] == ['.ibd']
+            or suffixes[-2:] in (['.ibd', '.gz'], ['.ibd', '.zst'])
+        ):
             from snputils.ibd.io.read.hap_ibd import HapIBDReader
             return HapIBDReader(file)
-        if suffixes[-2:] == ['.tsv', '.gz'] or suffixes[-1:] == ['.tsv']:
+        if (
+            suffixes[-1:] == ['.tsv']
+            or suffixes[-2:] in (['.tsv', '.gz'], ['.tsv', '.zst'])
+        ):
             from snputils.ibd.io.read.anc_ibd import AncIBDReader
             return AncIBDReader(file)
 

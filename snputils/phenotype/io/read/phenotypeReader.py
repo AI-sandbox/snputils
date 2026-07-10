@@ -1,15 +1,41 @@
+import gzip
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, TextIO, Union
 
 import pandas as pd
 
 from .base import PhenotypeBaseReader
 from snputils.phenotype.genobj import PhenotypeObject
 
+
+_COMPRESSION_SUFFIXES = (".gz", ".zst")
+
+
+def _open_text(file_path: Path) -> TextIO:
+    suffix = file_path.suffix.lower()
+    if suffix == ".gz":
+        return gzip.open(file_path, "rt", encoding="utf-8")
+    if suffix == ".zst":
+        import zstandard as zstd
+
+        return zstd.open(file_path, "rt", encoding="utf-8")
+    return open(file_path, "rt", encoding="utf-8")
+
+
+def _format_suffix(file_path: Path) -> str:
+    suffixes = [suffix.lower() for suffix in file_path.suffixes]
+    if not suffixes:
+        return ""
+    if suffixes[-1] in _COMPRESSION_SUFFIXES and len(suffixes) >= 2:
+        return suffixes[-2]
+    return suffixes[-1]
+
+
 class PhenotypeReader(PhenotypeBaseReader):
     """
-    Reader for phenotype files (any extension; common: .txt, .phe, .pheno).
+    Reader for phenotype files (any extension; common: .txt, .phe, .pheno),
+    optionally compressed with gzip (``.gz``) or Zstandard (``.zst``).
 
     Expected format (headered, whitespace-delimited):
       - Must include `IID` (optionally preceded by `FID`)
@@ -26,7 +52,7 @@ class PhenotypeReader(PhenotypeBaseReader):
 
     @staticmethod
     def _has_header_with_iid(file_path: Path) -> bool:
-        with open(file_path, "r", encoding="utf-8") as handle:
+        with _open_text(file_path) as handle:
             for raw_line in handle:
                 line = raw_line.strip()
                 if not line:

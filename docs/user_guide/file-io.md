@@ -8,16 +8,22 @@ import snputils as su
 snpobj = su.read_snp("cohort.vcf.gz")   # auto-detects format
 ```
 
-## SNP Formats
+All text formats in the table below accept plain, gzip (`.gz`), or Zstandard
+(`.zst`) input. Binary formats are read directly and do not accept an outer
+compression suffix.
 
-| Format | Read | Write |
-|--------|------|-------|
-| PLINK BED (`.bed/.bim/.fam`) | `read_bed` / `BEDReader` | `BEDWriter` |
-| PLINK2 PGEN (`.pgen/.psam/.pvar`) | `read_pgen` / `PGENReader` | `PGENWriter` |
-| VCF / VCF.gz | `read_vcf` / `VCFReader` | `VCFWriter` |
-| BCF (`.bcf`) | `read_bcf` / `BCFReader` | `BCFWriter` |
-| BGEN | `read_bgen` / `BGENReader` | `BGENWriter` |
-| GRG | `read_grg` / `GRGReader` | `GRGWriter` |
+## Readable Formats
+
+| Data type | Formats |
+|-----------|---------|
+| Genotype | VCF (`.vcf`); BCF (`.bcf`, binary); PLINK BED (`.bed` binary + `.bim` + `.fam`); PLINK2 PGEN (`.pgen` binary + `.pvar` + `.psam`); BGEN (`.bgen` binary + optional `.sample`); GRG (`.grg`, binary) |
+| Local ancestry | MSP (`.msp`, `.msp.tsv`); FLARE (`.anc.vcf`); admix-kit LANC (`.lanc` + optional `.pvar`/`.psam`) |
+| Global ancestry | ADMIXTURE proportions (`.Q`, `.txt`), allele frequencies (`.P`, `.txt`), sample IDs (`.fam`, `.txt`), SNP IDs (`.bim`, `.txt`), and ancestry labels (`.map`, `.txt`) |
+| Phenotype | Headered whitespace tables (commonly `.txt`, `.phe`, `.pheno`); multi-phenotype `.csv`, `.tsv`, `.txt`, `.phe`, `.pheno`, `.phen`, `.map`, `.smap`; `.xlsx` with a compatible pandas Excel engine |
+| Metadata/covariates | Delimited sample metadata and whitespace-delimited covariate tables |
+| Identity by descent | hap-IBD (`.ibd`); ancIBD (`.tsv` or a directory of `ch*.tsv`) |
+
+## SNP Formats
 
 ```python
 from snputils import read_bcf, read_bed, read_bgen, read_pgen, read_vcf
@@ -90,12 +96,6 @@ BGENWriter(snpobj, "out.bgen").write(
 
 ## Local Ancestry Formats
 
-| Format | Read | Write |
-|--------|------|-------|
-| MSP (`.msp`, `.msp.tsv`) | `read_msp` / `MSPReader` | `MSPWriter` |
-| FLARE (`.anc.vcf[.gz]`) | `read_flare` / `FLAREReader` | `FLAREWriter` |
-| admix-kit LANC (`.lanc`) | `read_lanc` / `LANCReader` | `LANCWriter` |
-
 ```python
 msp   = su.read_lai("local_ancestry.msp")
 flare = su.read_lai("flare.out.anc.vcf.gz")
@@ -118,10 +118,11 @@ laiobj.save_lanc("out.lanc")                        # same default behavior
 su.LANCWriter(laiobj, "out.lanc", write_sidecars=False).write()
 ```
 
-On reads, `read_lanc(...)` and `read_lai(...)` look for sibling `.pvar`/`.pvar.zst` and `.psam` files with the same prefix as the `.lanc` file and use them to reconstruct SNP coordinates and sample IDs.
+On reads, `read_lanc(...)` and `read_lai(...)` use matching `.pvar` and `.psam`
+sidecars when available.
 
 ```python
-lanc = su.read_lanc("cohort.lanc")  # expects cohort.pvar[.zst] and cohort.psam
+lanc = su.read_lanc("cohort.lanc")  # looks for cohort.pvar and cohort.psam
 
 # or point at sidecars elsewhere
 lanc = su.read_lanc(
@@ -163,7 +164,7 @@ phen  = su.read_pheno("pheno.tsv")
 mphen = su.MultiPhenReader("multi.tsv").read()
 ```
 
-## Covariate Formats
+## Metadata and Covariate Formats
 
 Covariate files feed {func}`~snputils.run_gwas` and {func}`~snputils.run_admixture_mapping` through the `covar` argument. Use whitespace-separated text with `IID` in the header and numeric columns after it. An optional `#FID` column before `IID` is allowed.
 

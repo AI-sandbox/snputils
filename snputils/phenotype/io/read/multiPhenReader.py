@@ -1,12 +1,11 @@
 import logging
-import os
 from pathlib import Path
 from typing import List, Optional, Union
 
 import pandas as pd
 
 from .base import PhenotypeBaseReader
-from .phenotypeReader import PhenotypeReader
+from .phenotypeReader import _COMPRESSION_SUFFIXES, _format_suffix, _open_text, PhenotypeReader
 from snputils.phenotype.genobj import MultiPhenotypeObject
 
 log = logging.getLogger(__name__)
@@ -26,10 +25,12 @@ class MultiPhenReader(PhenotypeBaseReader):
         return Path(self._file)
 
     def _read_raw_table(self, sep: str, header: Optional[int]) -> pd.DataFrame:
-        file_extension = os.path.splitext(self.file)[1]
+        file_extension = _format_suffix(self.file)
         log.info("Reading '%s' file from '%s'...", file_extension, self.file)
 
         if file_extension == ".xlsx":
+            if self.file.suffix.lower() in _COMPRESSION_SUFFIXES:
+                raise ValueError("Outer gzip/Zstandard compression is not supported for .xlsx files.")
             return pd.read_excel(self.file, header=header, index_col=None)
         if file_extension == ".csv":
             return pd.read_csv(self.file, sep=sep, header=header)
@@ -40,7 +41,7 @@ class MultiPhenReader(PhenotypeBaseReader):
         if file_extension in [".txt", ".phe", ".pheno"]:
             return pd.read_csv(self.file, sep=r"\s+", header=header)
         if file_extension == ".phen":
-            with open(self.file, "r", encoding="utf-8") as handle:
+            with _open_text(self.file) as handle:
                 contents = [line.split() for line in handle if line.strip()]
             if len(contents) < 2:
                 raise ValueError("Empty phenotype file.")
@@ -66,11 +67,13 @@ class MultiPhenReader(PhenotypeBaseReader):
                 "Select columns before writing the file or after reading the object."
             )
 
-        has_iid_header = PhenotypeReader._has_header_with_iid(self.file)
-        if header is None and has_iid_header:
-            raise ValueError("header=None is not supported for headered phenotype files with IID.")
-        if not has_iid_header:
-            raise ValueError("Phenotype file must include an IID column in the header.")
+        file_extension = _format_suffix(self.file)
+        if file_extension != ".xlsx":
+            has_iid_header = PhenotypeReader._has_header_with_iid(self.file)
+            if header is None and has_iid_header:
+                raise ValueError("header=None is not supported for headered phenotype files with IID.")
+            if not has_iid_header:
+                raise ValueError("Phenotype file must include an IID column in the header.")
 
         phen_df = self._read_raw_table(sep=sep, header=header)
 

@@ -14,10 +14,13 @@ log = logging.getLogger(__name__)
 
 
 def _open_textfile(path: Path):
-    if path.suffix.lower() == ".zst":
+    suffix = path.suffix.lower()
+    if suffix == ".zst":
         import zstandard as zstd
-
         return zstd.open(path, "rt", encoding="utf-8")
+    elif suffix == ".gz":
+        import gzip
+        return gzip.open(path, "rt", encoding="utf-8")
     return open(path, "rt", encoding="utf-8")
 
 
@@ -81,21 +84,36 @@ class LANCReader(LAIBaseReader):
         explicit_pvar = self._default_pvar_file if pvar_file is None else Path(pvar_file)
         explicit_psam = self._default_psam_file if psam_file is None else Path(psam_file)
 
+        file_str = str(self.file)
+        prefix = file_str
+        for ext in (".lanc.zst", ".lanc.gz", ".lanc"):
+            if file_str.lower().endswith(ext):
+                prefix = file_str[:-len(ext)]
+                break
+        else:
+            suffixes = self.file.suffixes
+            if suffixes:
+                prefix = file_str[:-sum(len(s) for s in suffixes)]
+
         if explicit_pvar is not None:
             pvar_path = explicit_pvar if explicit_pvar.exists() else None
         else:
-            candidate = self.file.with_suffix(".pvar")
-            if candidate.exists():
-                pvar_path = candidate
-            else:
-                candidate_zst = self.file.with_suffix(".pvar.zst")
-                pvar_path = candidate_zst if candidate_zst.exists() else None
+            pvar_path = None
+            for suffix in (".pvar", ".pvar.zst", ".pvar.gz"):
+                candidate = Path(prefix + suffix)
+                if candidate.exists():
+                    pvar_path = candidate
+                    break
 
         if explicit_psam is not None:
             psam_path = explicit_psam if explicit_psam.exists() else None
         else:
-            candidate = self.file.with_suffix(".psam")
-            psam_path = candidate if candidate.exists() else None
+            psam_path = None
+            for suffix in (".psam", ".psam.zst", ".psam.gz"):
+                candidate = Path(prefix + suffix)
+                if candidate.exists():
+                    psam_path = candidate
+                    break
 
         return pvar_path, psam_path
 
@@ -122,7 +140,7 @@ class LANCReader(LAIBaseReader):
         )
 
     def _read_psam_samples(self, path: Path, n_samples_expected: int) -> List[str]:
-        with open(path, "r", encoding="utf-8") as handle:
+        with _open_textfile(path) as handle:
             first_line = handle.readline().strip()
         has_header = first_line.startswith(("#FID", "FID", "#IID", "IID"))
 
@@ -225,7 +243,7 @@ class LANCReader(LAIBaseReader):
         if self._metadata is not None and self._metadata_key == metadata_key:
             return self._metadata
 
-        with open(self.file, "r", encoding="utf-8") as handle:
+        with _open_textfile(self.file) as handle:
             header = handle.readline().strip().split()
 
         if len(header) != 2:
@@ -315,7 +333,7 @@ class LANCReader(LAIBaseReader):
         breaks: List[np.ndarray] = []
         values: List[np.ndarray] = []
 
-        with open(self.file, "r", encoding="utf-8") as handle:
+        with _open_textfile(self.file) as handle:
             _ = handle.readline()
             for line_no, raw_line in enumerate(handle, start=2):
                 line = raw_line.strip()

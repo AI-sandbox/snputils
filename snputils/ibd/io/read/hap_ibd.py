@@ -1,14 +1,13 @@
 import logging
+import re
+from io import StringIO
 from typing import Optional
 
 import numpy as np
 import polars as pl
-import gzip
-import re
-from io import StringIO
 
 from snputils.ibd.genobj.ibdobj import IBDObject
-from snputils.ibd.io.read.base import IBDBaseReader
+from snputils.ibd.io.read.base import IBDBaseReader, open_text
 
 
 log = logging.getLogger(__name__)
@@ -43,53 +42,37 @@ class HapIBDReader(IBDBaseReader):
             'chrom', 'start', 'end', 'length_cm'
         ]
 
-        # Detect gzip by extension
-        is_gz = str(self.file).endswith('.gz')
-
-        # If separator is None, treat as whitespace-delimited (any spaces or tabs)
         if separator is None:
-            # Polars doesn't support regex separators; normalize whitespace to single tabs before parsing
-            if is_gz:
-                with gzip.open(self.file, 'rt') as f:
-                    lines = [re.sub(r"\s+", "\t", line.strip()) for line in f if line.strip()]
-            else:
-                with open(self.file, 'r') as f:
-                    lines = [re.sub(r"\s+", "\t", line.strip()) for line in f if line.strip()]
-
-            data = StringIO("\n".join(lines))
-            df = pl.read_csv(
-                source=data,
-                has_header=False,
-                separator='\t',
-                new_columns=col_names,
-                schema_overrides={
-                    'sample_id_1': pl.Utf8,
-                    'haplotype_id_1': pl.Int8,
-                    'sample_id_2': pl.Utf8,
-                    'haplotype_id_2': pl.Int8,
-                    'chrom': pl.Utf8,
-                    'start': pl.Int64,
-                    'end': pl.Int64,
-                    'length_cm': pl.Float64,
-                },
-            )
+            # Polars does not support regex separators, so normalize arbitrary
+            # whitespace to tabs before parsing.
+            with open_text(self.file) as handle:
+                lines = [
+                    re.sub(r"\s+", "\t", line.strip())
+                    for line in handle
+                    if line.strip()
+                ]
+            source = StringIO("\n".join(lines))
+            parse_separator = "\t"
         else:
-            df = pl.read_csv(
-                source=str(self.file),
-                has_header=False,
-                separator=separator,
-                new_columns=col_names,
-                schema_overrides={
-                    'sample_id_1': pl.Utf8,
-                    'haplotype_id_1': pl.Int8,
-                    'sample_id_2': pl.Utf8,
-                    'haplotype_id_2': pl.Int8,
-                    'chrom': pl.Utf8,
-                    'start': pl.Int64,
-                    'end': pl.Int64,
-                    'length_cm': pl.Float64,
-                },
-            )
+            source = str(self.file)
+            parse_separator = separator
+
+        df = pl.read_csv(
+            source=source,
+            has_header=False,
+            separator=parse_separator,
+            new_columns=col_names,
+            schema_overrides={
+                'sample_id_1': pl.Utf8,
+                'haplotype_id_1': pl.Int8,
+                'sample_id_2': pl.Utf8,
+                'haplotype_id_2': pl.Int8,
+                'chrom': pl.Utf8,
+                'start': pl.Int64,
+                'end': pl.Int64,
+                'length_cm': pl.Float64,
+            },
+        )
 
         ibdobj = IBDObject(
             sample_id_1=df['sample_id_1'].to_numpy(),

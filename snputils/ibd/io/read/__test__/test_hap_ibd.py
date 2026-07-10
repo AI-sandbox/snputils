@@ -3,7 +3,9 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import zstandard as zstd
 
+from snputils.ibd.io.read import read_ibd
 from snputils.ibd.io.read.hap_ibd import HapIBDReader
 
 
@@ -13,6 +15,11 @@ def _write_text(path: Path, lines):
 
 def _write_gz(path: Path, lines):
     with gzip.open(path, "wt") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _write_zst(path: Path, lines):
+    with zstd.open(path, "wt", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -119,4 +126,14 @@ def test_hap_ibd_tab_explicit_separator_gz():
         assert ibd.end.tolist() == [r[6] for r in TOKENS]
         np.testing.assert_allclose(ibd.length_cm.tolist(), [r[7] for r in TOKENS], rtol=0, atol=0)
 
+
+def test_hap_ibd_zst_through_public_dispatcher(tmp_path: Path):
+    file = tmp_path / "example.ibd.zst"
+    _write_zst(file, _build_lines(TOKENS, "\t"))
+
+    ibd = read_ibd(file, separator="\t")
+
+    assert ibd.n_segments == 3
+    assert ibd.sample_id_1.tolist() == [r[0] for r in TOKENS]
+    assert ibd.chrom.tolist() == [r[4] for r in TOKENS]
 

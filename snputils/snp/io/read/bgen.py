@@ -26,6 +26,28 @@ _U32 = struct.Struct("<I")
 _ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()
 
 
+def _resolve_compressed_path(sample_path: Union[str, bytes, Path]) -> str:
+    import os
+    sample_path_str = str(Path(sample_path))
+    if os.path.exists(sample_path_str):
+        return sample_path_str
+    for comp_ext in (".zst", ".gz"):
+        candidate = sample_path_str + comp_ext
+        if os.path.exists(candidate):
+            return candidate
+    return sample_path_str
+
+
+def _open_textfile(filename: str, mode: str = "rt"):
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
 @dataclass(frozen=True)
 class _BGENHeader:
     first_variant_offset: int
@@ -89,7 +111,7 @@ def _read_len_prefixed_text(handle, len_size: int, context: str) -> str:
 
 def _read_sample_file(sample_path: Union[str, bytes, Path], n_samples: int) -> np.ndarray:
     samples: list[str] = []
-    with open(sample_path, "rt", encoding="utf-8") as handle:
+    with _open_textfile(str(sample_path), "rt") as handle:
         next(handle, None)
         next(handle, None)
         for line in handle:
@@ -128,7 +150,8 @@ class _DirectBGENFile:
         if self.header.has_sample_ids:
             self.samples = self._read_embedded_samples(self.header.n_samples)
         elif self.sample_path:
-            self.samples = _read_sample_file(self.sample_path, self.header.n_samples)
+            resolved_sample_path = _resolve_compressed_path(self.sample_path)
+            self.samples = _read_sample_file(resolved_sample_path, self.header.n_samples)
         else:
             self.samples = np.asarray([str(idx) for idx in range(self.header.n_samples)], dtype=object)
 

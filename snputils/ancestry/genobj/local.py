@@ -830,11 +830,25 @@ class LocalAncestryObject(AncestryObject):
         path = Path(file)
         suffixes = [suffix.lower() for suffix in path.suffixes]
 
-        if suffixes[-2:] == ['.msp', '.tsv'] or suffixes[-1] == '.msp':
+        is_msp = (
+            suffixes[-1] == '.msp'
+            or (suffixes[-2:] == ['.msp', '.tsv'])
+            or (len(suffixes) >= 2 and suffixes[-1] in ('.zst', '.gz') and (suffixes[-2] == '.msp' or suffixes[-3:-1] == ['.msp', '.tsv']))
+        )
+        is_lanc = (
+            suffixes[-1] == '.lanc'
+            or (len(suffixes) >= 2 and suffixes[-1] in ('.zst', '.gz') and suffixes[-2] == '.lanc')
+        )
+
+        if is_msp:
             self.save_msp(file)
-        elif suffixes[-1] == '.lanc':
+        elif is_lanc:
             self.save_lanc(file)
-        elif suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
+        elif (
+            suffixes[-3:] in (['.anc', '.vcf', '.gz'], ['.anc', '.vcf', '.zst'])
+            or suffixes[-2:] in (['.anc', '.vcf'], ['.vcf', '.gz'], ['.vcf', '.zst'])
+            or suffixes[-1] == '.vcf'
+        ):
             raise ValueError(
                 "FLARE output requires genotype data. Use "
                 "`save_flare(file, snpobj=...)` or `save_flare(file, genotype_file=...)`."

@@ -54,8 +54,11 @@ def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
 def _open_textfile(filename):
     if filename.endswith(".zst"):
         import zstandard as zstd
-        return zstd.open(filename, "rt")
-    return open(filename, "rt")
+        return zstd.open(filename, "rt", encoding="utf-8")
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, "rt", encoding="utf-8")
+    return open(filename, "rt", encoding="utf-8")
 
 
 def _detect_pvar_separator(line: str) -> str:
@@ -128,7 +131,7 @@ class PGENReader(SNPBaseReader):
         only_read_pgen = fields == ["GT"] and variant_idxs is None and sample_idxs is None
 
         filename_noext = str(self.filename)
-        for ext in [".pgen", ".pvar", ".pvar.zst", ".psam"]:
+        for ext in [".pgen", ".pvar", ".pvar.zst", ".pvar.gz", ".psam", ".psam.zst", ".psam.gz"]:
             if filename_noext.endswith(ext):
                 filename_noext = filename_noext[:-len(ext)]
                 break
@@ -137,7 +140,7 @@ class PGENReader(SNPBaseReader):
             file_num_samples = None  # Not needed for pgen
             file_num_variants = None  # Not needed
         else:
-            pvar_extensions = [".pvar", ".pvar.zst"]
+            pvar_extensions = [".pvar", ".pvar.zst", ".pvar.gz"]
             pvar_filename = None
             for ext in pvar_extensions:
                 possible_pvar = filename_noext + ext
@@ -145,7 +148,7 @@ class PGENReader(SNPBaseReader):
                     pvar_filename = possible_pvar
                     break
             if pvar_filename is None:
-                raise FileNotFoundError(f"No .pvar or .pvar.zst file found for {filename_noext}")
+                raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
 
             log.info(f"Reading {pvar_filename}")
 
@@ -193,7 +196,7 @@ class PGENReader(SNPBaseReader):
                 },
                 'null_values': ["NA"],
             }
-            if pvar_filename.endswith('.zst'):
+            if pvar_filename.endswith(('.zst', '.gz')):
                 pvar = pl.read_csv(pvar_filename, **pvar_reading_args).lazy()
             else:
                 pvar = pl.scan_csv(pvar_filename, **pvar_reading_args)
@@ -236,14 +239,24 @@ class PGENReader(SNPBaseReader):
                 num_variants = np.size(variant_idxs)
                 pvar = pvar.drop(["_selector_order", "index"])
 
-            log.info(f"Reading {filename_noext}.psam")
+            psam_extensions = [".psam", ".psam.zst", ".psam.gz"]
+            psam_filename = None
+            for ext in psam_extensions:
+                possible_psam = filename_noext + ext
+                if os.path.exists(possible_psam):
+                    psam_filename = possible_psam
+                    break
+            if psam_filename is None:
+                raise FileNotFoundError(f"No .psam, .psam.zst, or .psam.gz file found for {filename_noext}")
 
-            with open(filename_noext + ".psam") as file:
+            log.info(f"Reading {psam_filename}")
+
+            with _open_textfile(psam_filename) as file:
                 first_line = file.readline().strip()
                 psam_has_header = first_line.startswith(("#FID", "FID", "#IID", "IID"))
 
             psam = pl.read_csv(
-                filename_noext + ".psam",
+                psam_filename,
                 separator=separator,
                 has_header=psam_has_header,
                 new_columns=None if psam_has_header else ["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
@@ -403,19 +416,19 @@ class PGENReader(SNPBaseReader):
         Resolve variant selectors to canonical file-order row indices.
         """
         filename_noext = str(self.filename)
-        for ext in [".pgen", ".pvar", ".pvar.zst", ".psam"]:
+        for ext in [".pgen", ".pvar", ".pvar.zst", ".pvar.gz", ".psam", ".psam.zst", ".psam.gz"]:
             if filename_noext.endswith(ext):
                 filename_noext = filename_noext[:-len(ext)]
                 break
 
         pvar_filename = None
-        for ext in [".pvar", ".pvar.zst"]:
+        for ext in [".pvar", ".pvar.zst", ".pvar.gz"]:
             candidate = filename_noext + ext
             if os.path.exists(candidate):
                 pvar_filename = candidate
                 break
         if pvar_filename is None:
-            raise FileNotFoundError(f"No .pvar or .pvar.zst file found for {filename_noext}")
+            raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
 
         local_separator = separator
 
@@ -460,7 +473,7 @@ class PGENReader(SNPBaseReader):
             },
             "null_values": ["NA"],
         }
-        if pvar_filename.endswith(".zst"):
+        if pvar_filename.endswith(((".zst", ".gz"))):
             pvar = pl.read_csv(pvar_filename, **pvar_reading_args)
         else:
             pvar = pl.scan_csv(pvar_filename, **pvar_reading_args).collect()

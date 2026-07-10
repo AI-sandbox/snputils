@@ -25,9 +25,8 @@ class AncIBDReader(IBDBaseReader):
         """
         Read ancIBD outputs and convert to `IBDObject`.
 
-        Inputs accepted:
-        - A single TSV (optionally gzipped), e.g. `ch_all.tsv[.gz]` or `ch{CHR}.tsv[.gz]`.
-        - A directory containing per-chromosome TSVs or `ch_all.tsv`.
+        Input may be a single TSV or a directory containing per-chromosome
+        TSVs or `ch_all.tsv`.
 
         Column schema (tab-separated with header):
         iid1, iid2, ch, Start, End, length, StartM, EndM, lengthM, StartBP, EndBP, segment_type
@@ -50,14 +49,20 @@ class AncIBDReader(IBDBaseReader):
         files: list[Path]
         if p.is_dir():
             # Prefer combined file if present, else gather per-chromosome files
-            combined = p / "ch_all.tsv"
-            combined_gz = p / "ch_all.tsv.gz"
-            if combined.exists():
+            combined_files = [
+                p / "ch_all.tsv",
+                p / "ch_all.tsv.gz",
+                p / "ch_all.tsv.zst",
+            ]
+            combined = next((candidate for candidate in combined_files if candidate.exists()), None)
+            if combined is not None:
                 files = [combined]
-            elif combined_gz.exists():
-                files = [combined_gz]
             else:
-                files = sorted(list(p.glob("ch*.tsv")) + list(p.glob("ch*.tsv.gz")))
+                files = sorted(
+                    list(p.glob("ch*.tsv"))
+                    + list(p.glob("ch*.tsv.gz"))
+                    + list(p.glob("ch*.tsv.zst"))
+                )
                 if not files:
                     raise FileNotFoundError("No ancIBD output files found in directory.")
         else:
@@ -114,4 +119,3 @@ class AncIBDReader(IBDBaseReader):
 
         log.info(f"Finished reading ancIBD from {p}")
         return ibdobj
-

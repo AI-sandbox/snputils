@@ -13,6 +13,17 @@ def _append_admixture_suffix(path: Path, suffix: str) -> Path:
     return Path(f"{path}{suffix}")
 
 
+def _open_textfile(filename: Union[str, Path], mode: str = "wt"):
+    filename = str(filename)
+    if filename.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
+    elif filename.endswith(".gz"):
+        import gzip
+        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
+    return open(filename, mode, encoding="utf-8") if "t" in mode else open(filename, mode)
+
+
 class AdmixtureWriter(WideBaseWriter):
     """
     A writer class for exporting global ancestry data from a 
@@ -33,23 +44,35 @@ class AdmixtureWriter(WideBaseWriter):
                 suffixes appended as described above (e.g., `file_prefix.n_ancestries.Q` for the Q matrix file).
         """
         super(AdmixtureWriter, self).__init__(wideobj, file_prefix)
+
+        file_prefix_str = str(self.file_prefix)
+        comp_ext = ""
+        for ext in (".zst", ".gz"):
+            if file_prefix_str.lower().endswith(ext):
+                comp_ext = ext
+                file_prefix_str = file_prefix_str[:-len(ext)]
+                if file_prefix_str.endswith("."):
+                    file_prefix_str = file_prefix_str[:-1]
+                break
+
+        base_prefix = Path(file_prefix_str)
         self.__Q_file = _append_admixture_suffix(
-            self.file_prefix, f".{self.wideobj.n_ancestries}.Q"
+            base_prefix, f".{self.wideobj.n_ancestries}.Q{comp_ext}"
         )
         self.__P_file = _append_admixture_suffix(
-            self.file_prefix, f".{self.wideobj.n_ancestries}.P"
+            base_prefix, f".{self.wideobj.n_ancestries}.P{comp_ext}"
         )
 
         self.__sample_file = (
-            _append_admixture_suffix(self.file_prefix, ".sample_ids.txt")
+            _append_admixture_suffix(base_prefix, f".sample_ids.txt{comp_ext}")
             if self.wideobj.samples is not None else None
         )
         self.__snp_file = (
-            _append_admixture_suffix(self.file_prefix, ".snp_ids.txt")
+            _append_admixture_suffix(base_prefix, f".snp_ids.txt{comp_ext}")
             if self.wideobj.snps is not None else None
         )
         self.__ancestry_file = (
-            _append_admixture_suffix(self.file_prefix, ".map")
+            _append_admixture_suffix(base_prefix, f".map{comp_ext}")
             if self.wideobj.ancestries is not None else None
         )
 
@@ -136,30 +159,35 @@ class AdmixtureWriter(WideBaseWriter):
 
     def _write_Q(self):
         log.info(f"Writing Q matrix to '{self.Q_file}'...")
-        np.savetxt(self.Q_file, self.wideobj.Q, delimiter=" ")
+        with _open_textfile(self.Q_file, "wt") as f:
+            np.savetxt(f, self.wideobj.Q, delimiter=" ")
         log.info(f"Finished writing Q matrix to '{self.Q_file}'.")
 
     def _write_P(self):
         log.info(f"Writing P matrix to '{self.P_file}'...")
-        np.savetxt(self.P_file, self.wideobj.P, delimiter=" ")
+        with _open_textfile(self.P_file, "wt") as f:
+            np.savetxt(f, self.wideobj.P, delimiter=" ")
         log.info(f"Finished writing P matrix to '{self.P_file}'.")
 
     def _write_sample_ids(self):
         if self.wideobj.samples is not None:
             log.info(f"Writing sample IDs to '{self.sample_file}'...")
-            np.savetxt(self.sample_file, self.wideobj.samples, fmt="%s")
+            with _open_textfile(self.sample_file, "wt") as f:
+                np.savetxt(f, self.wideobj.samples, fmt="%s")
             log.info(f"Finished writing sample IDs to '{self.sample_file}'.")
 
     def _write_snps(self):
         if self.wideobj.snps is not None:
             log.info(f"Writing SNP IDs to '{self.snp_file}'...")
-            np.savetxt(self.snp_file, self.wideobj.snps, fmt="%s")
+            with _open_textfile(self.snp_file, "wt") as f:
+                np.savetxt(f, self.wideobj.snps, fmt="%s")
             log.info(f"Finished writing SNP IDs to '{self.snp_file}'.")
 
     def _write_ancestries(self):
         if self.wideobj.ancestries is not None:
             log.info(f"Writing ancestry information to '{self.ancestry_file}'...")
-            np.savetxt(self.ancestry_file, self.wideobj.ancestries, fmt="%s")
+            with _open_textfile(self.ancestry_file, "wt") as f:
+                np.savetxt(f, self.wideobj.ancestries, fmt="%s")
             log.info(f"Finished writing ancestry information to '{self.ancestry_file}'.")
 
     def write(self) -> None:

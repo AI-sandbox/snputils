@@ -24,8 +24,7 @@ def read_snp(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
 
 
 def read_bed(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
-    """
-    Read a BED fileset into a SNPObject.
+    """Read a BED fileset into a SNPObject.
 
     Args:
         filename: Filename of the BED fileset to read.
@@ -37,8 +36,7 @@ def read_bed(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
 
 
 def read_bgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
-    """
-    Read a BGEN file into a SNPObject.
+    """Read a BGEN file into a SNPObject.
 
     Args:
         filename: Filename of the BGEN file to read.
@@ -50,8 +48,7 @@ def read_bgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
 
 
 def read_bcf(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
-    """
-    Read a BCF file into a SNPObject.
+    """Read a BCF file into a SNPObject.
 
     Args:
         filename: Filename of the BCF file to read.
@@ -63,8 +60,7 @@ def read_bcf(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
 
 
 def read_pgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
-    """
-    Read a PGEN fileset into a SNPObject.
+    """Read a PGEN fileset into a SNPObject.
 
     Args:
         filename: Filename of the PGEN fileset to read.
@@ -75,11 +71,10 @@ def read_pgen(filename: Union[str, pathlib.Path], **kwargs) -> SNPObject:
     return PGENReader(filename).read(**kwargs)
 
 
-def read_vcf(filename: Union[str, pathlib.Path], 
+def read_vcf(filename: Union[str, pathlib.Path],
              backend: str = 'default',
              **kwargs) -> SNPObject:
-    """
-    Read a VCF fileset into a SNPObject.
+    """Read a VCF into a SNPObject.
 
     Args:
         filename: Filename of the VCF fileset to read.

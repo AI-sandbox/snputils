@@ -6,18 +6,19 @@ from snputils.ancestry.genobj.local import LocalAncestryObject
 
 def read_lai(file: Union[str, Path], **kwargs) -> LocalAncestryObject:
     """
-    Automatically detect the local ancestry data file format from the file's extension and 
+    Automatically detect the local ancestry data file format from the file's extension and
     read it into a `snputils.ancestry.genobj.LocalAncestryObject`.
 
     **Supported formats:**
 
-    - `.msp`: Text-based MSP format.
-    - `.msp.tsv`: Text-based MSP format with TSV extension.
-    - `.anc.vcf` / `.anc.vcf.gz`: FLARE local ancestry VCF output.
-    - `.lanc`: admix-kit local ancestry change-point format.
-    
+    - MSP (`.msp`, `.msp.tsv`)
+    - FLARE (`.anc.vcf`)
+    - admix-kit LANC (`.lanc`)
+
+    Text inputs may be plain, gzip-compressed, or Zstandard-compressed.
+
     Args:
-        file (str or pathlib.Path): 
+        file (str or pathlib.Path):
             Path to the file to be read.
         **kwargs: Additional arguments passed to the reader method.
     """
@@ -27,12 +28,11 @@ def read_lai(file: Union[str, Path], **kwargs) -> LocalAncestryObject:
 
 
 def read_msp(file: Union[str, Path]) -> 'LocalAncestryObject':
-    """
-    Read data from an `.msp` or `.msp.tsv` file and construct a `snputils.ancestry.genobj.LocalAncestryObject`.
+    """Read an MSP file into a `LocalAncestryObject`.
 
     Args:
-        file (str or pathlib.Path): 
-            Path to the file to be read. It should end with `.msp` or `.msp.tsv`.
+        file (str or pathlib.Path):
+            Path to the file to be read.
 
     Returns:
         LocalAncestryObject: A LocalAncestryObject instance.
@@ -43,10 +43,7 @@ def read_msp(file: Union[str, Path]) -> 'LocalAncestryObject':
 
 
 def read_flare(file: Union[str, Path]) -> 'LocalAncestryObject':
-    """
-    Read data from a FLARE `.anc.vcf` or `.anc.vcf.gz` output file and construct a
-    `snputils.ancestry.genobj.LocalAncestryObject`.
-    """
+    """Read a FLARE ancestry VCF into a `LocalAncestryObject`."""
     from snputils.ancestry.io.local.read.flare import FLAREReader
 
     return FLAREReader(file).read()
@@ -58,12 +55,10 @@ def read_lanc(
     pvar_file: Optional[Union[str, Path]] = None,
     psam_file: Optional[Union[str, Path]] = None,
 ) -> 'LocalAncestryObject':
-    """
-    Read data from an admix-kit `.lanc` file and construct a
-    `snputils.ancestry.genobj.LocalAncestryObject`.
+    """Read an admix-kit LANC file into a `LocalAncestryObject`.
 
-    By default this looks for sibling `.pvar`/`.pvar.zst` and `.psam` files
-    with the same prefix as `file` to recover SNP coordinates and sample IDs.
+    By default this looks for sibling `.pvar` and `.psam` files with the same
+    prefix as `file` to recover SNP coordinates and sample IDs.
     Pass `pvar_file=` and/or `psam_file=` to point at those sidecars elsewhere.
     If either sidecar is unavailable, the reader falls back to loading the LAI
     calls alone and warns that the missing metadata could not be reconstructed.

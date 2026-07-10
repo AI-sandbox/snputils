@@ -10,6 +10,17 @@ from .base import LAIBaseWriter
 log = logging.getLogger(__name__)
 
 
+def _open_textfile(path: Path, mode: str = "wt"):
+    suffix = path.suffix.lower()
+    if suffix == ".zst":
+        import zstandard as zstd
+        return zstd.open(path, mode, encoding="utf-8")
+    elif suffix == ".gz":
+        import gzip
+        return gzip.open(path, mode, encoding="utf-8")
+    return open(path, mode, encoding="utf-8")
+
+
 class LANCWriter(LAIBaseWriter):
     """
     Writer for admix-kit `.lanc` local ancestry files.
@@ -53,13 +64,26 @@ class LANCWriter(LAIBaseWriter):
         return self.__write_sidecars
 
     def _ensure_path(self) -> None:
-        if self.file.suffix.lower() != ".lanc":
+        valid_suffixes = (".lanc", ".lanc.zst", ".lanc.gz")
+        if not any(self.file.name.lower().endswith(ext) for ext in valid_suffixes):
             self.file = self.file.with_name(self.file.name + ".lanc")
 
     def _sidecar_path(self, explicit: Optional[Path], suffix: str) -> Path:
         if explicit is not None:
             return explicit
-        return self.file.with_suffix(suffix)
+
+        file_str = str(self.file)
+        comp_ext = ""
+        for ext in (".zst", ".gz"):
+            if file_str.lower().endswith(ext):
+                comp_ext = ext
+                file_str = file_str[:-len(ext)]
+                break
+
+        if file_str.lower().endswith(".lanc"):
+            file_str = file_str[:-len(".lanc")]
+
+        return Path(file_str + suffix + comp_ext)
 
     def _coerce_lai(self) -> np.ndarray:
         lai = np.asarray(self.laiobj.lai)
@@ -95,7 +119,7 @@ class LANCWriter(LAIBaseWriter):
 
         log.info("Writing LANC PSAM sidecar to '%s'...", psam_path)
         lines = ["#IID"] + samples
-        with open(psam_path, "w", encoding="utf-8") as handle:
+        with _open_textfile(psam_path, "wt") as handle:
             handle.write("\n".join(lines))
 
     def _write_pvar(self, n_windows: int) -> None:
@@ -144,7 +168,7 @@ class LANCWriter(LAIBaseWriter):
             for chrom, pos, vid in zip(chromosomes.tolist(), positions.tolist(), ids):
                 lines.append(f"{chrom}\t{int(pos)}\t{vid}\tN\t.")
 
-        with open(pvar_path, "w", encoding="utf-8") as handle:
+        with _open_textfile(pvar_path, "wt") as handle:
             handle.write("\n".join(lines))
 
     def write(self) -> None:
@@ -173,7 +197,7 @@ class LANCWriter(LAIBaseWriter):
             ]
             lines.append(" ".join(tokens))
 
-        with open(self.file, "w", encoding="utf-8") as handle:
+        with _open_textfile(self.file, "wt") as handle:
             handle.write("\n".join(lines))
 
         if self.write_sidecars:

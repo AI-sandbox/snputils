@@ -27,6 +27,9 @@ class FLAREMetadata:
 def _open_text(path: Path, mode: str = "rt") -> TextIO:
     if path.name.endswith(".gz"):
         return gzip.open(path, mode, encoding="utf-8")
+    if path.name.endswith(".zst"):
+        import zstandard as zstd
+        return zstd.open(path, mode, encoding="utf-8")
     return open(path, mode, encoding="utf-8")
 
 

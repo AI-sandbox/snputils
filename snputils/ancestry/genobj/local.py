@@ -840,7 +840,11 @@ class LocalAncestryObject(AncestryObject):
             self.save_msp(file)
         elif suffixes[-1] == '.lanc':
             self.save_lanc(file)
-        elif suffixes[-3:] == ['.anc', '.vcf', '.gz'] or suffixes[-2:] == ['.anc', '.vcf'] or suffixes[-2:] == ['.vcf', '.gz'] or suffixes[-1] == '.vcf':
+        elif (
+            suffixes[-3:] in (['.anc', '.vcf', '.gz'], ['.anc', '.vcf', '.zst'])
+            or suffixes[-2:] in (['.anc', '.vcf'], ['.vcf', '.gz'], ['.vcf', '.zst'])
+            or suffixes[-1] == '.vcf'
+        ):
             raise ValueError(
                 "FLARE output requires genotype data. Use "
                 "`save_flare(file, snpobj=...)` or `save_flare(file, genotype_file=...)`."

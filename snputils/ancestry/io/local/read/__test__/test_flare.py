@@ -258,3 +258,38 @@ def test_local_ancestry_object_save_flare_requires_genotype_source(tmp_path: Pat
     loaded = read_flare(out_path)
 
     np.testing.assert_array_equal(loaded.lai, laiobj.lai)
+
+
+def test_flare_zst(tmp_path: Path):
+    import zstandard as zstd
+    from snputils.ancestry.io.local.read import read_flare
+    
+    laiobj = LocalAncestryObject(
+        haplotypes=["S1.0", "S1.1"],
+        samples=["S1"],
+        ancestry_map={"0": "AFR", "1": "EUR"},
+        chromosomes=np.array(["1"], dtype=object),
+        physical_pos=np.array([[42, 42]], dtype=np.int64),
+        lai=np.array([[0, 1]], dtype=np.uint8),
+    )
+
+    snpobj = SNPObject(
+        samples=np.array(["S1"], dtype=object),
+        genotypes=np.array([[[0, 1]]], dtype=np.int8),
+        variants_chrom=np.array(["1"], dtype=object),
+        variants_pos=np.array([42], dtype=np.int64),
+        variants_id=np.array(["rs42"], dtype=object),
+        variants_ref=np.array(["A"], dtype=object),
+        variants_alt=np.array(["C"], dtype=object),
+    )
+
+    out_path = tmp_path / "saved.anc.vcf.zst"
+    laiobj.save_flare(out_path, snpobj=snpobj)
+    
+    # Check that file exists
+    assert out_path.exists()
+    
+    # Check it can be read back
+    loaded = read_flare(out_path)
+    np.testing.assert_array_equal(loaded.lai, laiobj.lai)
+    assert loaded.ancestry_map == laiobj.ancestry_map

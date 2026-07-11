@@ -56,9 +56,9 @@ def _read_x_only_snp(path: Union[str, Path], *, assume_x: bool = False) -> SNPOb
             "for sex checking. Convert or hard-call the data before running this command."
         )
 
-    sum_strands: Optional[bool] = True if isinstance(reader, BEDReader) else None
+    genotype_mode = "dosage" if isinstance(reader, BEDReader) else "auto"
     if assume_x:
-        return reader.read(sum_strands=sum_strands)
+        return reader.read(genotype_mode=genotype_mode)
 
     if isinstance(reader, VCFReader):
         metadata = reader.read(fields=["CHROM"], samples=[])
@@ -67,16 +67,16 @@ def _read_x_only_snp(path: Union[str, Path], *, assume_x: bool = False) -> SNPOb
             dict.fromkeys(str(metadata.variants_chrom[index]) for index in x_indexes)
         )
         if len(x_labels) == 1:
-            return reader.read(region=x_labels[0], sum_strands=sum_strands)
+            return reader.read(region=x_labels[0], genotype_mode=genotype_mode)
 
         # Mixed X naming within one VCF is unusual. Reading once and letting the
         # in-memory API select every accepted label avoids duplicate sample joins.
-        return reader.read(sum_strands=sum_strands)
+        return reader.read(genotype_mode=genotype_mode)
 
     if isinstance(reader, (BEDReader, PGENReader, BCFReader)):
         metadata = reader.read(fields=["#CHROM"])
         x_indexes = _chromosome_x_indices(metadata.variants_chrom)
-        return reader.read(variant_idxs=x_indexes, sum_strands=sum_strands)
+        return reader.read(variant_idxs=x_indexes, genotype_mode=genotype_mode)
 
     raise ValueError(f"Sex checking does not support {type(reader).__name__} file input.")
 

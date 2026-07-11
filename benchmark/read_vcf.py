@@ -6,28 +6,28 @@ import gzip
 from .utils import create_benchmark_test
 
 
-def read_vcf_snputils(path, sum_strands=True):
+def read_vcf_snputils(path, genotype_mode="dosage"):
     """Read VCF file using snputils"""
     import snputils
-    return snputils.read_vcf(path, sum_strands=sum_strands, chromosome_ploidy="autosomal").genotypes
+    return snputils.read_vcf(path, genotype_mode=genotype_mode, chromosome_ploidy="autosomal").genotypes
 
 
-def read_vcf_snputils_polars(path, sum_strands=True):
+def read_vcf_snputils_polars(path, genotype_mode="dosage"):
     """Read VCF file using snputils and polars"""
     from snputils.snp.io.read.vcf import VCFReaderPolars
-    return VCFReaderPolars(path).read(fields=[], sum_strands=sum_strands).genotypes
+    return VCFReaderPolars(path).read(fields=[], genotype_mode=genotype_mode).genotypes
 
 
-def read_vcf_scikit_allel(path, sum_strands=True):
+def read_vcf_scikit_allel(path, genotype_mode="dosage"):
     """Read VCF file using scikit-allel"""
     import allel
     gt = allel.read_vcf(str(path), fields=['calldata/GT'])['calldata/GT']
-    if sum_strands:
+    if genotype_mode == "dosage":
         return np.sum(gt > 0, axis=2, dtype=np.uint8)
     return gt.astype(np.int8)
 
 
-def read_vcf_hail(path, sum_strands=True):
+def read_vcf_hail(path, genotype_mode="dosage"):
     """Read VCF file using hail"""
     import hail as hl
     spark_memory = os.environ.get("HAIL_SPARK_MEMORY", "192g")
@@ -49,7 +49,7 @@ def read_vcf_hail(path, sum_strands=True):
                 break
         else:
             raise ValueError(f"Could not find VCF header in {path}")
-    if sum_strands:
+    if genotype_mode == "dosage":
         mt = np.array(hl.or_else(mt.GT.n_alt_alleles(), -2).collect(), dtype=np.int8).reshape((-1, n_samples))
     else:
         mt = np.array(
@@ -60,10 +60,10 @@ def read_vcf_hail(path, sum_strands=True):
     return mt
 
 
-def read_vcf_pyvcf3(path, sum_strands=True):
+def read_vcf_pyvcf3(path, genotype_mode="dosage"):
     """Read VCF file using PyVCF3"""
     import vcf
-    if sum_strands:
+    if genotype_mode == "dosage":
         return np.array([[s.data.GT.count('1') for s in record.samples] for record in vcf.Reader(filename=str(path))], dtype=np.uint8)
     records = []
     for record in vcf.Reader(filename=str(path)):
@@ -78,20 +78,20 @@ def read_vcf_pyvcf3(path, sum_strands=True):
     return np.array(records, dtype=np.int8)
 
 
-def read_vcf_cyvcf2(path, sum_strands=True):
+def read_vcf_cyvcf2(path, genotype_mode="dosage"):
     """Read VCF file using cyvcf2"""
     import cyvcf2
     gt = np.stack([record.genotype.array()[:, :2] for record in cyvcf2.VCF(str(path))]).astype(np.int8)
-    if sum_strands:
+    if genotype_mode == "dosage":
         return gt.sum(axis=2, dtype=np.int8)
     return gt
 
 
-def read_vcf_pysam(path, sum_strands=True):
+def read_vcf_pysam(path, genotype_mode="dosage"):
     """Read VCF file using pysam"""
     import pysam
     with pysam.VariantFile(str(path)) as vcf:
-        if sum_strands:
+        if genotype_mode == "dosage":
             return np.array([[s.get('GT').count(1) for s in record.samples.values()] for record in vcf], dtype=np.uint8)
         return np.array(
             [[[-1 if allele is None else allele for allele in s.get('GT')[:2]] for s in record.samples.values()] for record in vcf],
@@ -113,7 +113,7 @@ READERS = [
 
 @pytest.mark.benchmark(group="VCF-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
-def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name, sum_strands):
+def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode):
     """Benchmark readers and verify output"""
     if reader_name is not None and name != reader_name:
         pytest.skip(f"Skipping {name}; --reader-name={reader_name} requested")
@@ -122,7 +122,7 @@ def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name,
     if path.suffixes[-2:] != ['.vcf', '.gz'] and path.suffix != ".vcf":
         gz_path = Path(str(path) + ".vcf.gz")
         path = gz_path if gz_path.exists() else Path(str(path) + ".vcf")
-    ref_array = None if memory_profile else read_vcf_snputils(path, sum_strands=sum_strands)
+    ref_array = None if memory_profile else read_vcf_snputils(path, genotype_mode=genotype_mode)
     create_benchmark_test(
         benchmark,
         reader,
@@ -130,6 +130,6 @@ def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name,
         name,
         ref_array,
         memory_profile,
-        sum_strands=sum_strands,
+        genotype_mode=genotype_mode,
         ref_reader_func=read_vcf_snputils,
     )

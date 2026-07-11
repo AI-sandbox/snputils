@@ -190,12 +190,12 @@ def data_path():
 
 @pytest.fixture(scope="module")
 def snpobj_vcf(data_path):
-    return VCFReader(data_path + "/vcf/subset.vcf").read(sum_strands=False)
+    return VCFReader(data_path + "/vcf/subset.vcf").read(genotype_mode="phased")
 
 
 @pytest.fixture(scope="module")
 def snpobj_bed(data_path):
-    return BEDReader(data_path + "/bed/subset").read(sum_strands=True)
+    return BEDReader(data_path + "/bed/subset").read(genotype_mode="dosage")
 
 
 @pytest.fixture(scope="module")
@@ -207,9 +207,9 @@ def snpobj_bgen(data_path):
 def snpobj_bcf(data_path):
     from snputils.snp.io.read.bcf import BCFReader
 
-    return BCFReader(data_path + "/bcf/subset.bcf").read(sum_strands=False, variant_idxs=np.arange(100))
+    return BCFReader(data_path + "/bcf/subset.bcf").read(genotype_mode="phased", variant_idxs=np.arange(100))
 
 
 @pytest.fixture(scope="module")
 def snpobj_pgen(data_path):
-    return PGENReader(data_path + "/pgen/subset").read(sum_strands=False)
+    return PGENReader(data_path + "/pgen/subset").read(genotype_mode="phased")

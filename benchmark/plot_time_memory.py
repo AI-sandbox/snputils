@@ -122,21 +122,21 @@ def _draw_crop_arrows(ax, xpos: float, ypos: float, n_marks: int, *, color: str,
 def _draw_grouped_bars(
     ax,
     names,
-    true_values,
-    false_values,
+    dosage_values,
+    phased_values,
     metric: str,
     title: str,
     y_cap: float | None = None,
     axis_top: float | None = None,
-    show_false: bool = True,
+    show_phased: bool = True,
 ) -> None:
     x = np.arange(len(names))
-    width = 0.36 if show_false else 0.42
-    colors = {"true": "#4C72B0", "false": "#DD8452"}
+    width = 0.36 if show_phased else 0.42
+    colors = {"dosage": "#4C72B0", "phased": "#DD8452"}
     marker_color = "#C44E52"
     value_rotation = 90
     value_fontsize = 14
-    value_sets = (true_values, false_values) if show_false else (true_values,)
+    value_sets = (dosage_values, phased_values) if show_phased else (dosage_values,)
     all_values = [
         _plot_value(values.get(name)[0], metric)
         for values in value_sets
@@ -158,21 +158,21 @@ def _draw_grouped_bars(
 
     marker_y = y_top * 0.06
     unsupported_names = set()
-    if show_false:
+    if show_phased:
         unsupported_names = {
             name
             for name in names
-            if true_values.get(name) is None and false_values.get(name) is None
+            if dosage_values.get(name) is None and phased_values.get(name) is None
         }
         for idx, name in enumerate(names):
             if name in unsupported_names:
                 ax.plot(x[idx], marker_y, "x", color=marker_color, markersize=9, mew=2.5)
 
     series = (
-        (-width / 2, true_values, "sum_strands=True", colors["true"]),
-        (width / 2, false_values, "sum_strands=False", colors["false"]),
-    ) if show_false else (
-        (0.0, true_values, "sum_strands=True", colors["true"]),
+        (-width / 2, dosage_values, 'genotype_mode="dosage"', colors["dosage"]),
+        (width / 2, phased_values, 'genotype_mode="phased"', colors["phased"]),
+    ) if show_phased else (
+        (0.0, dosage_values, 'genotype_mode="dosage"', colors["dosage"]),
     )
     for offset, values, label, color in series:
         for idx, name in enumerate(names):
@@ -237,10 +237,10 @@ def _draw_grouped_bars(
 
 
 def plot_time_memory(
-    time_true_dir: Path,
-    time_false_dir: Path,
-    memory_true_dir: Path,
-    memory_false_dir: Path,
+    time_dosage_dir: Path,
+    time_phased_dir: Path,
+    memory_dosage_dir: Path,
+    memory_phased_dir: Path,
     output: Path,
     pdf_output: Path | None,
     time_names: list[str],
@@ -266,31 +266,31 @@ def plot_time_memory(
 
     for row, fmt in enumerate(DEFAULT_FORMATS):
         title = fmt.upper()
-        time_true = _load_values(time_true_dir, fmt, "time")
-        time_false = _load_values(time_false_dir, fmt, "time")
-        memory_true = _load_values(memory_true_dir, fmt, "memory")
-        memory_false = _load_values(memory_false_dir, fmt, "memory")
+        time_dosage = _load_values(time_dosage_dir, fmt, "time")
+        time_phased = _load_values(time_phased_dir, fmt, "time")
+        memory_dosage = _load_values(memory_dosage_dir, fmt, "memory")
+        memory_phased = _load_values(memory_phased_dir, fmt, "memory")
 
         memory_y_cap = 32_000 if fmt == "bed" else None
         _draw_grouped_bars(
             axs[row, 0],
             time_names,
-            time_true,
-            time_false,
+            time_dosage,
+            time_phased,
             "time",
             f"{title} time",
             axis_top=600 if fmt == "vcf" else None,
-            show_false=fmt != "bed",
+            show_phased=fmt != "bed",
         )
         _draw_grouped_bars(
             axs[row, 1],
             memory_names,
-            memory_true,
-            memory_false,
+            memory_dosage,
+            memory_phased,
             "memory",
             f"{title} peak memory",
             y_cap=memory_y_cap,
-            show_false=fmt != "bed",
+            show_phased=fmt != "bed",
         )
         axs[row, 0].set_ylabel("Time (seconds)")
         axs[row, 1].set_ylabel("Peak memory (GiB)")
@@ -313,10 +313,10 @@ def plot_time_memory(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot time and peak-memory benchmarks side by side.")
-    parser.add_argument("--time-true-dir", type=Path, required=True)
-    parser.add_argument("--time-false-dir", type=Path, required=True)
-    parser.add_argument("--memory-true-dir", type=Path, required=True)
-    parser.add_argument("--memory-false-dir", type=Path, required=True)
+    parser.add_argument("--time-dosage-dir", type=Path, required=True)
+    parser.add_argument("--time-phased-dir", type=Path, required=True)
+    parser.add_argument("--memory-dosage-dir", type=Path, required=True)
+    parser.add_argument("--memory-phased-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--pdf-output",
@@ -332,10 +332,10 @@ def main() -> None:
     memory_names = args.memory_names or args.names or list(DEFAULT_MEMORY_NAMES)
 
     plot_time_memory(
-        time_true_dir=args.time_true_dir,
-        time_false_dir=args.time_false_dir,
-        memory_true_dir=args.memory_true_dir,
-        memory_false_dir=args.memory_false_dir,
+        time_dosage_dir=args.time_dosage_dir,
+        time_phased_dir=args.time_phased_dir,
+        memory_dosage_dir=args.memory_dosage_dir,
+        memory_phased_dir=args.memory_phased_dir,
         output=args.output,
         pdf_output=args.pdf_output,
         time_names=time_names,

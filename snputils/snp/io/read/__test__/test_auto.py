@@ -7,7 +7,7 @@ from snputils.snp.io.read import BCFReader, SNPReader, VCFReader, read_vcf
 
 def test_auto_reader(data_path, snpobj_pgen):
     reader = SNPReader(data_path + "/pgen/subset.pgen")
-    snpobj = reader.read(sum_strands=False)
+    snpobj = reader.read(genotype_mode="phased")
 
     assert np.array_equal(snpobj.genotypes, snpobj_pgen.genotypes)
 

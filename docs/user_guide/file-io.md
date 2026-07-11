@@ -51,8 +51,8 @@ vcf = VCFReader("cohort.vcf.gz").read(
     region="chr1:1000000-2000000",
 )
 
-# Summed dosages can be requested explicitly.
-dosages = VCFReader("cohort.vcf.gz").read(sum_strands=True)
+# Dosages can be requested explicitly.
+dosages = VCFReader("cohort.vcf.gz").read(genotype_mode="dosage")
 
 # BCF: read only specific samples and variants
 bcf = BCFReader("cohort.bcf").read(
@@ -62,13 +62,17 @@ bcf = BCFReader("cohort.bcf").read(
 ```
 
 Phase-capable formats (`VCFReader`, `VCFReaderPolars`, `BCFReader`, `PGENReader`)
-default to `sum_strands=None`: phased genotypes are preserved with shape
+default to `genotype_mode="auto"`: phased genotypes are preserved with shape
 `(n_variants, n_samples, 2)`, while unphased hardcalls fall back to per-sample
-dosages (`0`, `1`, `2`, or missing). Use `sum_strands=True` to always get
-dosages. Use `sum_strands=False` to require phased separate-strand output and
+dosages (`0`, `1`, `2`, or missing). Use `genotype_mode="dosage"` to always get
+dosages. Use `genotype_mode="phased"` to require phased allele-call output and
 reject unphased hardcalls because their allele order is not meaningful.
-`BEDReader` defaults to `sum_strands=True` because PLINK BED/BIM/FAM does not
+`BEDReader` defaults to `genotype_mode="dosage"` because PLINK BED/BIM/FAM does not
 store phase.
+
+For multiallelic hard calls, `genotype_mode="dosage"` preserves the historical
+behavior of summing allele indexes; that value is not an allele-specific dosage.
+Use `genotype_mode="phased"` when multiallelic allele identity must be retained.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

@@ -334,8 +334,8 @@ reject_unphased_second_allele(const unsigned char *gt, Py_ssize_t type_size)
     if (second >= 0 && (second_raw & 1u) == 0) {
         PyErr_SetString(
             PyExc_ValueError,
-            "Cannot read unphased BCF genotypes with `sum_strands=False`; "
-            "use `sum_strands=True` to load 0/1/2 genotype dosages.");
+            "Cannot read unphased BCF genotypes with genotype_mode='phased'; "
+            "use genotype_mode='dosage' to load 0/1/2 genotype dosages.");
         return -1;
     }
     return 0;
@@ -405,7 +405,7 @@ decode_gt(PyObject *self, PyObject *args)
     Py_ssize_t body_offset, gt_rel_offset, n_samples, n_vals, type_size, expected_l_indiv;
     Py_ssize_t n_selected, row_width, capacity_records, output_size;
     Py_ssize_t offset, n_records;
-    int sum_strands;
+    int return_dosage;
     int all_samples;
     const unsigned char *data;
     Py_ssize_t data_len;
@@ -422,7 +422,7 @@ decode_gt(PyObject *self, PyObject *args)
             &type_size,
             &expected_l_indiv,
             &sample_indices_obj,
-            &sum_strands)) {
+            &return_dosage)) {
         return NULL;
     }
 
@@ -466,12 +466,12 @@ decode_gt(PyObject *self, PyObject *args)
         sample_seq = NULL;
     }
 
-    if (!sum_strands && n_selected > PY_SSIZE_T_MAX / 2) {
+    if (!return_dosage && n_selected > PY_SSIZE_T_MAX / 2) {
         PyMem_Free(sample_indices);
         PyErr_SetString(PyExc_MemoryError, "BCF genotype row is too large.");
         return NULL;
     }
-    row_width = sum_strands ? n_selected : n_selected * 2;
+    row_width = return_dosage ? n_selected : n_selected * 2;
 
     if (PyObject_GetBuffer(data_obj, &data_view, PyBUF_SIMPLE) < 0) {
         PyMem_Free(sample_indices);
@@ -579,7 +579,7 @@ decode_gt(PyObject *self, PyObject *args)
         }
         row = PyByteArray_AS_STRING(out) + n_records * row_width;
 
-        if (sum_strands) {
+        if (return_dosage) {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
@@ -649,7 +649,7 @@ decode_core(PyObject *self, PyObject *args)
     Py_ssize_t body_offset, gt_rel_offset, n_samples, n_vals, type_size, expected_l_indiv;
     Py_ssize_t n_selected, gt_row_width, capacity_records, output_size;
     Py_ssize_t offset, n_records;
-    int sum_strands;
+    int return_dosage;
     int all_samples;
     int pass_filter_id;
     const unsigned char *data;
@@ -667,7 +667,7 @@ decode_core(PyObject *self, PyObject *args)
             &type_size,
             &expected_l_indiv,
             &sample_indices_obj,
-            &sum_strands,
+            &return_dosage,
             &pass_filter_id)) {
         return NULL;
     }
@@ -712,12 +712,12 @@ decode_core(PyObject *self, PyObject *args)
         sample_seq = NULL;
     }
 
-    if (!sum_strands && n_selected > PY_SSIZE_T_MAX / 2) {
+    if (!return_dosage && n_selected > PY_SSIZE_T_MAX / 2) {
         PyMem_Free(sample_indices);
         PyErr_SetString(PyExc_MemoryError, "BCF genotype row is too large.");
         return NULL;
     }
-    gt_row_width = sum_strands ? n_selected : n_selected * 2;
+    gt_row_width = return_dosage ? n_selected : n_selected * 2;
 
     if (PyObject_GetBuffer(data_obj, &data_view, PyBUF_SIMPLE) < 0) {
         PyMem_Free(sample_indices);
@@ -935,7 +935,7 @@ decode_core(PyObject *self, PyObject *args)
         }
 
         gt_row = PyByteArray_AS_STRING(gt_out) + n_records * gt_row_width;
-        if (sum_strands) {
+        if (return_dosage) {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;

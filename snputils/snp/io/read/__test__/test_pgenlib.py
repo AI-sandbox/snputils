@@ -19,7 +19,7 @@ class _FakePgenReader:
         out[:] = self._alleles[idxs]
 
 
-def test_chunked_separate_strands_contiguous_range_and_list_fallback_match(monkeypatch):
+def test_chunked_phased_alleles_contiguous_range_and_list_fallback_match(monkeypatch):
     num_samples = 3
     allele_cols = 2 * num_samples
     all_alleles = np.arange(12 * allele_cols, dtype=np.int32).reshape(12, allele_cols)
@@ -29,13 +29,13 @@ def test_chunked_separate_strands_contiguous_range_and_list_fallback_match(monke
     monkeypatch.setattr(_pgenlib, "PHASED_ALLELE_FULL_READ_BYTES", 1)
 
     reader_with_range = _FakePgenReader(all_alleles)
-    gt_from_range = _pgenlib.read_separate_strands(
+    gt_from_range = _pgenlib.read_phased_alleles(
         reader_with_range, variant_idxs, num_variants, num_samples
     )
 
     monkeypatch.setattr(_pgenlib, "_is_contiguous_variant_chunk", lambda _: False)
     reader_with_list = _FakePgenReader(all_alleles)
-    gt_from_list = _pgenlib.read_separate_strands(
+    gt_from_list = _pgenlib.read_phased_alleles(
         reader_with_list, variant_idxs, num_variants, num_samples
     )
 

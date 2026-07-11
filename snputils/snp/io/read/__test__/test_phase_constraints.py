@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
-from snputils.snp.io.read import BEDReader, PGENReader
+from snputils.snp.io.read import BCFReader, BEDReader, PGENReader
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
 from snputils.snp.io.write.pgen import PGENWriter
 
@@ -21,7 +21,7 @@ def _toy_snpobj(genotypes: np.ndarray) -> SNPObject:
     )
 
 
-def test_vcf_unphased_gt_defaults_to_summed_and_rejects_explicit_separate_strands(tmp_path: Path):
+def test_vcf_unphased_gt_defaults_to_dosage_and_rejects_phased_mode(tmp_path: Path):
     vcf_path = tmp_path / "unphased.vcf"
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n"
@@ -30,7 +30,7 @@ def test_vcf_unphased_gt_defaults_to_summed_and_rejects_explicit_separate_strand
         "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t0/0\t1/1\n"
     )
 
-    # Default auto mode falls back to summed dosages for unphased GT.
+    # Default auto mode falls back to dosages for unphased GT.
     snpobj = VCFReader(vcf_path).read()
     np.testing.assert_array_equal(
         snpobj.genotypes,
@@ -43,22 +43,22 @@ def test_vcf_unphased_gt_defaults_to_summed_and_rejects_explicit_separate_strand
         np.array([[1, 1], [0, 2]], dtype=np.int8),
     )
 
-    # Explicit sum_strands=False rejects unphased GT.
+    # Explicit genotype_mode="phased" rejects unphased GT.
     with pytest.raises(ValueError, match="unphased VCF genotypes"):
-        VCFReader(vcf_path).read(sum_strands=False)
+        VCFReader(vcf_path).read(genotype_mode="phased")
 
     with pytest.raises(ValueError, match="unphased VCF genotypes"):
-        VCFReaderPolars(vcf_path).read(sum_strands=False)
+        VCFReaderPolars(vcf_path).read(genotype_mode="phased")
 
-    # Explicit sum_strands=True loads dosages
-    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+    # Explicit genotype_mode="dosage" loads dosages
+    snpobj = VCFReader(vcf_path).read(genotype_mode="dosage")
     np.testing.assert_array_equal(
         snpobj.genotypes,
         np.array([[1, 1], [0, 2]], dtype=np.int8),
     )
 
 
-def test_vcf_phased_gt_allows_separate_strands(tmp_path: Path):
+def test_vcf_phased_gt_preserves_allele_calls(tmp_path: Path):
     vcf_path = tmp_path / "phased.vcf"
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n"
@@ -73,7 +73,21 @@ def test_vcf_phased_gt_allows_separate_strands(tmp_path: Path):
     )
 
 
-def test_vcf_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
+def test_vcf_dosage_preserves_multiallelic_allele_index_sum(tmp_path: Path):
+    vcf_path = tmp_path / "multiallelic.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+        "1\t100\trs1\tA\tG,T\t.\tPASS\t.\tGT\t1|2\n"
+    )
+
+    snpobj = VCFReader(vcf_path).read(fields=["GT"], genotype_mode="dosage")
+
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[3]], dtype=np.int8))
+    assert snpobj.variants_alt.size == 0
+
+
+def test_vcf_dosage_preserves_one_missing_sentinel(tmp_path: Path):
     vcf_path = tmp_path / "missing.vcf"
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n"
@@ -81,19 +95,23 @@ def test_vcf_summed_gt_preserves_one_missing_sentinel(tmp_path: Path):
         "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t./.\t1|1\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+    snpobj = VCFReader(vcf_path).read(genotype_mode="dosage")
     np.testing.assert_array_equal(
         snpobj.genotypes,
         np.array([[-1, -1, 2]], dtype=np.int8),
     )
 
 
-def test_bed_rejects_separate_strands():
+def test_bed_modes(data_path):
+    default = BEDReader(data_path + "/bed/subset").read(fields=["GT"])
+    automatic = BEDReader(data_path + "/bed/subset").read(fields=["GT"], genotype_mode="auto")
+    np.testing.assert_array_equal(default.genotypes, automatic.genotypes)
+
     with pytest.raises(ValueError, match="BED/BIM/FAM does not store phase"):
-        BEDReader("cohort.bed").read(sum_strands=False)
+        BEDReader("cohort.bed").read(genotype_mode="phased")
 
 
-def test_pgen_unphased_hardcalls_reject_separate_strands(tmp_path: Path):
+def test_pgen_unphased_hardcalls_reject_phased_mode(tmp_path: Path):
     prefix = tmp_path / "unphased"
     snpobj = _toy_snpobj(
         np.array(
@@ -110,10 +128,10 @@ def test_pgen_unphased_hardcalls_reject_separate_strands(tmp_path: Path):
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
 
     with pytest.raises(ValueError, match="hardcall phase information"):
-        PGENReader(prefix).read(sum_strands=False)
+        PGENReader(prefix).read(genotype_mode="phased")
 
 
-def test_pgen_summed_gt_preserves_negative_missing_sentinel(tmp_path: Path):
+def test_pgen_dosage_preserves_negative_missing_sentinel(tmp_path: Path):
     prefix = tmp_path / "missing"
     genotypes = np.array(
         [
@@ -124,13 +142,13 @@ def test_pgen_summed_gt_preserves_negative_missing_sentinel(tmp_path: Path):
     )
     PGENWriter(_toy_snpobj(genotypes), str(prefix)).write()
 
-    observed = PGENReader(prefix).read(sum_strands=True)
+    observed = PGENReader(prefix).read(genotype_mode="dosage")
     np.testing.assert_array_equal(observed.genotypes[:, 0], genotypes[:, 0])
     assert observed.genotypes[0, 1] < 0
     np.testing.assert_array_equal(observed.genotypes[1, 1], genotypes[1, 1])
 
 
-def test_pgen_phased_hardcalls_allow_separate_strands(tmp_path: Path):
+def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     prefix = tmp_path / "phased"
     genotypes = np.array(
         [
@@ -144,3 +162,22 @@ def test_pgen_phased_hardcalls_allow_separate_strands(tmp_path: Path):
 
     observed = PGENReader(prefix).read()
     np.testing.assert_array_equal(observed.genotypes, genotypes)
+
+
+def test_reader_modes_are_validated(tmp_path: Path):
+    with pytest.raises(ValueError, match="genotype_mode"):
+        VCFReader(tmp_path / "unused.vcf").read(genotype_mode="invalid")
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        VCFReader("unused.vcf"),
+        VCFReaderPolars("unused.vcf"),
+        PGENReader("unused.pgen"),
+        BEDReader("unused.bed"),
+    ],
+)
+def test_streaming_readers_reject_auto_mode(reader):
+    with pytest.raises(ValueError, match="genotype_mode"):
+        next(reader.iter_read(genotype_mode="auto"))

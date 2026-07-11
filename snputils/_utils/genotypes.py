@@ -1,8 +1,47 @@
 from __future__ import annotations
 
-from typing import Union, Optional
+from typing import cast, Literal, Optional, overload, Union
 
 import numpy as np
+
+
+GenotypeMode = Literal["auto", "dosage", "phased"]
+ExplicitGenotypeMode = Literal["dosage", "phased"]
+
+
+@overload
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: Literal[False],
+) -> ExplicitGenotypeMode: ...
+
+
+@overload
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: Literal[True] = True,
+) -> GenotypeMode: ...
+
+
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: bool = True,
+) -> GenotypeMode:
+    """Validate and normalize a requested genotype representation."""
+    if not isinstance(genotype_mode, str):
+        raise TypeError("genotype_mode must be a string.")
+
+    normalized = genotype_mode.strip().lower()
+    allowed = {"dosage", "phased"}
+    if allow_auto:
+        allowed.add("auto")
+    if normalized not in allowed:
+        choices = "'auto', 'dosage', or 'phased'" if allow_auto else "'dosage' or 'phased'"
+        raise ValueError(f"genotype_mode must be {choices}.")
+    return cast(GenotypeMode, normalized)
 
 
 def sum_diploid_alleles(

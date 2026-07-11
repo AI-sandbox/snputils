@@ -161,8 +161,8 @@ class PGENWriter:
         Writes the genotype data to a .pgen file.
         """
         log.info(f"Writing to {self.__filename}.pgen")
-        summed_strands = False if self.__snpobj.genotypes.ndim == 3 else True
-        if not summed_strands:
+        dosage_genotypes = False if self.__snpobj.genotypes.ndim == 3 else True
+        if not dosage_genotypes:
             num_variants, num_samples, num_alleles = self.__snpobj.genotypes.shape
             flat_genotypes = phased_to_flat_alleles(
                 self.__snpobj.genotypes,

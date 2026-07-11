@@ -162,7 +162,7 @@ def test_build_synthetic_grg_returns_convertible_grgobject(tmp_path):
     assert grg.n_samples() == 3
     assert grg.n_snps() == 5
 
-    snp = grg.to_snpobject(chrom="22", sum_strands=False)
+    snp = grg.to_snpobject(chrom="22", genotype_mode="phased")
     assert snp.genotypes.shape == (5, 3, 2)
 
     path = tmp_path / "toy.grg"

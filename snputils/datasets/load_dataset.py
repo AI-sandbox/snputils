@@ -258,7 +258,7 @@ def load_dataset(
             require_polymorphic=require_polymorphic,
             maf=maf,
             snv_only=snv_only,
-            sum_strands=bool(read_kwargs.get("sum_strands", True)),
+            genotype_mode=str(read_kwargs.get("genotype_mode", "dosage")),
         )
         if sample_metadata is not None and snpobj.samples is not None:
             _attach_sample_metadata(snpobj, sample_metadata)
@@ -361,7 +361,7 @@ def _read_snp_subset(
     require_polymorphic: bool,
     maf: Optional[float],
     snv_only: bool,
-    sum_strands: bool,
+    genotype_mode: str,
     allow_fewer: bool = False,
 ) -> Optional[SNPObject]:
     selected = None if sample_ids is None else list(sample_ids)
@@ -369,7 +369,7 @@ def _read_snp_subset(
     chunks: list[SNPObject] = []
     n_variants = 0
     reader = SNPReader(source)
-    iter_kwargs = {"sum_strands": sum_strands, "chunk_size": 50_000}
+    iter_kwargs = {"genotype_mode": genotype_mode, "chunk_size": 50_000}
     if selected is not None:
         iter_kwargs["sample_ids"] = np.asarray(selected, dtype=object)
     if selected_variants is not None:
@@ -416,7 +416,7 @@ def _read_snp_subset_sources(
     require_polymorphic: bool,
     maf: Optional[float],
     snv_only: bool,
-    sum_strands: bool,
+    genotype_mode: str,
 ) -> SNPObject:
     if len(sources) == 0:
         raise ValueError("No genotype sources were provided.")
@@ -438,7 +438,7 @@ def _read_snp_subset_sources(
                 require_polymorphic=require_polymorphic,
                 maf=maf,
                 snv_only=snv_only,
-                sum_strands=sum_strands,
+                genotype_mode=genotype_mode,
                 allow_fewer=True,
             )
             if part is None:
@@ -466,7 +466,7 @@ def _read_snp_subset_sources(
             require_polymorphic=require_polymorphic,
             maf=maf,
             snv_only=snv_only,
-            sum_strands=sum_strands,
+            genotype_mode=genotype_mode,
         )
         for source, quota in zip(sources, quotas)
     ]

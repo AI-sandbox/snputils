@@ -31,7 +31,7 @@ def test_bcf_auto_reader_and_function(data_path):
 
 def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
-        sum_strands=False,
+        genotype_mode="phased",
         sample_ids=["HG00100", "HG00096"],
         variant_idxs=[0, 2],
     )
@@ -42,7 +42,7 @@ def test_bcf_reader_sample_and_variant_selection(data_path, snpobj_vcf):
 
 def test_bcf_reader_supports_region_filtering(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
-        sum_strands=False,
+        genotype_mode="phased",
         region="22:10526445-10526445",
         sample_idxs=[0],
     )
@@ -52,8 +52,8 @@ def test_bcf_reader_supports_region_filtering(data_path, snpobj_vcf):
     np.testing.assert_array_equal(snpobj.genotypes[0, 0], snpobj_vcf.genotypes[2, 0])
 
 
-def test_bcf_reader_supports_summed_strands(data_path, snpobj_vcf):
-    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(sum_strands=True, variant_idxs=[0, 1, 2])
+def test_bcf_reader_supports_dosage_genotypes(data_path, snpobj_vcf):
+    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(genotype_mode="dosage", variant_idxs=[0, 1, 2])
 
     np.testing.assert_array_equal(snpobj.genotypes, sum_diploid_genotypes(snpobj_vcf.genotypes[:3]))
 
@@ -62,7 +62,7 @@ def test_bcf_reader_gt_only_sample_selection(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
         fields=["GT"],
         sample_idxs=[3, 0],
-        sum_strands=True,
+        genotype_mode="dosage",
     )
 
     expected = sum_diploid_genotypes(snpobj_vcf.genotypes[:, [3, 0], :])
@@ -74,7 +74,7 @@ def test_bcf_reader_core_field_subset(data_path, snpobj_vcf):
     snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
         fields=["GT", "POS", "ID"],
         sample_idxs=[3, 0],
-        sum_strands=True,
+        genotype_mode="dosage",
     )
 
     expected_gt = sum_diploid_genotypes(snpobj_vcf.genotypes[:, [3, 0], :])
@@ -124,7 +124,7 @@ def test_build_indiv_offsets_rejects_truncated_record_headers():
         _build_indiv_offsets(one_empty_record_then_truncated_header, 0)
 
 
-def test_batch_decode_haploid_sum_strands_preserves_dosage_values():
+def test_batch_decode_haploid_dosage_preserves_values():
     data = bytes([2, 4, 0])
     observed = _batch_decode_gt(
         data=data,
@@ -135,13 +135,13 @@ def test_batch_decode_haploid_sum_strands_preserves_dosage_values():
         n_samples=3,
         n_records=1,
         sample_index_array=np.array([0, 1, 2], dtype=int),
-        sum_strands=True,
+        return_dosage=True,
     )
 
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
 
 
-def test_c_decode_gt_haploid_sum_strands_preserves_dosage_values():
+def test_c_decode_gt_haploid_dosage_preserves_values():
     _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
     data = struct.pack("<II", 0, 3) + bytes([2, 4, 0])
 
@@ -151,7 +151,7 @@ def test_c_decode_gt_haploid_sum_strands_preserves_dosage_values():
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
 
 
-def test_c_decode_core_haploid_sum_strands_and_missing_pass_fallback():
+def test_c_decode_core_haploid_dosage_and_missing_pass_fallback():
     _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
     gt_values = bytes([2, 4, 0])
     indiv = _encode_typed_int_list([1]) + b"\x11" + gt_values

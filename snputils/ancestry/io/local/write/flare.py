@@ -98,7 +98,7 @@ class FLAREWriter(LAIBaseWriter):
 
         from snputils.snp.io.read import read_snp
 
-        return read_snp(self.genotype_file, sum_strands=False)
+        return read_snp(self.genotype_file, genotype_mode="phased")
 
     def _required_variant_array(self, snpobj: SNPObject, attr: str, n_variants: int) -> np.ndarray:
         values = getattr(snpobj, attr)

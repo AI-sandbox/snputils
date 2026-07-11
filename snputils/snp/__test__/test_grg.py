@@ -86,7 +86,7 @@ def test_grg_object_to_grg_writes_loadable_file(tmp_path):
 
 def test_grg_object_to_snpobject_preserves_genotypes_and_metadata():
     obj = GRGObject(genotypes=_build_toy_grg())
-    snp = obj.to_snpobject(chrom="22", sum_strands=False)
+    snp = obj.to_snpobject(chrom="22", genotype_mode="phased")
 
     assert isinstance(snp, SNPObject)
     assert snp.genotypes.shape == (5, 3, 2)
@@ -118,10 +118,10 @@ def test_grg_object_to_snpobject_preserves_genotypes_and_metadata():
     np.testing.assert_array_equal(snp.genotypes, expected)
 
 
-def test_grg_object_to_snpobject_sum_strands_matches_phased_sum():
+def test_grg_object_to_snpobject_dosage_matches_phased_sum():
     obj = GRGObject(genotypes=_build_toy_grg())
-    phased = obj.to_snpobject(chrom="22", sum_strands=False)
-    summed = obj.to_snpobject(chrom="22", sum_strands=True)
+    phased = obj.to_snpobject(chrom="22", genotype_mode="phased")
+    summed = obj.to_snpobject(chrom="22", genotype_mode="dosage")
 
     assert summed.genotypes.shape == (5, 3)
     np.testing.assert_array_equal(summed.genotypes, phased.genotypes.sum(axis=2))
@@ -129,12 +129,12 @@ def test_grg_object_to_snpobject_sum_strands_matches_phased_sum():
 
 def test_grg_object_to_snpobject_allows_pgen_roundtrip(tmp_path):
     obj = GRGObject(genotypes=_build_toy_grg())
-    snp = obj.to_snpobject(chrom="22", sum_strands=False)
+    snp = obj.to_snpobject(chrom="22", genotype_mode="phased")
 
     out = tmp_path / "from_grg"
     PGENWriter(snp, str(out)).write(vzs=False, rename_missing_values=False)
 
-    loaded = PGENReader(out).read(sum_strands=False)
+    loaded = PGENReader(out).read(genotype_mode="phased")
     assert loaded.genotypes.shape == (5, 3, 2)
     np.testing.assert_array_equal(loaded.genotypes, snp.genotypes)
     np.testing.assert_array_equal(loaded.variants_pos, snp.variants_pos)

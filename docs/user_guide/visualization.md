@@ -21,7 +21,7 @@ su.viz.scatter(
 
 ## Dataset-Level LAI Plot
 
-Raster plot where each row is a sample (maternal + paternal haplotypes) and each column is a genomic window.
+Raster plot where each row is a sample (two phased haplotypes) and each column is a genomic window.
 
 ```python
 colors = {0: "steelblue", 1: "tomato", 2: "gold"}

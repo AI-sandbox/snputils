@@ -38,8 +38,8 @@ def test_bed_iter_read_reconstructs_eager_object(data_path):
     reader = BEDReader(data_path + "/bed/subset")
     subset = _first_n_variant_idxs(reader)
 
-    eager_subset = reader.read(sum_strands=True, variant_idxs=subset)
-    chunks = list(reader.iter_read(sum_strands=True, variant_idxs=subset, chunk_size=300))
+    eager_subset = reader.read(genotype_mode="dosage", variant_idxs=subset)
+    chunks = list(reader.iter_read(genotype_mode="dosage", variant_idxs=subset, chunk_size=300))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -57,9 +57,9 @@ def test_bed_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_pa
     reader = BEDReader(data_path + "/bed/subset")
     subset = np.array([5, 0, 3, 10, 2, 5, 3], dtype=np.uint32)
 
-    full = reader.read(sum_strands=True)
-    eager_subset = reader.read(sum_strands=True, variant_idxs=subset)
-    chunks = list(reader.iter_read(sum_strands=True, variant_idxs=subset, chunk_size=2))
+    full = reader.read(genotype_mode="dosage")
+    eager_subset = reader.read(genotype_mode="dosage", variant_idxs=subset)
+    chunks = list(reader.iter_read(genotype_mode="dosage", variant_idxs=subset, chunk_size=2))
 
     np.testing.assert_array_equal(eager_subset.genotypes, full.genotypes[subset])
     np.testing.assert_array_equal(eager_subset.variants_id, full.variants_id[subset])
@@ -84,8 +84,8 @@ def test_bed_iter_read_matches_eager_for_unsorted_duplicate_variant_ids(data_pat
         dtype=object,
     )
 
-    eager_subset = reader.read(sum_strands=True, variant_ids=variant_ids)
-    chunks = list(reader.iter_read(sum_strands=True, variant_ids=variant_ids, chunk_size=2))
+    eager_subset = reader.read(genotype_mode="dosage", variant_ids=variant_ids)
+    chunks = list(reader.iter_read(genotype_mode="dosage", variant_ids=variant_ids, chunk_size=2))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -102,8 +102,8 @@ def test_pgen_iter_read_reconstructs_subset_eager_object(data_path):
     reader = PGENReader(data_path + "/pgen/subset")
     subset = np.array([0, 1, 2, 5, 9, 20, 21, 45, 80], dtype=np.uint32)
 
-    eager_subset = reader.read(sum_strands=False, variant_idxs=subset)
-    chunks = list(reader.iter_read(sum_strands=False, variant_idxs=subset, chunk_size=3))
+    eager_subset = reader.read(genotype_mode="phased", variant_idxs=subset)
+    chunks = list(reader.iter_read(genotype_mode="phased", variant_idxs=subset, chunk_size=3))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -121,9 +121,9 @@ def test_pgen_iter_read_matches_eager_for_unsorted_duplicate_variant_idxs(data_p
     reader = PGENReader(data_path + "/pgen/subset")
     subset = np.array([5, 0, 3, 10, 2, 5, 3], dtype=np.uint32)
 
-    full = reader.read(sum_strands=False)
-    eager_subset = reader.read(sum_strands=False, variant_idxs=subset)
-    chunks = list(reader.iter_read(sum_strands=False, variant_idxs=subset, chunk_size=2))
+    full = reader.read(genotype_mode="phased")
+    eager_subset = reader.read(genotype_mode="phased", variant_idxs=subset)
+    chunks = list(reader.iter_read(genotype_mode="phased", variant_idxs=subset, chunk_size=2))
 
     np.testing.assert_array_equal(eager_subset.genotypes, full.genotypes[subset])
     np.testing.assert_array_equal(eager_subset.variants_id, full.variants_id[subset])
@@ -147,10 +147,10 @@ def test_allele_freq_stream_from_pgen_reader_matches_eager(data_path):
         reader,
         chunk_size=250,
         variant_idxs=subset,
-        sum_strands=False,
+        genotype_mode="phased",
         return_counts=True,
     )
-    eager_subset = reader.read(sum_strands=False, variant_idxs=subset)
+    eager_subset = reader.read(genotype_mode="phased", variant_idxs=subset)
     eager_af, eager_counts = eager_subset.allele_freq(return_counts=True)
 
     np.testing.assert_allclose(stream_af, eager_af)
@@ -161,8 +161,8 @@ def test_vcf_polars_iter_read_reconstructs_eager_object(data_path, tmp_path):
     mini_vcf = tmp_path / "subset_10k.vcf"
     _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
     reader = VCFReaderPolars(str(mini_vcf))
-    eager = reader.read(sum_strands=False)
-    chunks = list(reader.iter_read(sum_strands=False, chunk_size=300))
+    eager = reader.read(genotype_mode="phased")
+    chunks = list(reader.iter_read(genotype_mode="phased", chunk_size=300))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -180,7 +180,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_ids(data_path
     mini_vcf = tmp_path / "subset_10k.vcf"
     _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
     reader = VCFReaderPolars(str(mini_vcf))
-    eager = reader.read(sum_strands=False)
+    eager = reader.read(genotype_mode="phased")
     sample_ids = eager.samples[[1, 2]].tolist()
     variant_ids = eager.variants_id[[3, 5, 8]].tolist()
 
@@ -193,7 +193,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_ids(data_path
         reader.iter_read(
             sample_ids=sample_ids,
             variant_ids=variant_ids,
-            sum_strands=False,
+            genotype_mode="phased",
             chunk_size=2,
         )
     )
@@ -214,7 +214,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_idxs(data_pat
     mini_vcf = tmp_path / "subset_10k.vcf"
     _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
     reader = VCFReaderPolars(str(mini_vcf))
-    eager = reader.read(sum_strands=False)
+    eager = reader.read(genotype_mode="phased")
     sample_idxs = np.array([0, 3], dtype=np.uint32)
     variant_idxs = np.array([1, 4, 9], dtype=np.uint32)
 
@@ -227,7 +227,7 @@ def test_vcf_polars_iter_read_supports_standard_sample_and_variant_idxs(data_pat
         reader.iter_read(
             sample_idxs=sample_idxs,
             variant_idxs=variant_idxs,
-            sum_strands=False,
+            genotype_mode="phased",
             chunk_size=2,
         )
     )
@@ -252,10 +252,10 @@ def test_allele_freq_stream_from_bed_reader_matches_eager(data_path):
         reader,
         chunk_size=250,
         variant_idxs=subset,
-        sum_strands=True,
+        genotype_mode="dosage",
         return_counts=True,
     )
-    eager_subset = reader.read(sum_strands=True, variant_idxs=subset)
+    eager_subset = reader.read(genotype_mode="dosage", variant_idxs=subset)
     eager_af, eager_counts = eager_subset.allele_freq(return_counts=True)
 
     np.testing.assert_allclose(stream_af, eager_af)
@@ -266,12 +266,12 @@ def test_allele_freq_stream_from_vcf_polars_reader_matches_eager(data_path, tmp_
     mini_vcf = tmp_path / "subset_10k.vcf"
     _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
     reader = VCFReaderPolars(str(mini_vcf))
-    eager = reader.read(sum_strands=False)
+    eager = reader.read(genotype_mode="phased")
 
     stream_af, stream_counts = allele_freq_stream(
         reader,
         chunk_size=250,
-        sum_strands=False,
+        genotype_mode="phased",
         return_counts=True,
     )
     eager_af, eager_counts = eager.allele_freq(return_counts=True)

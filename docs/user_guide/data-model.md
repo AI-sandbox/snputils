@@ -41,7 +41,7 @@ region = snpobj.filter_variants(chrom="22", pos=range(1_000_000, 2_000_000))
 sub = snpobj.filter_variants(mask=maf_mask)
 
 # Collapse phased haplotypes to allele counts
-snpobj.sum_strands(inplace=True)
+snpobj.to_dosage(inplace=True)
 
 # Deep copy
 snpobj2 = snpobj.copy()
@@ -189,7 +189,7 @@ Genotype Representation Graph (requires `pip install "snputils[grg]"`).
 
 ```python
 grg = su.read_grg("cohort.grg")
-snpobj = grg.to_snpobject(sum_strands=False)   # materialise dense genotype matrix
+snpobj = grg.to_snpobject(genotype_mode="phased")   # materialise dense genotype matrix
 
 # Build a GRG from VCF
 su.vcf_to_grg("cohort.vcf.gz", "cohort.grg")

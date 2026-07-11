@@ -41,7 +41,7 @@ def test_pgen_writer_roundtrips_pvar_info_and_psam_metadata(tmp_path):
         "P2\ts3\tNA",
     ]
 
-    observed = PGENReader(prefix).read(sum_strands=True)
+    observed = PGENReader(prefix).read(genotype_mode="dosage")
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
     np.testing.assert_array_equal(observed.samples, snpobj.samples)
     np.testing.assert_array_equal(observed.sample_fid, snpobj.sample_fid)

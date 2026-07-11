@@ -1459,7 +1459,7 @@ def test_filter_mac_validates_threshold(mac):
         snpobj.filter_mac(mac=mac)
 
 
-def test_sum_strands_and_dosage_preserve_one_missing_sentinel():
+def test_to_dosage_preserves_one_missing_sentinel():
     genotypes = np.array(
         [
             [[0, 1], [0, -1], [-1, -1]],
@@ -1470,8 +1470,19 @@ def test_sum_strands_and_dosage_preserve_one_missing_sentinel():
     snpobj = SNPObject(genotypes=genotypes)
 
     expected = np.array([[1, -1, -1], [2, 0, 1]], dtype=np.int8)
-    np.testing.assert_array_equal(snpobj.sum_strands().genotypes, expected)
+    np.testing.assert_array_equal(snpobj.to_dosage().genotypes, expected)
     np.testing.assert_array_equal(snpobj.dosage(), expected.astype(np.float32))
+    assert snpobj.is_dosage is False
+    assert snpobj.to_dosage().is_dosage is True
+
+
+def test_to_dosage_preserves_multiallelic_allele_index_sum():
+    snpobj = SNPObject(genotypes=np.array([[[1, 2]]], dtype=np.int8))
+
+    np.testing.assert_array_equal(
+        snpobj.to_dosage().genotypes,
+        np.array([[3]], dtype=np.float32),
+    )
 
 
 def test_concat_variants_preserves_sample_metadata_and_validates_order():

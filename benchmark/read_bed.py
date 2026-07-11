@@ -4,13 +4,13 @@ import os
 from .utils import create_benchmark_test
 
 
-def read_bed_snputils(path, sum_strands=True):
+def read_bed_snputils(path, genotype_mode="dosage"):
     """Read BED fileset using snputils"""
     import snputils
-    return snputils.read_bed(path, sum_strands=sum_strands, fields=["GT"], chromosome_ploidy="autosomal").genotypes
+    return snputils.read_bed(path, genotype_mode=genotype_mode, fields=["GT"], chromosome_ploidy="autosomal").genotypes
 
 
-def read_bed_pgenlib(path, sum_strands=True):
+def read_bed_pgenlib(path, genotype_mode="dosage"):
     """Read BED fileset using Pgenlib"""
     import pgenlib
     with open(path + '.fam', 'r') as handle:
@@ -18,7 +18,7 @@ def read_bed_pgenlib(path, sum_strands=True):
     pgen = pgenlib.PgenReader(str.encode(path + '.bed'), raw_sample_ct=sample_ct)
     variant_ct = pgen.get_variant_ct()
     variant_idxs = np.arange(variant_ct, dtype=np.uint32)
-    if sum_strands:
+    if genotype_mode == "dosage":
         genotypes = np.empty((variant_ct, sample_ct), dtype=np.int8)
         pgen.read_list(variant_idxs, genotypes)
     else:
@@ -29,7 +29,7 @@ def read_bed_pgenlib(path, sum_strands=True):
     return genotypes
 
 
-def read_bed_hail(path, sum_strands=True):
+def read_bed_hail(path, genotype_mode="dosage"):
     """Read BED fileset using hail"""
     import hail as hl
     spark_memory = os.environ.get("HAIL_SPARK_MEMORY", "192g")
@@ -44,7 +44,7 @@ def read_bed_hail(path, sum_strands=True):
     })
     mt = hl.import_plink(path + '.bed', path + '.bim', path + '.fam')
     n_samples = mt.count_cols()
-    if sum_strands:
+    if genotype_mode == "dosage":
         mt = np.array(hl.or_else(mt.GT.n_alt_alleles(), -2).collect(), dtype=np.int8).reshape((-1, n_samples))
     else:
         mt = np.array(
@@ -58,36 +58,36 @@ def read_bed_hail(path, sum_strands=True):
     return mt
 
 
-def read_bed_sgkit(path, sum_strands=True):
+def read_bed_sgkit(path, genotype_mode="dosage"):
     """Read BED fileset using sgkit"""
     from sgkit.io import plink
     genotypes = plink.read_plink(path=path).call_genotype.to_numpy()
     genotypes = np.where(genotypes < 0, -1, 1 - genotypes).astype(np.int8)
-    if sum_strands:
+    if genotype_mode == "dosage":
         return np.sum(genotypes, axis=2, dtype=np.int8)
     return genotypes
 
 
-def read_bed_pandas_plink(path, sum_strands=True):
+def read_bed_pandas_plink(path, genotype_mode="dosage"):
     """Read BED fileset using pandas-plink"""
-    if not sum_strands:
+    if genotype_mode != "dosage":
         pytest.skip("pandas-plink BED benchmark returns dosages only.")
     import pandas_plink
     _, _, genotypes = pandas_plink.read_plink(path)
     return 2 - genotypes.compute().astype(np.uint8)
 
 
-def read_bed_plinkio(path, sum_strands=True):
+def read_bed_plinkio(path, genotype_mode="dosage"):
     """Read BED fileset using plinkio"""
-    if not sum_strands:
+    if genotype_mode != "dosage":
         pytest.skip("plinkio BED benchmark returns dosages only.")
     from plinkio import plinkfile
     return np.array([2 - np.array(row) for row in plinkfile.open(path)], dtype=np.uint8)
 
 
-def read_bed_pysnptools(path, sum_strands=True):
+def read_bed_pysnptools(path, genotype_mode="dosage"):
     """Read BED fileset using pysnptools"""
-    if not sum_strands:
+    if genotype_mode != "dosage":
         pytest.skip("pysnptools BED benchmark returns dosages only.")
     from pysnptools.snpreader import Bed
     bed_path = path if str(path).endswith(".bed") else path + ".bed"
@@ -107,11 +107,11 @@ READERS = [
 
 @pytest.mark.benchmark(group="BED-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
-def test_bed_readers(benchmark, reader, name, path, memory_profile, reader_name, sum_strands):
+def test_bed_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode):
     """Benchmark readers and verify output"""
     if reader_name is not None and name != reader_name:
         pytest.skip(f"Skipping {name}; --reader-name={reader_name} requested")
-    ref_array = None if memory_profile else read_bed_snputils(path, sum_strands=sum_strands)
+    ref_array = None if memory_profile else read_bed_snputils(path, genotype_mode=genotype_mode)
     create_benchmark_test(
         benchmark,
         reader,
@@ -119,6 +119,6 @@ def test_bed_readers(benchmark, reader, name, path, memory_profile, reader_name,
         name,
         ref_array,
         memory_profile,
-        sum_strands=sum_strands,
+        genotype_mode=genotype_mode,
         ref_reader_func=read_bed_snputils,
     )

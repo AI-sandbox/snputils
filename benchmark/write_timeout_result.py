@@ -11,7 +11,7 @@ def write_timeout_result(
     benchmark_format: str,
     reader: str,
     path: str,
-    sum_strands: bool,
+    genotype_mode: str,
     timeout_seconds: float,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def write_timeout_result(
                 },
                 "extra_info": {
                     "path": path,
-                    "sum_strands": sum_strands,
+                    "genotype_mode": genotype_mode,
                     "timeout": True,
                     "timeout_seconds": timeout_seconds,
                     "max_memory_mb": None,
@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument("--format", dest="benchmark_format", required=True)
     parser.add_argument("--reader", required=True)
     parser.add_argument("--path", required=True)
-    parser.add_argument("--sum-strands", default="true", choices=("true", "false"))
+    parser.add_argument("--genotype-mode", default="dosage", choices=("dosage", "phased"))
     parser.add_argument("--timeout-seconds", type=float, required=True)
     args = parser.parse_args()
 
@@ -81,7 +81,7 @@ def main() -> None:
         benchmark_format=args.benchmark_format,
         reader=args.reader,
         path=args.path,
-        sum_strands=args.sum_strands == "true",
+        genotype_mode=args.genotype_mode,
         timeout_seconds=args.timeout_seconds,
     )
 

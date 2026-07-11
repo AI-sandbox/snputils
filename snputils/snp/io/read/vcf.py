@@ -10,6 +10,7 @@ import polars as pl
 from snputils._utils.genotypes import (
     ExplicitGenotypeMode,
     GenotypeMode,
+    _MULTIALLELIC_DOSAGE_ERROR,
     normalize_genotype_mode,
     sum_diploid_alleles,
 )
@@ -519,6 +520,19 @@ def _decode_allele_fields(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray)
     if np.all(ends - starts == 1):
         return np.frombuffer(raw[starts].tobytes(), dtype="S1").astype("U1")
     return _decode_fields(raw, starts, ends)
+
+
+def _raise_if_multiallelic_alt_bytes(
+    raw: np.ndarray,
+    starts: np.ndarray,
+    ends: np.ndarray,
+) -> None:
+    """Check ALT spans already located by a VCF parser, avoiding another file pass."""
+    lengths = ends - starts
+    candidates = np.flatnonzero(lengths >= 3)
+    for idx in candidates:
+        if np.any(raw[int(starts[idx]):int(ends[idx])] == ord(",")):
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
 
 
 def _first_tabs_by_line(block: bytes, line_starts: np.ndarray, n_tabs: int) -> np.ndarray:
@@ -1106,6 +1120,13 @@ class VCFReader(SNPBaseReader):
                         content_ends = content_ends[keep]
                         height = int(tabs.shape[0])
 
+                    if return_dosage:
+                        _raise_if_multiallelic_alt_bytes(
+                            raw,
+                            tabs[:, 3] + 1,
+                            tabs[:, 4],
+                        )
+
                     if n_selected:
                         non_diploid_chromosomes = (
                             _non_diploid_chromosome_mask_or_none(
@@ -1310,6 +1331,13 @@ class VCFReader(SNPBaseReader):
                         line_starts = line_starts[keep]
                         content_ends = content_ends[keep]
                         height = int(tabs.shape[0])
+
+                    if return_dosage:
+                        _raise_if_multiallelic_alt_bytes(
+                            raw,
+                            tabs[:, 3] + 1,
+                            tabs[:, 4],
+                        )
 
                     if n_selected:
                         non_diploid_chromosomes = (
@@ -1558,6 +1586,13 @@ class VCFReader(SNPBaseReader):
                     if hi > n_records:
                         raise ValueError("VCF contains more matching records than counted.")
 
+                    if return_dosage:
+                        _raise_if_multiallelic_alt_bytes(
+                            raw,
+                            tabs[:, 3] + 1,
+                            tabs[:, 4],
+                        )
+
                     if n_selected:
                         non_diploid_chromosomes = (
                             _non_diploid_chromosome_mask_or_none(
@@ -1726,6 +1761,8 @@ class VCFReader(SNPBaseReader):
             filter_columns = [] if chrom_column is None else [chrom_column]
 
         parsing_columns = ["FORMAT"] if n_selected else []
+        if return_dosage:
+            parsing_columns.append("ALT")
         usecols = list(dict.fromkeys(field_columns + sample_columns + filter_columns + parsing_columns))
         offset = 0
         for frame in pd.read_csv(
@@ -1752,6 +1789,8 @@ class VCFReader(SNPBaseReader):
             height = len(frame)
             if height == 0:
                 continue
+            if return_dosage and frame["ALT"].str.contains(",", regex=False).any():
+                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
             if n_selected:
                 non_diploid_chromosomes = None
                 if detect_non_diploid and ("#CHROM" in frame.columns or "CHROM" in frame.columns):
@@ -1823,8 +1862,8 @@ class VCFReader(SNPBaseReader):
             samples: Optional sample subset. Provide sample IDs or zero-based
                 sample indexes. If omitted, all samples are read; pass an empty
                 sequence to read variant metadata without genotypes.
-            genotype_mode: ``"dosage"`` sums the two allele indexes per sample
-                (yielding ``0``, ``1``, or ``2`` for biallelic data). ``"phased"`` keeps phased allele columns separate
+            genotype_mode: ``"dosage"`` returns biallelic ALT-copy counts
+                (``0``, ``1``, or ``2``) and rejects multiallelic variants. ``"phased"`` keeps phased allele columns separate
                 and rejects unphased GT calls. ``"auto"`` (default) preserves
                 phased calls and falls back to dosage for unphased calls.
             chromosome_ploidy:
@@ -2072,6 +2111,8 @@ class VCFReader(SNPBaseReader):
                 if wanted_variant_ids is not None and not _variant_id_matches(parts, wanted_variant_ids):
                     row_idx += 1
                     continue
+                if return_dosage and b"," in parts[4]:
+                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
                 if "#CHROM" in include or "CHROM" in include:
                     records["chrom"].append(_decode_vcf_value(parts[0]))
                 if "POS" in include:
@@ -2298,6 +2339,10 @@ class VCFReaderPolars(SNPBaseReader):
         return_dosage: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
+        if return_dosage and "ALT" in vcf.columns:
+            if vcf["ALT"].str.contains(",", literal=True).any():
+                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+
         if "#CHROM" in vcf.columns:
             chrom_column = "#CHROM"
         elif "CHROM" in vcf.columns:
@@ -2363,8 +2408,8 @@ class VCFReaderPolars(SNPBaseReader):
                 a list of strings giving sample identifiers. May also be a list of
                 integers giving indices of selected samples.  If an empty list is provided,
                 no samples are extracted.
-            genotype_mode: ``"dosage"`` sums the two allele indexes per sample
-                (yielding ``0``, ``1``, or ``2`` for biallelic data).
+            genotype_mode: ``"dosage"`` returns biallelic ALT-copy counts
+                (``0``, ``1``, or ``2``) and rejects multiallelic variants.
                 ``"phased"`` preserves phased allele calls and rejects unphased
                 calls. ``"auto"`` preserves phased calls and falls back to
                 dosage for unphased calls.
@@ -2418,6 +2463,8 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 separator=separator,
             )
+            if return_dosage and "ALT" not in field_columns:
+                selected_column_idxs = sorted(set(selected_column_idxs + [list(col_dtypes).index("ALT")]))
             if detect_non_diploid:
                 chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
                 if chrom_column is not None:
@@ -2529,6 +2576,8 @@ class VCFReaderPolars(SNPBaseReader):
             filter_columns.extend(["ID", "POS", "REF", "ALT"])
             if chrom_column is not None:
                 filter_columns.append(chrom_column)
+        if return_dosage:
+            filter_columns.append("ALT")
         scan_columns = list(dict.fromkeys(selected_columns + [col for col in filter_columns if col in col_dtypes]))
         wanted_variant_ids = None if variant_ids is None else np.asarray(variant_ids, dtype=str).ravel()
         wanted_variant_idxs = None if variant_idxs is None else np.asarray(variant_idxs, dtype=np.uint64).ravel()

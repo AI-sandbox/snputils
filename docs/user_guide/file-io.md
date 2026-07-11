@@ -70,9 +70,9 @@ reject unphased hardcalls because their allele order is not meaningful.
 `BEDReader` defaults to `genotype_mode="dosage"` because PLINK BED/BIM/FAM does not
 store phase.
 
-For multiallelic hard calls, `genotype_mode="dosage"` preserves the historical
-behavior of summing allele indexes; that value is not an allele-specific dosage.
-Use `genotype_mode="phased"` when multiallelic allele identity must be retained.
+`genotype_mode="dosage"` rejects multiallelic variants because one scalar cannot
+identify which alternate allele is being counted. Use `genotype_mode="phased"`
+to preserve multiallelic allele indexes.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

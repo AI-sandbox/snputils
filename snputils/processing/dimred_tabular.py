@@ -49,15 +49,15 @@ def embedding_column_names(
 
 def pca_row_haplotype_ids(
     snpobj: SNPObject,
-    average_strands: bool,
+    average_haplotypes: bool,
     samples_subset: Optional[Union[int, Sequence[int]]] = None,
 ) -> List[str]:
     """
     Row identifiers aligned with :meth:`snputils.processing.pca.PCA.fit_transform` output rows.
 
     Each string uniquely identifies one row of the projection (one haplotype row when
-    ``average_strands`` is False). Format uses ``\"indID|strand\"`` with strand ``0`` or ``1``
-    when two strands are expanded; use :func:`pca_row_individual_ids` for sample IDs alone.
+    ``average_haplotypes`` is False). Format uses ``\"indID|haplotype\"`` with haplotype ``0`` or ``1``
+    when two haplotypes are expanded; use :func:`pca_row_individual_ids` for sample IDs alone.
 
     Raises:
         ValueError: If ``snpobj.samples`` is missing while IDs are required for export.
@@ -77,7 +77,7 @@ def pca_row_haplotype_ids(
     if gt.ndim == 2:
         return [str(x) for x in s.tolist()]
     if gt.ndim == 3:
-        if average_strands:
+        if average_haplotypes:
             return [str(x) for x in s.tolist()]
         # Same tensor layout as PCA._get_data_from_snpobj: (n_samples, n_snps, 2) then ravel rows.
         n_samples, n_snps, _ = np.transpose(gt.astype(float), (1, 0, 2)).shape

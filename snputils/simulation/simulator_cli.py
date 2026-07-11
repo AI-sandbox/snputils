@@ -35,7 +35,7 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="#SNPs per window.")
     p.add_argument("--store-latlon-as-nvec", action="store_true",
                    help="Convert lat/lon to unit n-vectors (x,y,z).")
-    p.add_argument("--make-haploid", action="store_true",
+    p.add_argument("--expand-haplotypes", action="store_true",
                    help="Flatten diploid genotypes into haplotypes.")
     p.add_argument("--device", default="cpu",
                    help="torch device string, e.g. 'cuda:0'.")
@@ -333,7 +333,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
         snp_data             = snp_data,
         meta                 = meta,
         genetic_map          = genetic_map,
-        make_haploid         = args.make_haploid,
+        expand_haplotypes         = args.expand_haplotypes,
         window_size          = args.window_size,
         store_latlon_as_nvec = args.store_latlon_as_nvec,
         ancestry_proportions = ancestry_proportions,

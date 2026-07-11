@@ -22,7 +22,7 @@ class maasMDS:
 
     When ``is_masked`` is True, genotype entries not attributed to the chosen ancestry are set to
     missing so distances reflect the ancestry segment of interest. You can keep haplotypes separate
-    or average parental strands (see ``average_strands``). The workflow supports individual-level
+    or average paired haplotypes (see ``average_haplotypes``). The workflow supports individual-level
     genotypes, group-level allele frequencies, or a mixture when weighting and ``combination``
     columns are used in the labels file.
 
@@ -43,8 +43,8 @@ class maasMDS:
             labels_file: Optional[str] = None,
             ancestry: Optional[Union[int, str]] = None,
             is_masked: bool = True,
-            average_strands: bool = False,
-            force_nan_incomplete_strands: bool = False,
+            average_haplotypes: bool = False,
+            require_complete_haplotype_pair: bool = False,
             is_weighted: bool = False,
             groups_to_remove: Optional[Union[Dict[int, List[str]], List[str], Sequence[List[str]]]] = None,
             min_percent_snps: float = 4,
@@ -77,10 +77,10 @@ class maasMDS:
             is_masked (bool, optional):
                 If True (default), keep only genotypes assigned to ``ancestry``; otherwise use the
                 full matrix.
-            average_strands (bool, optional):
+            average_haplotypes (bool, optional):
                 If True, average the two haplotypes per individual.
-            force_nan_incomplete_strands (bool, optional):
-                If True, strand pairs with any missing value become NaN; if False, average while
+            require_complete_haplotype_pair (bool, optional):
+                If True, haplotype pairs with any missing value become NaN; if False, average while
                 ignoring NaNs (e.g. ``0`` with NaN yields ``0``).
             is_weighted (bool, optional):
                 If True, read per-individual weights from the labels file.
@@ -101,7 +101,7 @@ class maasMDS:
                 Path for the compressed ``.npz`` mask archive.
             distance_type (str, optional):
                 ``\"Manhattan\"``, ``\"RMS\"``, or ``\"AP\"`` (average pairwise). With
-                ``average_strands=True``, ``\"AP\"`` is appropriate.
+                ``average_haplotypes=True``, ``\"AP\"`` is appropriate.
             n_components (int, optional):
                 Embedding dimension (default ``2``).
             rsid_or_chrompos (int, optional):
@@ -121,8 +121,8 @@ class maasMDS:
         ancestry_map = self._resolve_ancestry_map(laiobj)
         self.__ancestry = self._define_ancestry(ancestry, ancestry_map) if ancestry_map is not None and ancestry is not None else ancestry
         self.__is_masked = is_masked
-        self.__average_strands = average_strands
-        self.__force_nan_incomplete_strands = force_nan_incomplete_strands
+        self.__average_haplotypes = average_haplotypes
+        self.__require_complete_haplotype_pair = require_complete_haplotype_pair
         self.__groups_to_remove = groups_to_remove
         self.__min_percent_snps = min_percent_snps
         self.__group_snp_frequencies_only = group_snp_frequencies_only
@@ -264,39 +264,39 @@ class maasMDS:
         self.__is_masked = x
 
     @property
-    def average_strands(self) -> bool:
+    def average_haplotypes(self) -> bool:
         """
-        Retrieve `average_strands`.
+        Retrieve `average_haplotypes`.
         
         Returns:
             bool: True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
-        return self.__average_strands
+        return self.__average_haplotypes
 
-    @average_strands.setter
-    def average_strands(self, x: bool) -> None:
+    @average_haplotypes.setter
+    def average_haplotypes(self, x: bool) -> None:
         """
-        Update `average_strands`.
+        Update `average_haplotypes`.
         """
-        self.__average_strands = x
+        self.__average_haplotypes = x
 
     @property
-    def force_nan_incomplete_strands(self) -> bool:
+    def require_complete_haplotype_pair(self) -> bool:
         """
-        Retrieve `force_nan_incomplete_strands`.
+        Retrieve `require_complete_haplotype_pair`.
         
         Returns:
             bool: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
                       Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
         """
-        return self.__force_nan_incomplete_strands
+        return self.__require_complete_haplotype_pair
 
-    @force_nan_incomplete_strands.setter
-    def force_nan_incomplete_strands(self, x: bool) -> None:
+    @require_complete_haplotype_pair.setter
+    def require_complete_haplotype_pair(self, x: bool) -> None:
         """
-        Update `force_nan_incomplete_strands`.
+        Update `require_complete_haplotype_pair`.
         """
-        self.__force_nan_incomplete_strands = x
+        self.__require_complete_haplotype_pair = x
 
     @property
     def is_weighted(self) -> bool:
@@ -433,7 +433,7 @@ class maasMDS:
         Returns:
             str: 
                 Distance metric to use. Options to choose from are: 'Manhattan', 'RMS' (Root Mean Square), 'AP' (Average Pairwise).
-                If `average_strands=True`, use 'distance_type=AP'.
+                If `average_haplotypes=True`, use 'distance_type=AP'.
         """
         return self.__distance_type
 
@@ -550,12 +550,12 @@ class maasMDS:
 
         Returns:
             list of str:
-                A list of sample identifiers based on `haplotypes_` and `average_strands`.
+                A list of sample identifiers based on `haplotypes_` and `average_haplotypes`.
         """
         haplotypes = self.haplotypes_
         if haplotypes is None:
             return None
-        if self.__average_strands:
+        if self.__average_haplotypes:
             return haplotypes
         else:
             return [x[:-2] for x in haplotypes]
@@ -738,7 +738,7 @@ class maasMDS:
             save_payload['haplotypes'] = np.asarray(haplotypes_list[0])
         np.savez_compressed(masks_file, **save_payload)
 
-    def _process_input_arrays(self, snpobjs, laiobjs, labels_file, ancestry, average_strands):
+    def _process_input_arrays(self, snpobjs, laiobjs, labels_file, ancestry, average_haplotypes):
         if len(snpobjs) == 0:
             raise ValueError("At least one `snpobj` must be provided.")
         if self.is_masked and len(snpobjs) != len(laiobjs):
@@ -765,8 +765,8 @@ class maasMDS:
                 current_snpobj,
                 current_laiobj,
                 ancestry,
-                average_strands,
-                self.force_nan_incomplete_strands,
+                average_haplotypes,
+                self.require_complete_haplotype_pair,
                 self.is_masked,
                 self.rsid_or_chrompos,
                 variants_ref_map=variants_ref_map,
@@ -776,7 +776,7 @@ class maasMDS:
                 mask,
                 variants_id,
                 haplotypes,
-                average_strands,
+                average_haplotypes,
                 ancestry,
                 self.min_percent_snps,
                 self.group_snp_frequencies_only,
@@ -805,7 +805,7 @@ class maasMDS:
             laiobj: Optional[Union['LocalAncestryObject', Sequence['LocalAncestryObject']]] = None,
             labels_file: Optional[Union[str, pd.DataFrame]] = None,
             ancestry: Optional[Union[int, str]] = None,
-            average_strands: Optional[bool] = None,
+            average_haplotypes: Optional[bool] = None,
             *,
             labels: Optional[Union[pd.DataFrame, str]] = None,
         ) -> np.ndarray:
@@ -826,13 +826,13 @@ class maasMDS:
                 Alias for ``labels_file``. Pass only one of ``labels`` and ``labels_file``.
             ancestry (int or str, optional):
                 Same conventions as in ``__init__``.
-            average_strands (bool, optional):
-                If omitted, uses ``self.average_strands``.
+            average_haplotypes (bool, optional):
+                If omitted, uses ``self.average_haplotypes``.
 
         Returns:
             numpy.ndarray:
                 Embedding of shape ``(n_rows, n_components)`` with ``n_rows`` equal to the number of
-                haplotypes (or samples if strands are averaged) after ``min_percent_snps`` filtering.
+                haplotypes (or samples if haplotypes are averaged) after ``min_percent_snps`` filtering.
                 Also assigned to ``X_new_``; row-wise array indices are in ``array_labels_`` when
                 multiple arrays are combined.
         """
@@ -848,13 +848,13 @@ class maasMDS:
             labels_file = self.labels_file
         if ancestry is None:
             ancestry = self.ancestry
-        if average_strands is None:
-            average_strands = self.average_strands
+        if average_haplotypes is None:
+            average_haplotypes = self.average_haplotypes
 
         self.__snpobj = snpobj
         self.__laiobj = laiobj
         self.__labels_file = labels_file
-        self.__average_strands = average_strands
+        self.__average_haplotypes = average_haplotypes
 
         ancestry_map = self._resolve_ancestry_map(laiobj)
         if ancestry is not None and ancestry_map is not None:
@@ -875,7 +875,7 @@ class maasMDS:
                 laiobjs,
                 labels_file,
                 analysis_ancestry,
-                average_strands,
+                average_haplotypes,
             )
             if self.save_masks:
                 self._save_masks_file(

@@ -530,6 +530,20 @@ decode_gt(PyObject *self, PyObject *args)
         }
         l_shared = (Py_ssize_t)l_shared_u32;
         l_indiv = (Py_ssize_t)l_indiv_u32;
+        if (return_dosage && l_shared >= 20) {
+            const unsigned char *n_alleles_ptr = data + offset + 8 + 16;
+            uint32_t n_alleles = (uint32_t)n_alleles_ptr[2] | ((uint32_t)n_alleles_ptr[3] << 8);
+            if (n_alleles > 2) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "genotype_mode='dosage' only supports biallelic variants; use genotype_mode='phased' for multiallelic allele calls."
+                );
+                return NULL;
+            }
+        }
         if (expected_l_indiv >= 0 && l_indiv != expected_l_indiv) {
             Py_DECREF(out);
             PyBuffer_Release(&data_view);
@@ -826,6 +840,13 @@ decode_core(PyObject *self, PyObject *args)
         chrom_id = read_i32_le_raw(data, base);
         pos0 = read_i32_le_raw(data, base + 4);
         n_alleles = n_alleles_info_u32 >> 16;
+        if (return_dosage && n_alleles > 2) {
+            PyErr_SetString(
+                PyExc_ValueError,
+                "genotype_mode='dosage' only supports biallelic variants; use genotype_mode='phased' for multiallelic allele calls."
+            );
+            goto error;
+        }
         if ((n_fmt_samples_u32 & 0xFFFFFFu) != (uint32_t)n_samples) {
             PyErr_SetString(PyExc_ValueError, "BCF record sample count does not match header sample count.");
             goto error;

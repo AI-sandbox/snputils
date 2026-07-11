@@ -92,7 +92,7 @@ def test_snpobject_allele_freq_handles_missing_values_and_returns_counts():
     np.testing.assert_array_equal(counts, np.array([3, 2]))
 
 
-def test_snpobject_allele_freq_supports_haploid_style_2d_calls():
+def test_snpobject_allele_freq_treats_2d_calls_as_diploid_dosages_without_hom_alt():
     gt = np.array(
         [
             [0.0, 1.0, 1.0],
@@ -102,8 +102,8 @@ def test_snpobject_allele_freq_supports_haploid_style_2d_calls():
     snp = SNPObject(genotypes=gt)
 
     freq, counts = snp.allele_freq(return_counts=True)
-    np.testing.assert_allclose(freq, np.array([2.0 / 3.0, 0.5]))
-    np.testing.assert_array_equal(counts, np.array([3, 2]))
+    np.testing.assert_allclose(freq, np.array([1.0 / 3.0, 0.25]))
+    np.testing.assert_array_equal(counts, np.array([6, 4]))
 
 
 def test_allele_freq_stream_matches_eager_for_grouped_2d_calls():

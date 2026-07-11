@@ -84,8 +84,8 @@ def _run_mdpca(args: argparse.Namespace) -> int:
         ancestry=args.ancestry,
         method=args.method,
         is_masked=not args.unmasked,
-        average_strands=args.average_strands,
-        force_nan_incomplete_strands=args.force_nan_incomplete_strands,
+        average_haplotypes=args.average_haplotypes,
+        require_complete_haplotype_pair=args.require_complete_haplotype_pair,
         is_weighted=args.weighted,
         groups_to_remove=args.groups_to_remove,
         min_percent_snps=args.min_percent_snps,
@@ -164,8 +164,8 @@ def _run_maasmds(args: argparse.Namespace) -> int:
         labels_file=args.labels_file,
         ancestry=args.ancestry,
         is_masked=not args.unmasked,
-        average_strands=args.average_strands,
-        force_nan_incomplete_strands=args.force_nan_incomplete_strands,
+        average_haplotypes=args.average_haplotypes,
+        require_complete_haplotype_pair=args.require_complete_haplotype_pair,
         is_weighted=args.weighted,
         groups_to_remove=args.groups_to_remove,
         min_percent_snps=args.min_percent_snps,
@@ -558,8 +558,8 @@ def _add_dimred_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--coords", required=True, help="Output TSV/CSV path for coordinates and row metadata.")
     parser.add_argument("--n-components", type=_positive_int, default=2, help="Number of dimensions/components to compute.")
     parser.add_argument("--unmasked", action="store_true", help="Use unmasked genotypes instead of ancestry-specific masking.")
-    parser.add_argument("--average-strands", action="store_true", help="Average each individual's two haplotypes.")
-    parser.add_argument("--force-nan-incomplete-strands", action="store_true", help="Set averaged haplotype pairs to NaN if either haplotype is missing.")
+    parser.add_argument("--average-haplotypes", action="store_true", help="Average each individual's two haplotypes.")
+    parser.add_argument("--require-complete-haplotype-pair", action="store_true", help="Set averaged haplotype pairs to NaN if either haplotype is missing.")
     parser.add_argument("--weighted", action="store_true", help="Read individual weights from the labels file.")
     parser.add_argument("--groups-to-remove", nargs="+", default=None, help="Population labels to remove before analysis.")
     parser.add_argument("--min-percent-snps", type=float, default=4, help="Minimum percent of non-missing SNPs required per row.")
@@ -622,7 +622,7 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
     parser.add_argument("--window-size", type=int, default=1000, help="#SNPs per window.")
     parser.add_argument("--store-latlon-as-nvec", action="store_true", help="Convert lat/lon to unit n-vectors (x,y,z).")
-    parser.add_argument("--make-haploid", action="store_true", help="Flatten diploid genotypes into haplotypes.")
+    parser.add_argument("--expand-haplotypes", action="store_true", help="Flatten diploid genotypes into haplotypes.")
     parser.add_argument("--device", default="cpu", help="torch device string, e.g. 'cuda:0'.")
     parser.add_argument("--batch-size", type=int, default=256, help="#simulated haplotypes per batch, or persons with --diploid-output.")
     parser.add_argument("--diploid-output", action="store_true", help="Save simulated diploid samples. When set, --batch-size is the number of samples.")

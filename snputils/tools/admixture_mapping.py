@@ -380,21 +380,21 @@ def _align_samples(
 
 
 def _compute_group_counts_from_lai(
-    maternal: np.ndarray,
-    paternal: np.ndarray,
+    haplotype_0: np.ndarray,
+    haplotype_1: np.ndarray,
     ancestry_code: int,
     y_binary: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute group (dosage-bin) counts directly from haplotype arrays.
 
     Avoids materializing the full dosage array by computing counts directly
-    from the maternal/paternal match indicators.
+    from the haplotype_0/haplotype_1 match indicators.
     """
-    n_samples = maternal.shape[1]
+    n_samples = haplotype_0.shape[1]
     cases_total = int(np.sum(y_binary))
 
-    m = maternal == ancestry_code
-    p = paternal == ancestry_code
+    m = haplotype_0 == ancestry_code
+    p = haplotype_1 == ancestry_code
 
     y_int = y_binary.astype(np.int64, copy=False)
 
@@ -420,20 +420,20 @@ def _compute_group_counts_from_lai(
 
 
 def _compute_dosage_from_lai(
-    maternal: np.ndarray,
-    paternal: np.ndarray,
+    haplotype_0: np.ndarray,
+    haplotype_1: np.ndarray,
     ancestry_code: int,
 ) -> np.ndarray:
-    """Materialize per-sample ancestry dosage from maternal/paternal LAI haplotypes."""
+    """Materialize per-sample ancestry dosage from haplotype_0/haplotype_1 LAI haplotypes."""
     return (
-        (maternal == ancestry_code).astype(np.uint8)
-        + (paternal == ancestry_code).astype(np.uint8)
+        (haplotype_0 == ancestry_code).astype(np.uint8)
+        + (haplotype_1 == ancestry_code).astype(np.uint8)
     )
 
 
 def _compute_linear_stats_from_lai(
-    maternal: np.ndarray,
-    paternal: np.ndarray,
+    haplotype_0: np.ndarray,
+    haplotype_1: np.ndarray,
     ancestry_code: int,
     y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -446,10 +446,10 @@ def _compute_linear_stats_from_lai(
 
     These three arrays are sufficient to perform closed-form OLS.
     """
-    n_samples = maternal.shape[1]
+    n_samples = haplotype_0.shape[1]
 
-    m = maternal == ancestry_code
-    p = paternal == ancestry_code
+    m = haplotype_0 == ancestry_code
+    p = haplotype_1 == ancestry_code
 
     both = m & p
     n2 = np.sum(both, axis=1, dtype=np.int64)
@@ -465,12 +465,12 @@ def _compute_linear_stats_from_lai(
     sum_y_total = float(np.sum(y_f64))
     sum_y2_total = float(np.sum(y_sq))
 
-    # dosage=2: both maternal and paternal match
+    # dosage=2: both haplotype_0 and haplotype_1 match
     sy2 = both.astype(np.float64) @ y_f64
     sy2_sq = both.astype(np.float64) @ y_sq
     del both
 
-    # dosage>=1 via maternal or paternal match
+    # dosage>=1 via haplotype_0 or haplotype_1 match
     sy_m = m.astype(np.float64) @ y_f64
     sy_p = p.astype(np.float64) @ y_f64
     sy_m_sq = m.astype(np.float64) @ y_sq
@@ -709,8 +709,8 @@ def run_admixture_mapping(
 
                 _enforce_memory_budget(memory, rss_baseline_mb, context="chunk loading")
 
-                maternal = chunk_lai[:, 0::2]
-                paternal = chunk_lai[:, 1::2]
+                haplotype_0 = chunk_lai[:, 0::2]
+                haplotype_1 = chunk_lai[:, 1::2]
                 n_windows_in_chunk = chunk_lai.shape[0]
                 n_win_processed = n_windows_in_chunk
 
@@ -729,8 +729,8 @@ def run_admixture_mapping(
                             if covar_f64 is None or y_resid is None or q_fwl is None:
                                 raise ValueError("Internal error: missing covariate projection state.")
                             dosage_batch = _compute_dosage_from_lai(
-                                maternal,
-                                paternal,
+                                haplotype_0,
+                                haplotype_1,
                                 ancestry_code_int,
                             )
                             beta_arr, se_arr, t_arr, p_arr, errcode_arr = _fit_linear_batch_with_covariates(
@@ -742,7 +742,7 @@ def run_admixture_mapping(
                             df_linear = float(obs_ct - (2 + n_covar))
                         else:
                             n_batch, sy_batch, sy2_batch = _compute_linear_stats_from_lai(
-                                maternal, paternal, ancestry_code_int, y_f64,
+                                haplotype_0, haplotype_1, ancestry_code_int, y_f64,
                             )
                             beta_arr, se_arr, t_arr, p_arr, errcode_arr = _fit_linear_batch(
                                 n_batch, sy_batch, sy2_batch,
@@ -792,8 +792,8 @@ def run_admixture_mapping(
                             if covar_f64 is None:
                                 raise ValueError("Internal error: missing aligned covariate matrix.")
                             dosage_batch = _compute_dosage_from_lai(
-                                maternal,
-                                paternal,
+                                haplotype_0,
+                                haplotype_1,
                                 ancestry_code_int,
                             )
                             beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr = _fit_logistic_batch_with_covariates(
@@ -803,7 +803,7 @@ def run_admixture_mapping(
                             )
                         else:
                             n_counts_batch, c_counts_batch = _compute_group_counts_from_lai(
-                                maternal, paternal, ancestry_code_int, y_binary,
+                                haplotype_0, haplotype_1, ancestry_code_int, y_binary,
                             )
                             beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr = _fit_logistic_batch(
                                 n_counts_batch, c_counts_batch,

@@ -77,7 +77,7 @@ class MSPReader(LAIBaseReader):
         # Get all columns starting from the first LAI data column
         query_samples_dub = msp_df.columns[first_lai_col_indx:]
 
-        # Select only one of the maternal/paternal samples by taking every second sample
+        # Select only one of the haplotype_0/haplotype_1 samples by taking every second sample
         single_ind_idx = np.arange(0, len(query_samples_dub), 2)
         query_samples_sing = query_samples_dub[single_ind_idx]
 

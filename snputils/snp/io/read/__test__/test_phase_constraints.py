@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pgenlib as pg
 import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -73,7 +74,8 @@ def test_vcf_phased_gt_preserves_allele_calls(tmp_path: Path):
     )
 
 
-def test_vcf_dosage_preserves_multiallelic_allele_index_sum(tmp_path: Path):
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_vcf_dosage_rejects_multiallelic_even_without_alt_field(tmp_path: Path, reader_cls):
     vcf_path = tmp_path / "multiallelic.vcf"
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n"
@@ -81,10 +83,11 @@ def test_vcf_dosage_preserves_multiallelic_allele_index_sum(tmp_path: Path):
         "1\t100\trs1\tA\tG,T\t.\tPASS\t.\tGT\t1|2\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(fields=["GT"], genotype_mode="dosage")
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        reader_cls(vcf_path).read(fields=["GT"], genotype_mode="dosage")
 
-    np.testing.assert_array_equal(snpobj.genotypes, np.array([[3]], dtype=np.int8))
-    assert snpobj.variants_alt.size == 0
+    phased = reader_cls(vcf_path).read(fields=["GT"], genotype_mode="phased")
+    np.testing.assert_array_equal(phased.genotypes, np.array([[[1, 2]]], dtype=np.int8))
 
 
 def test_vcf_dosage_preserves_one_missing_sentinel(tmp_path: Path):
@@ -162,6 +165,37 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
 
     observed = PGENReader(prefix).read()
     np.testing.assert_array_equal(observed.genotypes, genotypes)
+
+
+def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(tmp_path: Path):
+    prefix = tmp_path / "multiallelic"
+    with pg.PgenWriter(
+        filename=str(prefix.with_suffix(".pgen")).encode(),
+        sample_ct=2,
+        variant_ct=1,
+        hardcall_phase_present=True,
+        allele_ct_limit=3,
+    ) as writer:
+        writer.append_alleles(
+            np.array([0, 2, 1, 2], dtype=np.int32),
+            all_phased=True,
+            allele_ct=3,
+        )
+    prefix.with_suffix(".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n1\t100\trs1\tA\tG,T\n"
+    )
+    prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
+
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        PGENReader(prefix).read(fields=["GT"], genotype_mode="dosage")
+
+    phased = PGENReader(prefix).read(fields=["GT"], genotype_mode="phased")
+    np.testing.assert_array_equal(
+        phased.genotypes,
+        np.array([[[0, 2], [1, 2]]], dtype=np.int8),
+    )
+    automatic = PGENReader(prefix).read(fields=["GT"], genotype_mode="auto")
+    np.testing.assert_array_equal(automatic.genotypes, phased.genotypes)
 
 
 def test_reader_modes_are_validated(tmp_path: Path):

@@ -287,7 +287,7 @@ class OnlineSimulator:
         snp_data,
         meta,
         genetic_map = None,
-        make_haploid = True,
+        expand_haplotypes = True,
         window_size = None,
         store_latlon_as_nvec = False,
         cp_tolerance = 0,
@@ -296,7 +296,7 @@ class OnlineSimulator:
         self.snp_data = snp_data
         self.meta = meta
         self.genetic_map = genetic_map
-        self.make_haploid = make_haploid
+        self.expand_haplotypes = expand_haplotypes
         self.window_size = window_size
         self.store_latlon_as_nvec = store_latlon_as_nvec
         self.cp_tolerance = cp_tolerance
@@ -358,7 +358,7 @@ class OnlineSimulator:
         Produces:
           self.snps: shape (N, D) or (N,2,D) if not yet flattened
           self.samples: array of sample names
-        If self.make_haploid is True, flattens to haplotype level => shape (N*2, D).
+        If self.expand_haplotypes is True, flattens to haplotype level => shape (N*2, D).
         """
         snp_samples = np.asarray(self.snp_data.samples)
         log.info(f"SNP input has {len(snp_samples)} samples total.")
@@ -376,7 +376,7 @@ class OnlineSimulator:
         snps = np.asarray(self.snp_data.genotypes).transpose(1, 2, 0)[iidx, ...]
         n_samples, ploidy, n_snps = snps.shape
         
-        if self.make_haploid:
+        if self.expand_haplotypes:
             snps = snps.reshape(n_samples * ploidy, n_snps)
             isamples = np.repeat(isamples, ploidy)
             self.meta = self.meta.loc[self.meta.index.repeat(2)].reset_index(drop=True)
@@ -439,7 +439,7 @@ class OnlineSimulator:
             raise ValueError("ancestry_proportions requires a 'Population' column in metadata.")
 
         if self.snps.ndim != 2:
-            raise ValueError("ancestry_proportions currently requires make_haploid=True.")
+            raise ValueError("ancestry_proportions currently requires expand_haplotypes=True.")
 
         if not isinstance(self.ancestry_proportions, dict):
             raise TypeError("ancestry_proportions must be a dict like {'YRI': 0.8, 'CEU': 0.2}.")
@@ -481,7 +481,7 @@ class OnlineSimulator:
         if self.snps.ndim == 3:
             N, _, D = self.snps.shape   # (samples, ploidy, snps)
         else:
-            N, D = self.snps.shape      # (haplotypes, snps) after --make-haploid
+            N, D = self.snps.shape      # (haplotypes, snps) after --expand-haplotypes
         
         # Discrete
         if self.labels_discrete is not None:
@@ -629,7 +629,7 @@ class OnlineSimulator:
         if self.ancestry_codes is None or self.ancestry_probs is None:
             raise ValueError("simulate_diploid_population requires ancestry_proportions.")
         if self.snps.ndim != 2:
-            raise ValueError("simulate_diploid_population requires haploid founder data; use make_haploid=True.")
+            raise ValueError("simulate_diploid_population requires haplotype-level founder data; use expand_haplotypes=True.")
 
         n_individuals = int(n_individuals)
         if n_individuals <= 0:
@@ -647,7 +647,7 @@ class OnlineSimulator:
         segments = []
 
         for person_idx in range(n_individuals):
-            for strand_idx in range(2):
+            for haplotype_idx in range(2):
                 split_points = self._draw_split_points(n_snps, num_generation_max, num_generations)
                 starts = np.concatenate(([0], split_points))
                 ends = np.concatenate((split_points, [n_snps]))
@@ -658,7 +658,7 @@ class OnlineSimulator:
                 for start, end in zip(starts, ends):
                     code = int(np.random.choice(self.ancestry_codes, p=self.ancestry_probs))
                     donor_idx = int(np.random.choice(founder_pools[code]))
-                    genotypes[start:end, person_idx, strand_idx] = founder_snps[donor_idx, start:end]
+                    genotypes[start:end, person_idx, haplotype_idx] = founder_snps[donor_idx, start:end]
 
                     if seg_codes and seg_codes[-1] == code and seg_ends[-1] == start:
                         seg_ends[-1] = int(end)
@@ -723,7 +723,7 @@ class OnlineSimulator:
             else:
                 batch_continuous = None
 
-            # Diploid input: (B, 2, D) -> flatten strands into haplotype rows (B*2, D)
+            # Diploid input: (B, 2, D) -> flatten haplotypes into haplotype rows (B*2, D)
             # so that _simulate_from_pool and all downstream logic see a 2-D tensor.
             if batch_snps.ndim == 3:
                 B_dip, ploidy, D = batch_snps.shape

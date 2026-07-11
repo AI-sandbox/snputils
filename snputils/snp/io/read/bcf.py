@@ -12,6 +12,7 @@ import numpy as np
 
 from snputils._utils.genotypes import (
     GenotypeMode,
+    _MULTIALLELIC_DOSAGE_ERROR,
     normalize_genotype_mode,
     sum_diploid_genotypes,
 )
@@ -1080,8 +1081,8 @@ class BCFReader(SNPBaseReader):
                 conventions.
             region: Optional genomic region, such as ``"22"`` or
                 ``"22:100000-200000"``.
-            genotype_mode: ``"dosage"`` sums the two allele indexes per sample
-                (yielding ``0``, ``1``, or ``2`` for biallelic data).
+            genotype_mode: ``"dosage"`` returns biallelic ALT-copy counts
+                (``0``, ``1``, or ``2``) and rejects multiallelic variants.
                 ``"phased"`` keeps phased allele columns separate and rejects
                 unphased calls. ``"auto"`` (default) preserves phased calls and
                 falls back to dosage for unphased calls.
@@ -1188,6 +1189,8 @@ class BCFReader(SNPBaseReader):
 
         l_shared, l_indiv, contig_ids, positions, qual_raw, n_alleles, n_info_arr, n_fmt_arr = \
             _extract_fixed_fields(data, record_offsets)
+        if return_dosage and np.any(n_alleles > 2):
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
 
         n_file_samples = len(file_samples)
         n_selected_samples = len(sample_index_array)
@@ -1735,6 +1738,8 @@ class BCFReader(SNPBaseReader):
             contig_id = _I32.unpack_from(data, base)[0]
             pos = _I32.unpack_from(data, base + 4)[0] + 1
             n_alleles = _U32.unpack_from(data, base + 16)[0] >> 16
+            if return_dosage and n_alleles > 2:
+                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
             n_info = _U32.unpack_from(data, base + 16)[0] & 0xFFFF
             n_fmt = _U32.unpack_from(data, base + 20)[0] >> 24
             n_samples = _U32.unpack_from(data, base + 20)[0] & 0xFFFFFF

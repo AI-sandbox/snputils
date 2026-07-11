@@ -139,7 +139,7 @@ def load_dataset(
         maf: Optional[float] = None,
         require_biallelic: bool = False,
         require_complete: bool = False,
-        require_polymorphic: bool = False,
+        require_variable_genotypes: bool = False,
         snv_only: bool = False,
         metadata_path: Optional[Union[Path, str]] = None,
         metadata_url: Optional[str] = None,
@@ -172,8 +172,8 @@ def load_dataset(
             exactly one REF allele and one ALT allele.
         require_complete: When ``max_variants`` is set and source files are streamed, keep only variants with no
             missing genotype calls across the selected samples.
-        require_polymorphic: When ``max_variants`` is set and source files are streamed, keep only variants that
-            are polymorphic among the selected samples after any sample filtering.
+        require_variable_genotypes: When ``max_variants`` is set and source files are streamed, keep only variants that
+            are having more than one observed genotype value among the selected samples after any sample filtering.
         snv_only: When ``max_variants`` is set and source files are streamed, keep only biallelic single-nucleotide
             variants. This implies the same biallelic filter as ``require_biallelic=True`` and additionally
             removes multi-base substitutions, indels, and symbolic alleles.
@@ -255,7 +255,7 @@ def load_dataset(
             max_variants_total=max_variants,
             require_biallelic=require_biallelic,
             require_complete=require_complete,
-            require_polymorphic=require_polymorphic,
+            require_variable_genotypes=require_variable_genotypes,
             maf=maf,
             snv_only=snv_only,
             genotype_mode=str(read_kwargs.get("genotype_mode", "dosage")),
@@ -358,7 +358,7 @@ def _read_snp_subset(
     max_variants: int,
     require_biallelic: bool,
     require_complete: bool,
-    require_polymorphic: bool,
+    require_variable_genotypes: bool,
     maf: Optional[float],
     snv_only: bool,
     genotype_mode: str,
@@ -381,8 +381,8 @@ def _read_snp_subset(
             chunk = chunk.filter_biallelic_variants(snv_only=snv_only)
         if require_complete:
             chunk = chunk.filter_complete_genotypes()
-        if require_polymorphic:
-            chunk = chunk.filter_polymorphic_variants()
+        if require_variable_genotypes:
+            chunk = chunk.filter_variable_genotypes()
         if maf is not None:
             chunk = chunk.filter_maf(maf=maf)
         if chunk.n_snps == 0:
@@ -413,7 +413,7 @@ def _read_snp_subset_sources(
     max_variants_total: int,
     require_biallelic: bool,
     require_complete: bool,
-    require_polymorphic: bool,
+    require_variable_genotypes: bool,
     maf: Optional[float],
     snv_only: bool,
     genotype_mode: str,
@@ -435,7 +435,7 @@ def _read_snp_subset_sources(
                 max_variants=remaining,
                 require_biallelic=require_biallelic,
                 require_complete=require_complete,
-                require_polymorphic=require_polymorphic,
+                require_variable_genotypes=require_variable_genotypes,
                 maf=maf,
                 snv_only=snv_only,
                 genotype_mode=genotype_mode,
@@ -463,7 +463,7 @@ def _read_snp_subset_sources(
             max_variants=quota,
             require_biallelic=require_biallelic,
             require_complete=require_complete,
-            require_polymorphic=require_polymorphic,
+            require_variable_genotypes=require_variable_genotypes,
             maf=maf,
             snv_only=snv_only,
             genotype_mode=genotype_mode,

@@ -9,6 +9,7 @@ import pgenlib as pg
 from snputils._utils.genotypes import (
     ExplicitGenotypeMode,
     GenotypeMode,
+    _MULTIALLELIC_DOSAGE_ERROR,
     normalize_genotype_mode,
     sum_diploid_alleles,
 )
@@ -72,6 +73,54 @@ def _detect_pvar_separator(line: str) -> str:
     return " "
 
 
+def _find_pvar_path(filename_noext: str) -> Optional[str]:
+    return next(
+        (
+            filename_noext + extension
+            for extension in (".pvar", ".pvar.zst", ".pvar.gz")
+            if os.path.exists(filename_noext + extension)
+        ),
+        None,
+    )
+
+
+def _open_pgen_reader(
+    filename_noext: str,
+    *,
+    raw_sample_ct: Optional[int],
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    genotype_mode: GenotypeMode,
+) -> tuple[Any, bool]:
+    """Open the biallelic fast path first; consult PVAR only after PGEN reports multiallelic data."""
+    reader_kwargs = {
+        "raw_sample_ct": raw_sample_ct,
+        "variant_ct": variant_ct,
+        "sample_subset": sample_subset,
+    }
+    try:
+        return pg.PgenReader(str.encode(filename_noext + ".pgen"), **reader_kwargs), False
+    except RuntimeError as exc:
+        if "multiallelic variants present" not in str(exc):
+            raise
+        if genotype_mode == "dosage":
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR) from exc
+
+    pvar_filename = _find_pvar_path(filename_noext)
+    if pvar_filename is None:
+        raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
+    with pg.PvarReader(str.encode(pvar_filename)) as pvar_reader:
+        allele_idx_offsets = pvar_reader.get_allele_idx_offsets()
+    return (
+        pg.PgenReader(
+            str.encode(filename_noext + ".pgen"),
+            allele_idx_offsets=allele_idx_offsets,
+            **reader_kwargs,
+        ),
+        True,
+    )
+
+
 @SNPBaseReader.register
 class PGENReader(SNPBaseReader):
     def read(
@@ -100,8 +149,8 @@ class PGENReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            genotype_mode: ``"dosage"`` sums the two allele indexes into one
-                ``int8`` value per sample (``{0, 1, 2}`` for biallelic data). ``"phased"``
+            genotype_mode: ``"dosage"`` returns one biallelic ALT-copy count per
+                sample as an ``int8`` value in ``{0, 1, 2}`` and rejects multiallelic variants. ``"phased"``
                 returns phased allele calls and requires PGEN hardcall phase
                 information. ``"auto"`` (default) preserves phased hardcalls
                 when possible and falls back to dosage for unphased hardcalls.
@@ -298,11 +347,12 @@ class PGENReader(SNPBaseReader):
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.pgen")
-            pgen_reader = pg.PgenReader(
-                str.encode(filename_noext + ".pgen"),
+            pgen_reader, contains_multiallelic = _open_pgen_reader(
+                filename_noext,
                 raw_sample_ct=file_num_samples,
                 variant_ct=file_num_variants,
                 sample_subset=sample_idxs,
+                genotype_mode=genotype_mode,
             )
 
             try:
@@ -322,6 +372,8 @@ class PGENReader(SNPBaseReader):
                         "genotype_mode='phased' is not supported. Use genotype_mode='dosage' "
                         "to load 0/1/2 genotype dosages."
                     )
+                if effective_return_dosage and contains_multiallelic:
+                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
                 detect_non_diploid = effective_return_dosage and chromosome_ploidy_mode != "autosomal"
 
                 non_diploid_mask = None

@@ -113,9 +113,9 @@ def _make_snpobj_from_dosage(
     refs: Sequence[str],
     alts: Sequence[str],
 ) -> SNPObject:
-    maternal = (dosage == 2).astype(np.int8)
-    paternal = (dosage >= 1).astype(np.int8)
-    gt = np.stack([maternal, paternal], axis=2).astype(np.int8, copy=False)
+    haplotype_0 = (dosage == 2).astype(np.int8)
+    haplotype_1 = (dosage >= 1).astype(np.int8)
+    gt = np.stack([haplotype_0, haplotype_1], axis=2).astype(np.int8, copy=False)
     n_variants = int(dosage.shape[0])
     return SNPObject(
         genotypes=gt,

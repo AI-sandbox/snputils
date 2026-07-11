@@ -354,9 +354,9 @@ class PCA:
     - ``backend="pytorch"`` uses :class:`TorchPCA` and can run on CPU or CUDA.
 
     The ``fitting`` parameter selects exact SVD (``"exact"``) or approximate
-    low-rank SVD (``"lowrank"``) for both backends. Diploid/two-strand genotype
+    low-rank SVD (``"lowrank"``) for both backends. Diploid/two-haplotype genotype
     arrays can be averaged into one row per sample or expanded into one row per
-    strand with ``average_strands``.
+    haplotype with ``average_haplotypes``.
 
     If ``snpobj`` is passed to the constructor, PCA is performed immediately by
     calling :meth:`fit_transform`.
@@ -368,7 +368,7 @@ class PCA:
         n_components: int = 2, 
         fitting: str = "exact",
         device: str = 'cpu',
-        average_strands: bool = True, 
+        average_haplotypes: bool = True,
         samples_subset: Optional[Union[int, List]] = None, 
         snps_subset: Optional[Union[int, List]] = None,
         embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
@@ -393,9 +393,9 @@ class PCA:
                 Device for the PyTorch backend. Accepted values are ``'cpu'``,
                 ``'gpu'``, ``'cuda'``, or ``'cuda:<index>'``. Ignored by the
                 scikit-learn backend.
-            average_strands (bool, default=True): 
-                If True, average the two genotype strands into one dosage row
-                per sample. If False, treat each strand as a separate row.
+            average_haplotypes (bool, default=True):
+                If True, average the two genotype haplotypes into one mean allele-count row
+                per sample. If False, treat each haplotype as a separate row.
             samples_subset (int or list of int, optional): 
                 Samples to include before PCA. An integer selects the first
                 ``n`` samples; a list selects explicit sample indices.
@@ -411,7 +411,7 @@ class PCA:
         self.__n_components = n_components
         self.__fitting = _parse_pca_fitting(fitting)
         self.__device = self._process_device_argument(device) if self.__backend == "pytorch" else device
-        self.__average_strands = average_strands
+        self.__average_haplotypes = average_haplotypes
         self.__samples_subset = samples_subset
         self.__snps_subset = snps_subset
         self.__X_ = None
@@ -530,22 +530,22 @@ class PCA:
         self.__device = self._process_device_argument(x)
 
     @property
-    def average_strands(self) -> bool:
+    def average_haplotypes(self) -> bool:
         """
-        Retrieve `average_strands`.
+        Retrieve `average_haplotypes`.
 
         Returns:
             bool: 
                 True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
-        return self.__average_strands
+        return self.__average_haplotypes
 
-    @average_strands.setter
-    def average_strands(self, x: bool) -> None:
+    @average_haplotypes.setter
+    def average_haplotypes(self, x: bool) -> None:
         """
-        Update `average_strands`.
+        Update `average_haplotypes`.
         """
-        self.__average_strands = x
+        self.__average_haplotypes = x
 
     @property
     def samples_subset(self) -> Optional[Union[int, List[int]]]:
@@ -687,7 +687,7 @@ class PCA:
         """
         Per-row identifiers aligned with ``X_new_`` after :meth:`fit_transform`.
 
-        When ``average_strands`` is False and genotypes are diploid/two-strand 3D, values look like
+        When ``average_haplotypes`` is False and genotypes are diploid/two-haplotype 3D, values look like
         ``indID|0`` and ``indID|1`` for the two expanded rows per sample.
         """
         return self.__haplotype_row_ids
@@ -707,7 +707,7 @@ class PCA:
         """
         Sample identifiers per projection row (same length as ``X_new_`` when set).
 
-        With expanded strands, entries repeat per sample (derived from :attr:`haplotypes_`).
+        With expanded haplotypes, entries repeat per sample (derived from :attr:`haplotypes_`).
         """
         if self.__haplotype_row_ids is None:
             return None
@@ -771,7 +771,7 @@ class PCA:
     def _set_row_ids_from_snpobj(
         self,
         snpobj: Optional['SNPObject'],
-        average_strands: Optional[bool],
+        average_haplotypes: Optional[bool],
         samples_subset: Optional[Union[int, List]],
     ) -> None:
         """Populate row identifiers aligned with ``X_new_`` when a SNPObject is available."""
@@ -784,7 +784,7 @@ class PCA:
         try:
             hid = pca_row_haplotype_ids(
                 sobj,
-                average_strands if average_strands is not None else self.average_strands,
+                average_haplotypes if average_haplotypes is not None else self.average_haplotypes,
                 samples_subset if samples_subset is not None else self.samples_subset,
             )
             x_rows = int(self.X_new_.shape[0])
@@ -809,7 +809,7 @@ class PCA:
     def _get_data_from_snpobj(
             self, 
             snpobj: Optional['SNPObject'] = None, 
-            average_strands: Optional[bool] = None, 
+            average_haplotypes: Optional[bool] = None,
             samples_subset: Optional[Union[int, List]] = None, 
             snps_subset: Optional[Union[int, List]] = None
         ) -> Union[np.ndarray, torch.Tensor]:
@@ -818,16 +818,16 @@ class PCA:
 
         ``SNPObject.genotypes`` is stored with variants first. This helper
         transposes it into rows suitable for PCA. For 3D diploid arrays,
-        ``average_strands=True`` averages the two strands into one dosage row
-        per sample, while ``average_strands=False`` expands each strand into a
+        ``average_haplotypes=True`` averages the two haplotypes into one mean allele-count row
+        per sample, while ``average_haplotypes=False`` expands each haplotype into a
         separate row.
 
         Args:
             snpobj (SNPObject, optional): 
                 Genotype data to convert. If None, defaults to ``self.snpobj``.
-            average_strands (bool, optional): 
-                Whether to average two-strand genotypes into one dosage row per
-                sample. If None, defaults to ``self.average_strands``.
+            average_haplotypes (bool, optional):
+                Whether to average two-haplotype genotypes into one mean allele-count row per
+                sample. If None, defaults to ``self.average_haplotypes``.
             samples_subset (int or list of int, optional): 
                 Samples to include. An integer selects the first ``n`` rows; a
                 list selects explicit sample indices. If None, defaults to
@@ -840,13 +840,13 @@ class PCA:
             Returns:
                 numpy.ndarray or torch.Tensor: 
                     A two-dimensional matrix with rows representing samples or
-                    strands and columns representing variants. For the PyTorch
+                    haplotypes and columns representing variants. For the PyTorch
                     backend, the matrix is returned as a tensor on ``device``.
         """
         if snpobj is None:
             snpobj = self.snpobj
-        if average_strands is None:
-            average_strands = self.average_strands
+        if average_haplotypes is None:
+            average_haplotypes = self.average_haplotypes
         if samples_subset is None:
             samples_subset = self.samples_subset
         if snps_subset is None:
@@ -857,7 +857,7 @@ class PCA:
         elif snpobj.genotypes.ndim == 3:
             X = np.transpose(snpobj.genotypes.astype(float), (1,0,2))
         
-            if average_strands:
+            if average_haplotypes:
                 X = np.mean(X, axis=2)
             else:
                 X = np.reshape(X, (-1, X.shape[1]))
@@ -885,7 +885,7 @@ class PCA:
     def fit(
             self, 
             snpobj: Optional['SNPObject'] = None, 
-            average_strands: Optional[bool] = None, 
+            average_haplotypes: Optional[bool] = None,
             samples_subset: Optional[Union[int, List]] = None, 
             snps_subset: Optional[Union[int, List]] = None
         ) -> 'PCA':
@@ -903,9 +903,9 @@ class PCA:
             snpobj (SNPObject, optional): 
                 Genotype data used to compute the PCA axes. If None, defaults
                 to ``self.snpobj``.
-            average_strands (bool, optional): 
-                Whether to average two-strand genotypes into one dosage row per
-                sample. If None, defaults to ``self.average_strands``.
+            average_haplotypes (bool, optional):
+                Whether to average two-haplotype genotypes into one mean allele-count row per
+                sample. If None, defaults to ``self.average_haplotypes``.
             samples_subset (int or list of int, optional): 
                 Samples to use when computing PCs. An integer selects the first
                 ``n`` samples; a list selects explicit sample indices. If None,
@@ -920,7 +920,7 @@ class PCA:
                 The same ``PCA`` instance, with ``n_components_``,
                 ``components_``, and ``mean_`` populated.
         """
-        self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
+        self.X_ = self._get_data_from_snpobj(snpobj, average_haplotypes, samples_subset, snps_subset)
         self.pca.fit(self.X_)
 
         # Update attributes based on the fitted model
@@ -933,7 +933,7 @@ class PCA:
     def transform(
             self, 
             snpobj: Optional['SNPObject'] = None, 
-            average_strands: Optional[bool] = None, 
+            average_haplotypes: Optional[bool] = None,
             samples_subset: Optional[Union[int, List]] = None, 
             snps_subset: Optional[Union[int, List]] = None
         ):
@@ -951,9 +951,9 @@ class PCA:
                 Genotype data to project. If None and a prepared matrix is
                 already stored in ``X_``, that matrix is reused; otherwise
                 ``self.snpobj`` is used.
-            average_strands (bool, optional): 
-                Whether to average two-strand genotypes into one dosage row per
-                sample. If None, defaults to ``self.average_strands``.
+            average_haplotypes (bool, optional):
+                Whether to average two-haplotype genotypes into one mean allele-count row per
+                sample. If None, defaults to ``self.average_haplotypes``.
             samples_subset (int or list of int, optional): 
                 Samples to project. An integer selects the first ``n`` samples;
                 a list selects explicit sample indices. If None, defaults to
@@ -964,20 +964,20 @@ class PCA:
 
         Returns:
             tensor or array:
-                PC coordinates with one row per projected sample or strand and
+                PC coordinates with one row per projected sample or haplotype and
                 one column per component. The coordinates are also stored in
                 ``X_new_``.
         """
         # Retrieve or update the data to transform
         if snpobj is not None or self.X_ is None:
-            self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
+            self.X_ = self._get_data_from_snpobj(snpobj, average_haplotypes, samples_subset, snps_subset)
         
         # Apply transformation using the fitted PCA model
         self.X_new_ = self.pca.transform(self.X_)
-        self._set_row_ids_from_snpobj(snpobj, average_strands, samples_subset)
+        self._set_row_ids_from_snpobj(snpobj, average_haplotypes, samples_subset)
         return self.X_new_
 
-    def fit_transform(self, snpobj: Optional['SNPObject'] = None, average_strands: Optional[bool] = None, 
+    def fit_transform(self, snpobj: Optional['SNPObject'] = None, average_haplotypes: Optional[bool] = None,
                       samples_subset: Optional[Union[int, List]] = None, snps_subset: Optional[Union[int, List]] = None):
         """
         Compute PCA eigenvectors and project the same data onto them.
@@ -992,9 +992,9 @@ class PCA:
             snpobj (SNPObject, optional): 
                 Genotype data used to compute PCs and projected coordinates. If
                 None, defaults to ``self.snpobj``.
-            average_strands (bool, optional): 
-                Whether to average two-strand genotypes into one dosage row per
-                sample. If None, defaults to ``self.average_strands``.
+            average_haplotypes (bool, optional):
+                Whether to average two-haplotype genotypes into one mean allele-count row per
+                sample. If None, defaults to ``self.average_haplotypes``.
             samples_subset (int or list of int, optional): 
                 Samples to include. An integer selects the first ``n`` samples;
                 a list selects explicit sample indices. If None, defaults to
@@ -1006,10 +1006,10 @@ class PCA:
 
         Returns:
             tensor or array: 
-                PC coordinates with one row per sample or strand and one column
+                PC coordinates with one row per sample or haplotype and one column
                 per component.
         """
-        self.X_ = self._get_data_from_snpobj(snpobj, average_strands, samples_subset, snps_subset)
+        self.X_ = self._get_data_from_snpobj(snpobj, average_haplotypes, samples_subset, snps_subset)
         self.X_new_ = self.pca.fit_transform(self.X_)
 
         # Update attributes based on the fitted model
@@ -1017,7 +1017,7 @@ class PCA:
         self.components_ = self.pca.components_
         self.mean_ = self.pca.mean_
 
-        self._set_row_ids_from_snpobj(snpobj, average_strands, samples_subset)
+        self._set_row_ids_from_snpobj(snpobj, average_haplotypes, samples_subset)
 
         sobj = snpobj if snpobj is not None else self.snpobj
         if sobj is not None:

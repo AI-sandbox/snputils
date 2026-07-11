@@ -33,7 +33,7 @@ mdpca = mdPCA(
     labels_file="labels.tsv",  # columns: indID, label
     ancestry="AFR",
     is_masked=True,
-    average_strands=False,
+    average_haplotypes=False,
     n_components=2,
     embedding_table_path="mdpca_coords.tsv",  # optional TSV export
 )
@@ -305,7 +305,7 @@ results = su.run_gwas(phen, snpobj, covar=covar)
 results = su.run_admixture_mapping(phen, laiobj, covar=covar)
 ```
 
-`from_global_ancestry` drops the last ancestry column by default. `from_embedding` requires sample-level coordinates (`average_strands=True` on phased PCA). The same blocks can be composed with {func}`~snputils.phenotype.build_association_covariates`.
+`from_global_ancestry` drops the last ancestry column by default. `from_embedding` requires sample-level coordinates (`average_haplotypes=True` on phased PCA). The same blocks can be composed with {func}`~snputils.phenotype.build_association_covariates`.
 
 File-only or manual construction still works:
 
@@ -331,7 +331,7 @@ sim = OnlineSimulator(
     meta=meta,
     genetic_map=gmap_df,   # columns: chm, pos, cM  (optional)
     window_size=1000,
-    make_haploid=True,
+    expand_haplotypes=True,
 )
 
 snps, labels_d, labels_c, changepoints = sim.simulate(

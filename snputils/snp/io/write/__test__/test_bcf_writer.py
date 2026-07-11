@@ -70,6 +70,28 @@ def test_bcf_writer_phased(tmp_path):
     np.testing.assert_array_equal(observed.variants_id, np.array([".", "rs3"], dtype=object))
     np.testing.assert_allclose(observed.variants_qual, snpobj.variants_qual, equal_nan=True)
 
+
+def test_bcf_dosage_rejects_multiallelic_while_phased_mode_preserves_calls(tmp_path):
+    output_path = tmp_path / "multiallelic.bcf"
+    snpobj = SNPObject(
+        genotypes=np.array([[[1, 2], [0, 2]]], dtype=np.int8),
+        samples=np.array(["s1", "s2"]),
+        variants_ref=np.array(["A"], dtype=object),
+        variants_alt=np.array(["G,T"], dtype=object),
+        variants_chrom=np.array(["1"], dtype=object),
+        variants_id=np.array(["rs1"], dtype=object),
+        variants_pos=np.array([100]),
+    )
+    BCFWriter(snpobj, output_path, phased=True).write()
+
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        BCFReader(output_path).read(fields=["GT"], genotype_mode="dosage")
+
+    phased = BCFReader(output_path).read(fields=["GT"], genotype_mode="phased")
+    np.testing.assert_array_equal(phased.genotypes, snpobj.genotypes)
+    automatic = BCFReader(output_path).read(fields=["GT"], genotype_mode="auto")
+    np.testing.assert_array_equal(automatic.genotypes, snpobj.genotypes)
+
 def test_bcf_writer_chrom_partition(tmp_path):
     output_path = tmp_path / "partitioned.bcf"
 

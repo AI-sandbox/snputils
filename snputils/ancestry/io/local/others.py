@@ -12,7 +12,7 @@ def get_samples_from_msp_df(msp_df):
     # get all columns including sample names
     query_samples_dub = msp_df.columns[6:]
 
-    # only keep 1 of maternal/paternal
+    # only keep 1 of haplotype_0/haplotype_1
     single_ind_idx = np.arange(0 ,len(query_samples_dub) ,2)
     query_samples_sing = query_samples_dub[single_ind_idx]
 

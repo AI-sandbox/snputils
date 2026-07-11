@@ -29,14 +29,14 @@ def _toy_snpobj() -> SNPObject:
     )
 
 
-def test_variant_filters_cover_biallelic_complete_and_polymorphic():
+def test_variant_filters_cover_biallelic_complete_and_variable_genotypes():
     snpobj = _toy_snpobj()
 
     filtered = (
         snpobj
         .filter_biallelic_variants(snv_only=True)
         .filter_complete_genotypes()
-        .filter_polymorphic_variants()
+        .filter_variable_genotypes()
     )
 
     assert filtered.variants_id.tolist() == ["v1"]
@@ -1476,13 +1476,21 @@ def test_to_dosage_preserves_one_missing_sentinel():
     assert snpobj.to_dosage().is_dosage is True
 
 
-def test_to_dosage_preserves_multiallelic_allele_index_sum():
+def test_to_dosage_rejects_multiallelic_allele_indexes():
     snpobj = SNPObject(genotypes=np.array([[[1, 2]]], dtype=np.int8))
 
-    np.testing.assert_array_equal(
-        snpobj.to_dosage().genotypes,
-        np.array([[3]], dtype=np.float32),
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        snpobj.to_dosage()
+
+
+def test_to_dosage_rejects_multiallelic_metadata_without_observed_alt2():
+    snpobj = SNPObject(
+        genotypes=np.array([[[0, 1]]], dtype=np.int8),
+        variants_alt=np.array(["C,G"], dtype=object),
     )
+
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        snpobj.to_dosage()
 
 
 def test_concat_variants_preserves_sample_metadata_and_validates_order():

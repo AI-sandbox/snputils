@@ -10,7 +10,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
-from snputils._utils.genotypes import sum_diploid_genotypes
+from snputils._utils.genotypes import sum_diploid_genotypes, validate_biallelic_hard_calls
 from snputils._utils.printing import array_shape, format_repr
 
 if TYPE_CHECKING:
@@ -664,9 +664,9 @@ class SNPObject:
         If ``calldata_gp`` is present, this converts BGEN-style genotype
         probabilities to expected alternate-allele dosage. For now this supports
         biallelic variants, which are the common GWAS case. If genotype calls are
-        present instead, 3D calls are summed across the allele axis and 2D calls are
-        returned as floating-point dosages. For multiallelic hard calls this
-        preserves the legacy allele-index sum and is not an allele-specific dosage.
+        present instead, 3D biallelic calls are summed across the allele axis and
+        2D calls are returned as floating-point dosages. Multiallelic hard calls are
+        rejected because a single dosage value cannot identify the counted ALT allele.
 
         Args:
             allele: Allele to dosage. Currently only ``"ALT"`` or ``1`` is
@@ -682,9 +682,14 @@ class SNPObject:
             raise ValueError("SNPObject requires either `calldata_gp` or `genotypes` to compute dosage.")
 
         gt = np.asarray(self.genotypes)
+        validate_biallelic_hard_calls(
+            np.empty(0, dtype=np.int8),
+            alternate_alleles=self.variants_alt,
+        )
         if gt.ndim == 2:
             return gt.astype(np.float32, copy=True)
         if gt.ndim == 3:
+            validate_biallelic_hard_calls(gt)
             return sum_diploid_genotypes(gt, dtype=np.float32, missing_value=-1.0)
         raise ValueError("`genotypes` must be a 2D dosage array or 3D allele-call array.")
 
@@ -3562,9 +3567,13 @@ class SNPObject:
             raise ValueError("'genotypes' must be a 2D or 3D array.")
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
-    def filter_polymorphic_variants(self, inplace: bool = False) -> Optional['SNPObject']:
+    def filter_variable_genotypes(self, inplace: bool = False) -> Optional['SNPObject']:
         """
-        Keep variants with at least two observed genotype dosages among called samples.
+        Keep variants with at least two observed genotype values among called samples.
+
+        This filters on genotype variability, not allele polymorphism. For example,
+        a site where every called sample is heterozygous has one observed genotype
+        value and is therefore removed.
         """
         if self.genotypes is None:
             raise ValueError("Genotype data `genotypes` is None.")

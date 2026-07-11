@@ -140,12 +140,12 @@ def build_synthetic_admixture_dataset(
     for start in range(0, n_windows, global_chunk_size):
         stop = min(start + global_chunk_size, n_windows)
         chunk = lai[start:stop]
-        maternal = chunk[:, 0::2]
-        paternal = chunk[:, 1::2]
+        haplotype_0 = chunk[:, 0::2]
+        haplotype_1 = chunk[:, 1::2]
         for ancestry_code in range(n_ancestries - 1):
             global_ancestry_counts[ancestry_code] += (
-                np.sum(maternal == ancestry_code, axis=0, dtype=np.float64)
-                + np.sum(paternal == ancestry_code, axis=0, dtype=np.float64)
+                np.sum(haplotype_0 == ancestry_code, axis=0, dtype=np.float64)
+                + np.sum(haplotype_1 == ancestry_code, axis=0, dtype=np.float64)
             )
     global_ancestry = np.column_stack(
         [

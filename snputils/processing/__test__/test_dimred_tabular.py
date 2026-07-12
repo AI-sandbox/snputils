@@ -122,6 +122,42 @@ def test_pca_rejects_missing_and_nonfinite_genotypes(genotypes):
         PCA()._get_data_from_snpobj(snp)
 
 
+@pytest.mark.parametrize("average_haplotypes", [True, False])
+def test_pca_rejects_multiallelic_allele_indexes(average_haplotypes):
+    snp = SNPObject(genotypes=np.array([[[0, 2]], [[1, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="only biallelic allele calls"):
+        PCA()._get_data_from_snpobj(snp, average_haplotypes=average_haplotypes)
+
+
+@pytest.mark.parametrize(
+    "genotypes",
+    [
+        np.array([[0, 1]], dtype=np.int8),
+        np.array([[[0, 1], [1, 1]]], dtype=np.int8),
+    ],
+)
+def test_pca_rejects_multiallelic_variant_metadata(genotypes):
+    snp = SNPObject(
+        genotypes=genotypes,
+        variants_alt=np.array(["C,G"], dtype=object),
+    )
+
+    with pytest.raises(ValueError, match="only biallelic variants"):
+        PCA()._get_data_from_snpobj(snp)
+
+
+def test_pca_allows_biallelic_subset_of_object_with_multiallelic_variant():
+    snp = SNPObject(
+        genotypes=np.array([[[0, 2]], [[0, 1]]], dtype=np.int8),
+        variants_alt=np.array(["C,G", "T"], dtype=object),
+    )
+
+    observed = PCA()._get_data_from_snpobj(snp, snps_subset=[1])
+
+    np.testing.assert_array_equal(observed, np.array([[0.5]]))
+
+
 def test_save_embedding_table_from_model_writes(tmp_path: pathlib.Path):
     Md = type("mdPCA", (), {})
     o = Md()

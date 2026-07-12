@@ -873,11 +873,27 @@ class PCA:
         if np.any(~np.isfinite(X) | (X < 0)):
             raise ValueError("PCA does not support missing or non-finite genotype values.")
 
+        if snpobj.variants_alt is not None:
+            alternate_alleles = np.asarray(snpobj.variants_alt, dtype=object).ravel()
+            if alternate_alleles.size:
+                if alternate_alleles.size != snpobj.genotypes.shape[0]:
+                    raise ValueError("`variants_alt` must be aligned with the genotype variant axis.")
+                if isinstance(snps_subset, int):
+                    alternate_alleles = alternate_alleles[:snps_subset]
+                elif isinstance(snps_subset, list):
+                    alternate_alleles = alternate_alleles[snps_subset]
+                if any("," in str(alt) for alt in alternate_alleles if alt is not None):
+                    raise ValueError("PCA currently supports only biallelic variants.")
+
         if snpobj.genotypes.ndim == 3:
+            if np.any((X != 0) & (X != 1)):
+                raise ValueError("PCA currently supports only biallelic allele calls encoded as 0/1.")
             if average_haplotypes:
                 X = np.mean(X, axis=2)
             else:
                 X = np.transpose(X, (0, 2, 1)).reshape(-1, X.shape[1])
+        elif np.any(X > 2):
+            raise ValueError("PCA currently supports only biallelic dosages between 0 and 2.")
         
         if self.backend == "pytorch":
             torch = _require_torch()

@@ -553,19 +553,28 @@ def _extract_chunk_arrays(
     if gt is None:
         raise ValueError("Missing genotype calls in GWAS chunk.")
 
-    dosage = np.asarray(gt)
-    if dosage.ndim == 3:
-        dosage = dosage.sum(axis=2, dtype=np.int16)
-    if dosage.ndim != 2:
+    genotypes = np.asarray(gt)
+    if genotypes.ndim not in (2, 3):
         raise ValueError("GWAS expects genotype chunks with shape (variants, samples).")
-    if dosage.shape[1] == 0:
+    if genotypes.ndim == 3 and genotypes.shape[2] != 2:
+        raise ValueError("GWAS requires diploid allele calls with a final axis of length 2.")
+    if genotypes.shape[1] == 0:
         raise ValueError("No samples available in GWAS genotype chunk.")
 
-    invalid = (dosage < 0) | (dosage > 2)
-    if np.any(invalid):
+    if np.issubdtype(genotypes.dtype, np.complexfloating):
+        raise ValueError("GWAS requires real-valued hard-call genotypes.")
+    try:
+        numeric = genotypes.astype(np.float64, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("GWAS requires numeric hard-call genotypes.") from exc
+
+    allowed = (0, 1) if numeric.ndim == 3 else (0, 1, 2)
+    if np.any(~np.isfinite(numeric)) or not np.all(np.isin(numeric, allowed)):
         raise ValueError(
             "GWAS currently requires diploid dosages encoded as 0/1/2 with no missing values."
         )
+
+    dosage = numeric.sum(axis=2) if numeric.ndim == 3 else numeric
 
     dosage_uint8 = dosage.astype(np.uint8, copy=False)
     n_variants = int(dosage_uint8.shape[0])
@@ -574,6 +583,8 @@ def _extract_chunk_arrays(
     variant_id = _build_variant_id_array(chunk.get("variants_id"), chrom, pos, offset=variant_offset)
     ref = _coerce_variant_text_array(chunk.get("variants_ref"), n_variants, default="N")
     alt = _coerce_variant_text_array(chunk.get("variants_alt"), n_variants, default=".")
+    if np.any(np.char.find(alt.astype(str), ",") >= 0):
+        raise ValueError("GWAS currently supports only biallelic variants.")
     return dosage_uint8, chrom, pos, variant_id, ref, alt
 
 

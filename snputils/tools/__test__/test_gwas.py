@@ -10,7 +10,7 @@ from scipy.special import expit
 
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj import SNPObject
-from snputils.tools.gwas import run_gwas
+from snputils.tools.gwas import _extract_chunk_arrays, run_gwas
 
 
 def _write_vcf(
@@ -1003,6 +1003,29 @@ def test_gwas_errors_on_missing_genotypes(tmp_path: Path):
             batch_size=4,
             memory=2048,
         )
+
+
+@pytest.mark.parametrize(
+    "genotypes",
+    [
+        np.array([[0.9, 1.0]]),
+        np.array([[[1, -1], [0, 0]]], dtype=np.int8),
+        np.array([[[0, 2], [0, 0]]], dtype=np.int8),
+    ],
+)
+def test_gwas_rejects_invalid_calls_before_dosage_conversion(genotypes):
+    with pytest.raises(ValueError, match="requires diploid dosages encoded as 0/1/2"):
+        _extract_chunk_arrays({"genotypes": genotypes}, variant_offset=0)
+
+
+def test_gwas_rejects_multiallelic_variant_metadata():
+    chunk = {
+        "genotypes": np.array([[0, 1]], dtype=np.int8),
+        "variants_alt": np.array(["G,T"], dtype=object),
+    }
+
+    with pytest.raises(ValueError, match="only biallelic variants"):
+        _extract_chunk_arrays(chunk, variant_offset=0)
 
 
 def test_gwas_errors_when_no_sample_overlap(tmp_path: Path):

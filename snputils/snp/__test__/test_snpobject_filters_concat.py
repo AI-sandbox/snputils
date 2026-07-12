@@ -1570,6 +1570,65 @@ def test_merge_fills_missing_call_arrays_instead_of_discarding_data():
     np.testing.assert_allclose(merged.calldata_gp[:, 1], right_gp[:, 0])
 
 
+@pytest.mark.parametrize(
+    ("field", "right_value"),
+    [
+        ("variants_chrom", "2"),
+        ("variants_pos", 20),
+        ("variants_ref", "C"),
+        ("variants_alt", "T"),
+        ("variants_id", "v2"),
+    ],
+)
+def test_merge_rejects_misaligned_variants(field, right_value):
+    metadata = {
+        "variants_chrom": np.array(["1"]),
+        "variants_pos": np.array([10]),
+        "variants_ref": np.array(["A"]),
+        "variants_alt": np.array(["G"]),
+        "variants_id": np.array(["v1"]),
+    }
+    left = SNPObject(
+        genotypes=np.array([[0]], dtype=np.int8),
+        samples=np.array(["left"]),
+        **metadata,
+    )
+    right_metadata = {name: values.copy() for name, values in metadata.items()}
+    right_metadata[field][0] = right_value
+    right = SNPObject(
+        genotypes=np.array([[2]], dtype=np.int8),
+        samples=np.array(["right"]),
+        **right_metadata,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        left.merge(right)
+
+
+def test_merge_validates_and_combines_ancestry_maps():
+    left = SNPObject(
+        calldata_lai=np.array([[0, 1]], dtype=np.int8),
+        samples=np.array(["left"]),
+        variants_id=np.array(["v1"]),
+        ancestry_map={"0": "AFR", "1": "EUR"},
+    )
+    compatible = SNPObject(
+        calldata_lai=np.array([[1, 2]], dtype=np.int8),
+        samples=np.array(["right"]),
+        variants_id=np.array(["v1"]),
+        ancestry_map={"1": "EUR", "2": "AMR"},
+    )
+
+    merged = left.merge(compatible)
+
+    assert merged.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+
+    conflicting = compatible.copy()
+    conflicting.ancestry_map = {"1": "EAS"}
+    with pytest.raises(ValueError, match="ancestry code.*both"):
+        left.merge(conflicting)
+
+
 def test_concat_fills_missing_call_arrays_instead_of_discarding_data():
     left = SNPObject(
         genotypes=np.array([[0, 2]], dtype=np.int8),

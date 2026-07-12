@@ -104,6 +104,90 @@ def _concatenate_optional_arrays(
     return np.concatenate([left_array, right_array], axis=axis)
 
 
+def _validate_variant_alignment_for_merge(left: Any, right: Any) -> None:
+    left_n = left._n_snps_or_none()
+    right_n = right._n_snps_or_none()
+    if left_n is not None and right_n is not None and left_n != right_n:
+        raise ValueError(
+            "Cannot merge SNPObjects: the number of variants differs "
+            f"({left_n} != {right_n})."
+        )
+
+    n_variants = left_n if left_n is not None else right_n
+    fields = ("variants_chrom", "variants_pos", "variants_ref", "variants_alt")
+    for field in fields:
+        left_values = getattr(left, field)
+        right_values = getattr(right, field)
+        for owner, values in (("self", left_values), ("snpobj", right_values)):
+            if values is not None and n_variants is not None and len(values) != n_variants:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: `{owner}.{field}` has {len(values)} entries, "
+                    f"expected {n_variants}."
+                )
+        if left_values is None or right_values is None:
+            continue
+        left_array = np.asarray(left_values)
+        right_array = np.asarray(right_values)
+        if left_array.shape != right_array.shape:
+            raise ValueError(
+                f"Cannot merge SNPObjects: `{field}` shapes differ "
+                f"({left_array.shape} != {right_array.shape})."
+            )
+        equal = left_array == right_array
+        if not np.all(equal):
+            mismatch = int(np.flatnonzero(~np.asarray(equal).ravel())[0])
+            raise ValueError(
+                f"Cannot merge SNPObjects: `{field}` differs at variant index {mismatch} "
+                f"({left_array[mismatch]!r} != {right_array[mismatch]!r})."
+            )
+
+    left_ids = left.variants_id
+    right_ids = right.variants_id
+    if left_ids is None or right_ids is None:
+        return
+    if n_variants is not None:
+        for owner, values in (("self", left_ids), ("snpobj", right_ids)):
+            if len(values) != n_variants:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: `{owner}.variants_id` has {len(values)} entries, "
+                    f"expected {n_variants}."
+                )
+    for index, (left_id, right_id) in enumerate(zip(left_ids, right_ids)):
+        if _is_missing_variant_id(left_id) or _is_missing_variant_id(right_id):
+            continue
+        left_text = left_id.decode() if isinstance(left_id, bytes) else str(left_id)
+        right_text = right_id.decode() if isinstance(right_id, bytes) else str(right_id)
+        if left_text != right_text:
+            raise ValueError(
+                "Cannot merge SNPObjects: `variants_id` differs at variant index "
+                f"{index} ({left_id!r} != {right_id!r})."
+            )
+
+
+def _merge_ancestry_maps(
+    left: Optional[Mapping[Any, Any]],
+    right: Optional[Mapping[Any, Any]],
+) -> Optional[Dict[str, str]]:
+    if left is None and right is None:
+        return None
+
+    merged: Dict[str, str] = {}
+    for ancestry_map in (left, right):
+        if ancestry_map is None:
+            continue
+        for code, label in ancestry_map.items():
+            code_str = str(code)
+            label_str = str(label)
+            existing = merged.get(code_str)
+            if existing is not None and existing != label_str:
+                raise ValueError(
+                    "Cannot merge SNPObjects: ancestry code "
+                    f"{code_str!r} maps to both {existing!r} and {label_str!r}."
+                )
+            merged[code_str] = label_str
+    return merged
+
+
 class SNPObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
@@ -4715,6 +4799,9 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the merged sample data.
         """
+        _validate_variant_alignment_for_merge(self, snpobj)
+        ancestry_map = _merge_ancestry_maps(self.ancestry_map, snpobj.ancestry_map)
+
         # Merge genotypes if present and compatible
         if self.genotypes is not None and snpobj.genotypes is not None:
             if self.genotypes.shape[0] != snpobj.genotypes.shape[0]:
@@ -4862,6 +4949,7 @@ class SNPObject:
             self.samples = samples
             self.sample_fid = merged_fid
             self.sample_sex = merged_sex
+            self.ancestry_map = ancestry_map
             return self
 
         # Create and return a new SNPObject containing the merged samples
@@ -4881,7 +4969,7 @@ class SNPObject:
             variants_info=self.variants_info,
             calldata_lai=calldata_lai,
             calldata_gp=calldata_gp,
-            ancestry_map=self.ancestry_map
+            ancestry_map=ancestry_map
         )
 
     def concat(

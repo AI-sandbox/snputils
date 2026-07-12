@@ -1526,3 +1526,66 @@ def test_merge_inplace_preserves_sample_sex_when_left_has_no_fid():
     assert left.samples.tolist() == ["s1", "s2"]
     assert left.sample_sex.tolist() == ["1", "2"]
     assert left.genotypes.shape == (2, 2, 2)
+
+
+def test_correct_flipped_variants_inverts_dosages_and_preserves_missing_values():
+    query = SNPObject(
+        genotypes=np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["G"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(
+        reference,
+        check_complement=False,
+        log_stats=False,
+    )
+
+    np.testing.assert_allclose(
+        corrected.genotypes,
+        np.array([[2.0, 1.0, 0.0, -1.0, np.nan]]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        query.genotypes,
+        np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),
+        equal_nan=True,
+    )
+
+
+def test_correct_flipped_variants_inverts_called_alleles_inplace():
+    query = SNPObject(
+        genotypes=np.array([[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, np.nan]]]),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["G"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    result = query.correct_flipped_variants(
+        reference,
+        check_complement=False,
+        log_stats=False,
+        inplace=True,
+    )
+
+    assert result is None
+    np.testing.assert_allclose(
+        query.genotypes,
+        np.array([[[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [-1.0, np.nan]]]),
+        equal_nan=True,
+    )

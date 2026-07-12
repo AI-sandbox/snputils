@@ -4981,7 +4981,8 @@ class SNPObject:
 
         Correction Process:
         - Swaps `variants_ref` and `variants_alt` alleles in `self` to align with `snpobj`.
-        - Flips `genotypes` values (0 becomes 1, and 1 becomes 0) to match the updated allele configuration.
+        - Flips called 2D diploid dosages as `2 - dosage` and called 3D allele indexes as
+          `1 - allele`, while preserving missing values.
 
         Args:
             snpobj (SNPObject):
@@ -5059,17 +5060,32 @@ class SNPObject:
             temp_alts = self['variants_alt'][flip_idx_query]
             temp_refs = self['variants_ref'][flip_idx_query]
 
+            def flip_genotypes(target: 'SNPObject') -> None:
+                if target.genotypes is None:
+                    return
+                genotypes = np.asarray(target.genotypes)
+                selected = genotypes[flip_idx_query]
+                called = np.isfinite(selected) & (selected >= 0)
+                corrected = selected.copy()
+                if genotypes.ndim == 2:
+                    corrected[called] = 2 - selected[called]
+                elif genotypes.ndim == 3:
+                    corrected[called] = 1 - selected[called]
+                else:
+                    raise ValueError("`genotypes` must be a 2D dosage or 3D allele-call array.")
+                target.genotypes[flip_idx_query] = corrected
+
             # Correct the variant flips based on whether the operation is in-place or not
             if inplace:
                 self['variants_alt'][flip_idx_query] = temp_refs
                 self['variants_ref'][flip_idx_query] = temp_alts
-                self['genotypes'][flip_idx_query] = 1 - self['genotypes'][flip_idx_query]
+                flip_genotypes(self)
                 return None
             else:
                 snpobj = self.copy()
                 snpobj['variants_alt'][flip_idx_query] = temp_refs
                 snpobj['variants_ref'][flip_idx_query] = temp_alts
-                snpobj['genotypes'][flip_idx_query] = 1 - snpobj['genotypes'][flip_idx_query]
+                flip_genotypes(snpobj)
                 return snpobj
         else:
             log.info('No variant flips found to correct.')

@@ -2,6 +2,7 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from snputils.processing.dimred_tabular import (
     build_embedding_dataframe,
@@ -104,6 +105,21 @@ def test_pca_expanded_sample_subset_keeps_both_haplotypes():
 
     np.testing.assert_array_equal(observed, np.array([[1, 0], [0, 1]], dtype=float))
     assert row_ids == ["y|0", "y|1"]
+
+
+@pytest.mark.parametrize(
+    "genotypes",
+    [
+        np.array([[[0.0, -1.0]]]),
+        np.array([[np.nan]]),
+        np.array([[np.inf]]),
+    ],
+)
+def test_pca_rejects_missing_and_nonfinite_genotypes(genotypes):
+    snp = SNPObject(genotypes=genotypes)
+
+    with pytest.raises(ValueError, match="missing or non-finite"):
+        PCA()._get_data_from_snpobj(snp)
 
 
 def test_save_embedding_table_from_model_writes(tmp_path: pathlib.Path):

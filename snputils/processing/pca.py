@@ -865,16 +865,19 @@ class PCA:
         elif isinstance(samples_subset, list):
             X = X[samples_subset]
 
+        if isinstance(snps_subset, int):
+            X = X[:, :snps_subset]
+        elif isinstance(snps_subset, list):
+            X = X[:, snps_subset]
+
+        if np.any(~np.isfinite(X) | (X < 0)):
+            raise ValueError("PCA does not support missing or non-finite genotype values.")
+
         if snpobj.genotypes.ndim == 3:
             if average_haplotypes:
                 X = np.mean(X, axis=2)
             else:
                 X = np.transpose(X, (0, 2, 1)).reshape(-1, X.shape[1])
-        
-        if isinstance(snps_subset, int):
-            X = X[:, :snps_subset]
-        elif isinstance(snps_subset, list):
-            X = X[:, snps_subset]
         
         if self.backend == "pytorch":
             torch = _require_torch()

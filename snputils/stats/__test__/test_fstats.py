@@ -108,16 +108,75 @@ def test_f4_identity_additivity():
 
 def test_f2_equals_f4_self_definition():
     afs, counts, pops = _toy_data()
-    f2_ab = f2((afs, counts, pops), pop1=["A"], pop2=["B"], apply_correction=False, block_size=2).est.iloc[0]
+    f2_ab = f2((afs, counts, pops), pop1=["A"], pop2=["B"], apply_correction=True, block_size=2).est.iloc[0]
     f4_abab = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["B"], block_size=2).est.iloc[0]
     assert np.isclose(f2_ab, f4_abab, atol=1e-12)
 
 
 def test_f3_equals_f4_cross_definition():
     afs, counts, pops = _toy_data()
-    f3_a_bc = f3((afs, counts, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=False, block_size=2).est.iloc[0]
+    f3_a_bc = f3((afs, counts, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=True, block_size=2).est.iloc[0]
     f4_abac = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["C"], block_size=2).est.iloc[0]
     assert np.isclose(f3_a_bc, f4_abac, atol=1e-12)
+
+
+def test_f4_repeated_populations_apply_finite_sample_correction():
+    afs = np.array([[0.25, 0.75]] * 4, dtype=float)
+    counts = np.full_like(afs, 4.0)
+    data = (afs, counts, ["A", "B"])
+
+    f2_ab = f2(data, pop1=["A"], pop2=["B"], block_size=2).iloc[0]
+    f4_abab = f4(data, a=["A"], b=["B"], c=["A"], d=["B"], block_size=2).iloc[0]
+
+    assert np.isclose(f2_ab.est, 0.125, atol=1e-12)
+    assert np.isclose(f4_abab.est, f2_ab.est, atol=1e-12)
+    assert f4_abab.n_snps == f2_ab.n_snps
+
+
+def test_f4_distinct_populations_remain_uncorrected():
+    afs = np.array(
+        [
+            [0.25, 0.75, 0.20, 0.60],
+            [0.40, 0.10, 0.80, 0.30],
+        ]
+    )
+    counts = np.full_like(afs, 4.0)
+    expected = np.mean((afs[:, 0] - afs[:, 1]) * (afs[:, 2] - afs[:, 3]))
+
+    observed = f4(
+        (afs, counts, ["A", "B", "C", "D"]),
+        a=["A"],
+        b=["B"],
+        c=["C"],
+        d=["D"],
+        block_size=1,
+    ).est.iloc[0]
+
+    assert np.isclose(observed, expected, atol=1e-12)
+
+
+def test_repeated_population_correction_handles_low_counts_and_f4_ratio():
+    afs = np.array(
+        [[0.25, 0.75], [0.20, 0.60], [0.40, np.nan], [0.80, 0.30]],
+        dtype=float,
+    )
+    counts = np.full_like(afs, 4.0)
+    counts[0, 0] = 1.0
+    counts[2, 1] = 0.0
+    data = (afs, counts, ["A", "B"])
+
+    f2_ab = f2(data, pop1=["A"], pop2=["B"], block_size=1).iloc[0]
+    f4_abab = f4(data, a=["A"], b=["B"], c=["A"], d=["B"], block_size=1).iloc[0]
+    ratio = f4_ratio(
+        data,
+        num=[("A", "B", "A", "B")],
+        den=[("B", "A", "B", "A")],
+        block_size=1,
+    ).iloc[0]
+
+    assert np.isclose(f4_abab.est, f2_ab.est, atol=1e-12)
+    assert f4_abab.n_snps == f2_ab.n_snps == 2
+    assert np.isclose(ratio.est, 1.0, atol=1e-12)
     
 
 def test_f3_corrected_equals_f4_minus_target_term():

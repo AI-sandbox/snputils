@@ -681,6 +681,21 @@ def _tsallis_entropy_bernoulli(p: np.ndarray, q: float) -> np.ndarray:
 
     return (1.0 - (np.power(p, q) + np.power(1.0 - p, q))) / (q - 1.0)
 
+
+def _f4_overlap_weights(a: int, b: int, c: int, d: int) -> Dict[int, int]:
+    first: Dict[int, int] = {}
+    second: Dict[int, int] = {}
+    first[a] = first.get(a, 0) + 1
+    first[b] = first.get(b, 0) - 1
+    second[c] = second.get(c, 0) + 1
+    second[d] = second.get(d, 0) - 1
+    return {
+        population: first[population] * second[population]
+        for population in first.keys() & second.keys()
+        if first[population] * second[population] != 0
+    }
+
+
 def f2(
     data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
     pop1: Optional[Sequence[str]] = None,
@@ -976,6 +991,7 @@ def f4(
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+    - When a population appears in both allele-frequency contrasts, its finite-sample covariance is corrected automatically.
     - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
@@ -994,28 +1010,37 @@ def f4(
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
     rows: List[Dict[str, Union[str, float, int]]] = []
+    indexed_quads = [
+        (pa, pb, pc, dpop, name_to_idx[pa], name_to_idx[pb], name_to_idx[pc], name_to_idx[dpop])
+        for pa, pb, pc, dpop in quads
+    ]
+    needs_correction = any(
+        _f4_overlap_weights(ia, ib, ic, id_)
+        for _, _, _, _, ia, ib, ic, id_ in indexed_quads
+    )
 
     fast = _complete_block_product_sums(
         afs,
         counts,
         block_ids,
         block_lengths,
-        require_counts_gt=0,
-        need_correction=False,
+        require_counts_gt=1 if needs_correction else 0,
+        need_correction=needs_correction,
     )
     if fast is not None:
-        pair_sums, _, den_block_sums = fast
-        for pa, pb, pc, dpop in quads:
-            ia = name_to_idx[pa]
-            ib = name_to_idx[pb]
-            ic = name_to_idx[pc]
-            id_ = name_to_idx[dpop]
+        pair_sums, corr_sums, den_block_sums = fast
+        for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
             num_block_sums = (
                 pair_sums[:, ia, ic]
                 - pair_sums[:, ia, id_]
                 - pair_sums[:, ib, ic]
                 + pair_sums[:, ib, id_]
             )
+            overlap_weights = _f4_overlap_weights(ia, ib, ic, id_)
+            if overlap_weights:
+                assert corr_sums is not None
+                for population, weight in overlap_weights.items():
+                    num_block_sums = num_block_sums - weight * corr_sums[:, population]
             res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
             rows.append(
                 {
@@ -1035,11 +1060,7 @@ def f4(
 
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
-    for pa, pb, pc, dpop in quads:
-        ia = name_to_idx[pa]
-        ib = name_to_idx[pb]
-        ic = name_to_idx[pc]
-        id_ = name_to_idx[dpop]
+    for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
 
         A = afs[:, ia]
         B = afs[:, ib]
@@ -1050,8 +1071,18 @@ def f4(
         nc = counts[:, ic].astype(float)
         nd = counts[:, id_].astype(float)
 
-        with np.errstate(invalid="ignore"):
+        overlap_weights = _f4_overlap_weights(ia, ib, ic, id_)
+        with np.errstate(invalid="ignore", divide="ignore"):
             num = (A - B) * (C - D)
+            for population, weight in overlap_weights.items():
+                population_af = afs[:, population]
+                population_count = counts[:, population].astype(float)
+                correction = np.where(
+                    population_count > 1,
+                    population_af * (1.0 - population_af) / (population_count - 1.0),
+                    np.nan,
+                )
+                num = num - weight * correction
         snp_mask = np.isfinite(num) & (na > 0) & (nb > 0) & (nc > 0) & (nd > 0)
 
         num_block_sums = np.full(n_blocks, np.nan, dtype=float)
@@ -1240,6 +1271,7 @@ def f4_ratio(
     Notes:
         - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
         - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+        - Repeated population roles use the same finite-sample correction as `f4`.
         - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     if len(num) != len(den):
@@ -1252,19 +1284,32 @@ def f4_ratio(
     name_to_idx = {p: i for i, p in enumerate(pops)}
 
     rows: List[Dict[str, Union[str, float, int]]] = []
+    indexed_pairs = [
+        (
+            (na, nb, nc, nd),
+            (da, db, dc, dd),
+            (name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]),
+            (name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]),
+        )
+        for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den)
+    ]
+    needs_correction = any(
+        _f4_overlap_weights(*num_indexes) or _f4_overlap_weights(*den_indexes)
+        for _, _, num_indexes, den_indexes in indexed_pairs
+    )
     fast = _complete_block_product_sums(
         afs,
         counts,
         block_ids,
         block_lengths,
-        require_counts_gt=0,
-        need_correction=False,
+        require_counts_gt=1 if needs_correction else 0,
+        need_correction=needs_correction,
     )
     if fast is not None:
-        pair_sums, _, _ = fast
-        for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
-            ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
-            ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
+        pair_sums, corr_sums, _ = fast
+        for (na, nb, nc, nd), (da, db, dc, dd), num_indexes, den_indexes in indexed_pairs:
+            ia, ib, ic, id_ = num_indexes
+            ja, jb, jc, jd = den_indexes
 
             num_block_sums = (
                 pair_sums[:, ia, ic]
@@ -1278,6 +1323,15 @@ def f4_ratio(
                 - pair_sums[:, jb, jc]
                 + pair_sums[:, jb, jd]
             )
+            for block_sums, indexes in (
+                (num_block_sums, num_indexes),
+                (den_block_sums, den_indexes),
+            ):
+                overlap_weights = _f4_overlap_weights(*indexes)
+                if overlap_weights:
+                    assert corr_sums is not None
+                    for population, weight in overlap_weights.items():
+                        block_sums -= weight * corr_sums[:, population]
             res = _weighted_jackknife_ratio_from_block_sums(
                 num_block_sums,
                 den_block_sums,
@@ -1298,18 +1352,28 @@ def f4_ratio(
         return pd.DataFrame(rows)
 
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
-    for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
-        ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
-        ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
+    for (na, nb, nc, nd), (da, db, dc, dd), num_indexes, den_indexes in indexed_pairs:
+        ia, ib, ic, id_ = num_indexes
+        ja, jb, jc, jd = den_indexes
 
         A, B, C, D = afs[:, ia], afs[:, ib], afs[:, ic], afs[:, id_]
         E, F, G, H = afs[:, ja], afs[:, jb], afs[:, jc], afs[:, jd]
         nA, nB, nC, nD = counts[:, ia], counts[:, ib], counts[:, ic], counts[:, id_]
         nE, nF, nG, nH = counts[:, ja], counts[:, jb], counts[:, jc], counts[:, jd]
 
-        with np.errstate(invalid="ignore"):
+        with np.errstate(invalid="ignore", divide="ignore"):
             num_snp = (A - B) * (C - D)
             den_snp = (E - F) * (G - H)
+            for values, indexes in ((num_snp, num_indexes), (den_snp, den_indexes)):
+                for population, weight in _f4_overlap_weights(*indexes).items():
+                    population_af = afs[:, population]
+                    population_count = counts[:, population].astype(float)
+                    correction = np.where(
+                        population_count > 1,
+                        population_af * (1.0 - population_af) / (population_count - 1.0),
+                        np.nan,
+                    )
+                    values -= weight * correction
         mask_num = np.isfinite(num_snp) & (nA > 0) & (nB > 0) & (nC > 0) & (nD > 0)
         mask_den = np.isfinite(den_snp) & (nE > 0) & (nF > 0) & (nG > 0) & (nH > 0)
         mask_both = mask_num & mask_den

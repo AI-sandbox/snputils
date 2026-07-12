@@ -14,6 +14,14 @@ from .base import AncestryObject
 log = logging.getLogger(__name__)
 
 
+def _sample_id_from_haplotype(haplotype: object) -> str:
+    text = str(haplotype)
+    sample, separator, phase = text.rpartition('.')
+    if separator and sample and phase in {'0', '1'}:
+        return sample
+    return text
+
+
 class LocalAncestryObject(AncestryObject):
     """
     A class for window-level Local Ancestry Inference (LAI) data.
@@ -186,7 +194,7 @@ class LocalAncestryObject(AncestryObject):
         if self.__samples is not None:
             return self.__samples
         elif self.__haplotypes is not None:
-            return [hap.split('.')[0] for hap in self.__haplotypes][::2]
+            return [_sample_id_from_haplotype(hap) for hap in self.__haplotypes][::2]
         else:
             return None
     
@@ -507,7 +515,7 @@ class LocalAncestryObject(AncestryObject):
             samples = np.asarray(samples).ravel()
             # Extract sample names from haplotype identifiers
             haplotype_ids = np.array(self['haplotypes'])
-            sample_names = np.array([hap.split('.')[0] for hap in haplotype_ids])
+            sample_names = np.array([_sample_id_from_haplotype(hap) for hap in haplotype_ids])
             # Create mask for haplotypes belonging to specified samples
             mask_samples = np.isin(sample_names, samples)
         else:
@@ -549,7 +557,9 @@ class LocalAncestryObject(AncestryObject):
 
             # Source of sample names for ordering logic
             haplotype_ids = np.array(self['haplotypes'])
-            sample_names_by_sample = np.array([hap.split('.')[0] for hap in haplotype_ids])[::2]
+            sample_names_by_sample = np.array(
+                [_sample_id_from_haplotype(hap) for hap in haplotype_ids]
+            )[::2]
 
             # Respect the order in `samples`
             if samples is not None:

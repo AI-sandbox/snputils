@@ -519,27 +519,30 @@ class IBDObject:
             # LAI rows for this chromosome
             lai_rows = lai_str[idx_chr, :]
 
-            # Determine ancestry presence per window for each individual
-            if h1 in (1, 2) and h2 in (1, 2):
-                # Use specific haplotypes
-                s1_col = s1_a if (h1 - 1) == 0 else s1_b
-                s2_col = s2_a if (h2 - 1) == 0 else s2_b
-                s1_mask = (lai_rows[:, s1_col] == anc_str)
-                s2_mask = (lai_rows[:, s2_col] == anc_str)
+            def _individual_ancestry_mask(
+                haplotype_id: int,
+                haplotype_0_col: int,
+                haplotype_1_col: int,
+            ) -> np.ndarray:
+                if haplotype_id in (1, 2):
+                    selected_col = haplotype_0_col if haplotype_id == 1 else haplotype_1_col
+                    mask = lai_rows[:, selected_col] == anc_str
+                    if require_both_haplotypes:
+                        other_col = haplotype_1_col if haplotype_id == 1 else haplotype_0_col
+                        mask = mask & (lai_rows[:, other_col] == anc_str)
+                    return mask
                 if require_both_haplotypes:
-                    # Additionally require the other hap of each sample to match
-                    s1_other = s1_b if s1_col == s1_a else s1_a
-                    s2_other = s2_b if s2_col == s2_a else s2_a
-                    s1_mask = s1_mask & (lai_rows[:, s1_other] == anc_str)
-                    s2_mask = s2_mask & (lai_rows[:, s2_other] == anc_str)
-            else:
-                # Unknown hap IDs: require at least one hap to match (or both if requested)
-                if require_both_haplotypes:
-                    s1_mask = (lai_rows[:, s1_a] == anc_str) & (lai_rows[:, s1_b] == anc_str)
-                    s2_mask = (lai_rows[:, s2_a] == anc_str) & (lai_rows[:, s2_b] == anc_str)
-                else:
-                    s1_mask = (lai_rows[:, s1_a] == anc_str) | (lai_rows[:, s1_b] == anc_str)
-                    s2_mask = (lai_rows[:, s2_a] == anc_str) | (lai_rows[:, s2_b] == anc_str)
+                    return (
+                        (lai_rows[:, haplotype_0_col] == anc_str)
+                        & (lai_rows[:, haplotype_1_col] == anc_str)
+                    )
+                return (
+                    (lai_rows[:, haplotype_0_col] == anc_str)
+                    | (lai_rows[:, haplotype_1_col] == anc_str)
+                )
+
+            s1_mask = _individual_ancestry_mask(h1, s1_a, s1_b)
+            s2_mask = _individual_ancestry_mask(h2, s2_a, s2_b)
 
             keep = overlaps & s1_mask & s2_mask
 
@@ -577,8 +580,10 @@ class IBDObject:
 
                 # Identify contiguous windows where keep=True
                 idx_keep = np.where(keep)[0]
-                # Split into runs of consecutive indices
-                breaks = np.where(np.diff(idx_keep) > 1)[0]
+                # Split on either nonconsecutive rows or gaps in physical coverage.
+                index_gaps = np.diff(idx_keep) > 1
+                coordinate_gaps = lai_st[idx_keep[1:]] > (lai_en[idx_keep[:-1]] + 1)
+                breaks = np.where(index_gaps | coordinate_gaps)[0]
                 run_starts = np.r_[0, breaks + 1]
                 run_ends = np.r_[breaks, idx_keep.size - 1]
 

@@ -673,13 +673,20 @@ class LocalAncestryObject(AncestryObject):
 
         # Extract attributes from SNPObject if provided
         if snpobject is not None:
-            variants_chrom = variants_chrom or snpobject.variants_chrom
-            variants_pos = variants_pos or snpobject.variants_pos
-            variants_ref = variants_ref or snpobject.variants_ref
-            variants_alt = variants_alt or snpobject.variants_alt
-            variants_filter_pass = variants_filter_pass or snpobject.variants_filter_pass
-            variants_id = variants_id or snpobject.variants_id
-            variants_qual = variants_qual or snpobject.variants_qual
+            if variants_chrom is None:
+                variants_chrom = snpobject.variants_chrom
+            if variants_pos is None:
+                variants_pos = snpobject.variants_pos
+            if variants_ref is None:
+                variants_ref = snpobject.variants_ref
+            if variants_alt is None:
+                variants_alt = snpobject.variants_alt
+            if variants_filter_pass is None:
+                variants_filter_pass = snpobject.variants_filter_pass
+            if variants_id is None:
+                variants_id = snpobject.variants_id
+            if variants_qual is None:
+                variants_qual = snpobject.variants_qual
 
         n_samples = self.n_samples
         lai_reshaped = self.lai.reshape(self.n_windows, n_samples, 2).astype(int) if lai_format == "3D" else None

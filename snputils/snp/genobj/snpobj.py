@@ -21,6 +21,36 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _paired_common_indices(
+    query_identifiers: Sequence[Any],
+    reference_identifiers: Sequence[Any],
+) -> Tuple[List[Any], np.ndarray, np.ndarray]:
+    query_positions: Dict[Any, List[int]] = {}
+    reference_positions: Dict[Any, List[int]] = {}
+    for index, identifier in enumerate(query_identifiers):
+        query_positions.setdefault(identifier, []).append(index)
+    for index, identifier in enumerate(reference_identifiers):
+        reference_positions.setdefault(identifier, []).append(index)
+
+    common_ids = [identifier for identifier in query_positions if identifier in reference_positions]
+    duplicates = [
+        identifier
+        for identifier in common_ids
+        if len(query_positions[identifier]) != 1 or len(reference_positions[identifier]) != 1
+    ]
+    if duplicates:
+        preview = ", ".join(map(str, duplicates[:5]))
+        raise ValueError(
+            "Cannot match variants with duplicated shared identifiers: " + preview
+        )
+
+    query_idx = np.asarray([query_positions[identifier][0] for identifier in common_ids], dtype=int)
+    reference_idx = np.asarray(
+        [reference_positions[identifier][0] for identifier in common_ids], dtype=int
+    )
+    return common_ids, query_idx, reference_idx
+
+
 class SNPObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
@@ -4473,14 +4503,7 @@ class SNPObject:
         else:
             raise ValueError("`index_by` must be one of 'pos', 'id', or 'pos+id'.")
 
-        # Convert to sets for intersection
-        common_ids = set(query_identifiers).intersection(reference_identifiers)
-
-        # Collect indices for common identifiers
-        query_idx = [i for i, id in enumerate(query_identifiers) if id in common_ids]
-        reference_idx = [i for i, id in enumerate(reference_identifiers) if id in common_ids]
-
-        return list(common_ids), np.array(query_idx), np.array(reference_idx)
+        return _paired_common_indices(query_identifiers, reference_identifiers)
 
     def get_common_markers_intersection(
         self,
@@ -4513,14 +4536,7 @@ class SNPObject:
             zip(snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_ref'], snpobj['variants_alt'])
         ]
 
-        # Convert to sets for intersection
-        common_ids = set(query_identifiers).intersection(reference_identifiers)
-
-        # Collect indices for common identifiers in both SNPObjects
-        query_idx = [i for i, id in enumerate(query_identifiers) if id in common_ids]
-        reference_idx = [i for i, id in enumerate(reference_identifiers) if id in common_ids]
-
-        return list(common_ids), np.array(query_idx), np.array(reference_idx)
+        return _paired_common_indices(query_identifiers, reference_identifiers)
 
     def subset_to_common_variants(
         self,

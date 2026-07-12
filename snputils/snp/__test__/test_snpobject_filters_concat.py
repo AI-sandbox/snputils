@@ -1589,3 +1589,25 @@ def test_correct_flipped_variants_inverts_called_alleles_inplace():
         np.array([[[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [-1.0, np.nan]]]),
         equal_nan=True,
     )
+
+
+def test_common_variant_intersection_rejects_duplicated_shared_ids():
+    query = SNPObject(variants_id=np.array(["rs1", "rs1"], dtype=object))
+    reference = SNPObject(variants_id=np.array(["rs1"], dtype=object))
+
+    with pytest.raises(ValueError, match="duplicated shared identifiers.*rs1"):
+        query.get_common_variants_intersection(reference, index_by="id")
+
+
+def test_common_variant_intersection_returns_aligned_indices():
+    query = SNPObject(variants_id=np.array(["rs2", "rs1", "rs3"], dtype=object))
+    reference = SNPObject(variants_id=np.array(["rs1", "rs3", "rs2"], dtype=object))
+
+    common, query_idx, reference_idx = query.get_common_variants_intersection(
+        reference,
+        index_by="id",
+    )
+
+    assert common == ["rs2", "rs1", "rs3"]
+    np.testing.assert_array_equal(query_idx, np.array([0, 1, 2]))
+    np.testing.assert_array_equal(reference_idx, np.array([2, 0, 1]))

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 
@@ -22,6 +22,34 @@ def _native_missing_code(after: Union[int, float, str]) -> np.int32:
     return np.int32(-9)
 
 
+def validate_hardcall_values(
+    genotypes: np.ndarray,
+    *,
+    allowed_values: Optional[Tuple[int, ...]] = None,
+) -> np.ndarray:
+    if np.asarray(genotypes).dtype.kind == "c":
+        raise ValueError("Hard-call genotypes must be real numeric values.")
+    try:
+        numeric = np.asarray(genotypes, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Hard-call genotypes must be numeric values.") from exc
+    if np.any(np.isinf(numeric)):
+        raise ValueError("Hard-call genotypes cannot contain infinite values.")
+
+    called = np.isfinite(numeric) & (numeric >= 0)
+    if allowed_values is None:
+        valid = numeric == np.floor(numeric)
+        expected = "nonnegative integer allele indexes"
+    else:
+        valid = np.isin(numeric, allowed_values)
+        expected = "hard calls encoded as " + ", ".join(map(str, allowed_values))
+    if np.any(called & ~valid):
+        index = tuple(np.argwhere(called & ~valid)[0])
+        value = numeric[index]
+        raise ValueError(f"Expected {expected}; found invalid value {value!r}.")
+    return numeric
+
+
 def phased_to_hardcalls(
     genotypes: np.ndarray,
     *,
@@ -34,13 +62,31 @@ def phased_to_hardcalls(
         raise ValueError("`genotypes` must be a 2D or 3D array.")
 
     missing_code = _native_missing_code(after)
-    hardcalls = np.asarray(gt, dtype=np.int16)
+    numeric = validate_hardcall_values(
+        gt,
+        allowed_values=(0, 1) if gt.ndim == 3 else (0, 1, 2),
+    )
 
     if gt.ndim == 3:
-        missing = np.any(_missing_mask(hardcalls, before), axis=2) if rename_missing_values else None
+        if rename_missing_values:
+            missing_entries = _missing_mask(numeric, before) | ~np.isfinite(numeric)
+            hardcalls = np.where(missing_entries, 0, numeric).astype(np.int16)
+            missing = np.any(missing_entries, axis=2)
+        else:
+            if np.any(~np.isfinite(numeric)):
+                raise ValueError("Non-finite hard calls require missing-value renaming.")
+            hardcalls = numeric.astype(np.int16)
+            missing = None
         hardcalls = hardcalls.sum(axis=2, dtype=np.int16)
     else:
-        missing = _missing_mask(hardcalls, before) if rename_missing_values else None
+        if rename_missing_values:
+            missing = _missing_mask(numeric, before) | ~np.isfinite(numeric)
+            hardcalls = np.where(missing, 0, numeric).astype(np.int16)
+        else:
+            if np.any(~np.isfinite(numeric)):
+                raise ValueError("Non-finite hard calls require missing-value renaming.")
+            hardcalls = numeric.astype(np.int16)
+            missing = None
 
     if missing is not None and np.any(missing):
         hardcalls = hardcalls.copy()
@@ -60,13 +106,15 @@ def phased_to_flat_alleles(
     if gt.ndim != 3:
         raise ValueError("`genotypes` must be a 3D array to write phased alleles.")
 
-    alleles = np.asarray(gt, dtype=np.int16)
+    numeric = validate_hardcall_values(gt)
 
     if rename_missing_values:
-        missing = _missing_mask(alleles, before)
-        if np.any(missing):
-            alleles = alleles.copy()
-            alleles[missing] = _native_missing_code(after)
+        missing = _missing_mask(numeric, before) | ~np.isfinite(numeric)
+        alleles = np.where(missing, _native_missing_code(after), numeric).astype(np.int32)
+    else:
+        if np.any(~np.isfinite(numeric)):
+            raise ValueError("Non-finite hard calls require missing-value renaming.")
+        alleles = numeric.astype(np.int32)
 
     num_variants, num_samples, num_alleles = alleles.shape
-    return alleles.astype(np.int32, copy=False).reshape(num_variants, num_samples * num_alleles)
+    return alleles.reshape(num_variants, num_samples * num_alleles)

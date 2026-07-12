@@ -6,6 +6,7 @@ from typing import Optional, Sequence, Union
 import numpy as np
 
 from snputils.snp.genobj import SNPObject
+from snputils.snp.io.write._genotype_encoding import validate_hardcall_values
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +175,7 @@ class VCFWriter:
         if has_samples:
             if genotypes.ndim != 3 or genotypes.shape[2] != 2:
                 raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
+            validate_hardcall_values(genotypes)
         elif genotypes.ndim not in (2, 3):
             raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 

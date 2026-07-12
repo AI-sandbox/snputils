@@ -1099,6 +1099,21 @@ class mdPCA:
             ancestry = self.ancestry
         if average_haplotypes is None:
             average_haplotypes = self.average_haplotypes
+
+        if ancestry is not None:
+            ancestry_map = laiobj.ancestry_map if laiobj is not None else None
+            if isinstance(ancestry, int) or (isinstance(ancestry, str) and ancestry.isdigit()):
+                ancestry = int(ancestry)
+            elif ancestry_map is not None:
+                ancestry = self._define_ancestry(ancestry, ancestry_map)
+            else:
+                raise ValueError("A named ancestry requires a LocalAncestryObject with an ancestry map.")
+
+        self.snpobj = snpobj
+        self.laiobj = laiobj
+        self.labels_file = labels_file
+        self.ancestry = ancestry
+        self.average_haplotypes = average_haplotypes
         
         if self.load_masks:
             # Load precomputed ancestry-based masked genotype matrix, SNP identifiers, haplotype identifiers, and weights
@@ -1106,10 +1121,10 @@ class mdPCA:
         else:
             # Process genotype data with optional ancestry-based masking and return the corresponding SNP and individual identifiers
             mask, variants_id, haplotypes, _ = process_genotypes(
-                self.snpobj,
-                self.laiobj,
-                self.ancestry,
-                self.average_haplotypes,
+                snpobj,
+                laiobj,
+                ancestry,
+                average_haplotypes,
                 self.require_complete_haplotype_pair,
                 self.is_masked,
                 self.rsid_or_chrompos
@@ -1119,12 +1134,12 @@ class mdPCA:
             # filtering out low-coverage individuals, reordering data to match the matrix structure, and 
             # handling group-based adjustments
             mask, haplotypes, _, weights = process_labels_weights(
-                self.labels_file,
+                labels_file,
                 mask,
                 variants_id,
                 haplotypes,
-                self.average_haplotypes,
-                self.ancestry,
+                average_haplotypes,
+                ancestry,
                 self.min_percent_snps,
                 self.group_snp_frequencies_only,
                 self.groups_to_remove,
@@ -1135,7 +1150,7 @@ class mdPCA:
 
         # Call run_cov_matrix with the specified method
         self.X_new_ = self._run_cov_matrix(
-            mask[self.ancestry].T,
+            mask[ancestry].T,
             weights
         )
 

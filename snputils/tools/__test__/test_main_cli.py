@@ -165,7 +165,8 @@ def test_main_pca_sklearn_smoke_with_pgen_auto_reader(
             str(npy_path),
             "--backend",
             "sklearn",
-            "--sum-strands",
+            "--genotype-mode",
+            "dosage",
         ],
     )
 

@@ -10,7 +10,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
-from snputils._utils.genotypes import sum_diploid_genotypes
+from snputils._utils.genotypes import sum_diploid_genotypes, validate_biallelic_hard_calls
 from snputils._utils.printing import array_shape, format_repr
 
 if TYPE_CHECKING:
@@ -60,8 +60,8 @@ class SNPObject:
         Args:
             genotypes (array, optional):
                 An array containing genotype data for each sample. This array can be either 2D with shape
-                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape
-                `(n_snps, n_samples, 2)` if the strands are kept separate.
+                `(n_snps, n_samples)` for per-sample dosages, or 3D with shape
+                `(n_snps, n_samples, 2)` for phased diploid allele calls.
             samples (array of shape (n_samples,), optional):
                 An array containing unique sample identifiers.
             sample_fid (array of shape (n_samples,), optional):
@@ -195,8 +195,8 @@ class SNPObject:
         Returns:
             array:
                 An array containing genotype data for each sample. This array can be either 2D with shape
-                `(n_snps, n_samples)` if the paternal and maternal strands are summed, or 3D with shape
-                `(n_snps, n_samples, 2)` if the strands are kept separate.
+                ``(n_snps, n_samples)`` for per-sample dosages, or 3D with shape
+                ``(n_snps, n_samples, 2)`` for phased diploid allele calls.
         """
         return self.__genotypes
 
@@ -620,15 +620,15 @@ class SNPObject:
         return self.variants_chrom[np.sort(idx)]
 
     @property
-    def are_strands_summed(self) -> bool:
+    def is_dosage(self) -> Optional[bool]:
         """
-        Retrieve `are_strands_summed`.
+        Report whether ``genotypes`` stores per-sample dosages.
 
         Returns:
             bool:
-                True if the maternal and paternal strands have been summed together, which is indicated by
-                `genotypes` having shape `(n_snps, n_samples)`. False if the strands are stored separately,
-                indicated by `genotypes` having shape `(n_snps, n_samples, 2)`.
+                True when ``genotypes`` has shape ``(n_snps, n_samples)`` and
+                False when it contains phased calls with shape
+                ``(n_snps, n_samples, 2)``. None when genotypes are unavailable.
         """
         if self.genotypes is None:
             warnings.warn("Genotype data `genotypes` is None.")
@@ -664,8 +664,9 @@ class SNPObject:
         If ``calldata_gp`` is present, this converts BGEN-style genotype
         probabilities to expected alternate-allele dosage. For now this supports
         biallelic variants, which are the common GWAS case. If genotype calls are
-        present instead, 3D calls are summed across strands and 2D calls are
-        returned as floating-point dosages.
+        present instead, 3D biallelic calls are summed across the allele axis and
+        2D calls are returned as floating-point dosages. Multiallelic hard calls are
+        rejected because a single dosage value cannot identify the counted ALT allele.
 
         Args:
             allele: Allele to dosage. Currently only ``"ALT"`` or ``1`` is
@@ -681,9 +682,14 @@ class SNPObject:
             raise ValueError("SNPObject requires either `calldata_gp` or `genotypes` to compute dosage.")
 
         gt = np.asarray(self.genotypes)
+        validate_biallelic_hard_calls(
+            np.empty(0, dtype=np.int8),
+            alternate_alleles=self.variants_alt,
+        )
         if gt.ndim == 2:
             return gt.astype(np.float32, copy=True)
         if gt.ndim == 3:
+            validate_biallelic_hard_calls(gt)
             return sum_diploid_genotypes(gt, dtype=np.float32, missing_value=-1.0)
         raise ValueError("`genotypes` must be a 2D dosage array or 3D allele-call array.")
 
@@ -3347,36 +3353,6 @@ class SNPObject:
 
         return keep
 
-    def sum_strands(self, inplace: bool = False) -> Optional['SNPObject']:
-        """
-        Sum paternal and maternal strands.
-
-        Args:
-            inplace (bool, default=False):
-                If True, modifies `self` in place. If False, returns a new `SNPObject` with the variants
-                filtered. Default is False.
-
-        Returns:
-            Optional[SNPObject]:
-                A new `SNPObject` with summed strands if `inplace=False`.
-                If `inplace=True`, modifies `self` in place and returns None.
-        """
-        if self.genotypes is None:
-            warnings.warn("Genotype data `genotypes` is None.")
-            return None if not inplace else self
-
-        if self.are_strands_summed:
-            warnings.warn("Genotype data `genotypes` is already summed.")
-            return self if inplace else self.copy()
-
-        if inplace:
-            self.genotypes = sum_diploid_genotypes(self.genotypes)
-            return self
-        else:
-            snpobj = self.copy()
-            snpobj.genotypes = sum_diploid_genotypes(self.genotypes)
-            return snpobj
-
     def filter_variants(
             self,
             chrom: Optional[Union[str, Sequence[str], np.ndarray, None]] = None,
@@ -3591,9 +3567,13 @@ class SNPObject:
             raise ValueError("'genotypes' must be a 2D or 3D array.")
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
-    def filter_polymorphic_variants(self, inplace: bool = False) -> Optional['SNPObject']:
+    def filter_variable_genotypes(self, inplace: bool = False) -> Optional['SNPObject']:
         """
-        Keep variants with at least two observed genotype dosages among called samples.
+        Keep variants with at least two observed genotype values among called samples.
+
+        This filters on genotype variability, not allele polymorphism. For example,
+        a site where every called sample is heterozygous has one observed genotype
+        value and is therefore removed.
         """
         if self.genotypes is None:
             raise ValueError("Genotype data `genotypes` is None.")
@@ -4657,15 +4637,15 @@ class SNPObject:
                     f"`self.genotypes` has {self.genotypes.shape[0]} SNPs, "
                     f"while `snpobj.genotypes` has {snpobj.genotypes.shape[0]} SNPs."
                 )
-            if self.are_strands_summed and not snpobj.are_strands_summed:
+            if self.is_dosage and not snpobj.is_dosage:
                 raise ValueError(
-                    "Cannot merge SNPObjects: `self` has summed strands, but `snpobj` does not.\n"
-                    "Ensure both objects have the same genotype summation state before merging."
+                    "Cannot merge SNPObjects: `self` stores dosages, but `snpobj` stores phased calls.\n"
+                    "Ensure both objects have the same genotype representation before merging."
                 )
-            if not self.are_strands_summed and snpobj.are_strands_summed:
+            if not self.is_dosage and snpobj.is_dosage:
                 raise ValueError(
-                    "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
-                    "Ensure both objects have the same genotype summation state before merging."
+                    "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
+                    "Ensure both objects have the same genotype representation before merging."
                 )
             genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=1)
         else:
@@ -4807,15 +4787,15 @@ class SNPObject:
                     f"`self.genotypes` has {self.genotypes.shape[1]} samples, "
                     f"while `snpobj.genotypes` has {snpobj.genotypes.shape[1]} samples."
                 )
-            if self.are_strands_summed and not snpobj.are_strands_summed:
+            if self.is_dosage and not snpobj.is_dosage:
                 raise ValueError(
-                    "Cannot merge SNPObjects: `self` has summed strands, but `snpobj` does not.\n"
-                    "Ensure both objects have the same genotype summation state before merging."
+                    "Cannot merge SNPObjects: `self` stores dosages, but `snpobj` stores phased calls.\n"
+                    "Ensure both objects have the same genotype representation before merging."
                 )
-            if not self.are_strands_summed and snpobj.are_strands_summed:
+            if not self.is_dosage and snpobj.is_dosage:
                 raise ValueError(
-                    "Cannot merge SNPObjects: `snpobj` has summed strands, but `self` does not.\n"
-                    "Ensure both objects have the same genotype summation state before merging."
+                    "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
+                    "Ensure both objects have the same genotype representation before merging."
                 )
             genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=0)
         else:
@@ -4922,7 +4902,7 @@ class SNPObject:
         """
         Concatenate multiple SNPObjects along the SNP axis.
 
-        All objects must have the same sample order and genotype strand representation.
+        All objects must have the same sample order and genotype representation.
         """
         if len(snpobjs) == 0:
             raise ValueError("concat_variants requires at least one SNPObject.")

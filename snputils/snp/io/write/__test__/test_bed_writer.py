@@ -26,7 +26,7 @@ def test_bed_writer_roundtrips_summed_genotypes_and_plink_sample_metadata(tmp_pa
         sample_phenotype=["case", "control", "case"],
     )
 
-    observed = BEDReader(str(prefix)).read(sum_strands=True)
+    observed = BEDReader(str(prefix)).read(genotype_mode="dosage")
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
     np.testing.assert_array_equal(observed.samples, snpobj.samples)
     np.testing.assert_array_equal(observed.sample_fid, snpobj.sample_fid)

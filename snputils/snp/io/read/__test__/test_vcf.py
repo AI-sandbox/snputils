@@ -47,7 +47,7 @@ def test_vcf_reader_falls_back_for_format_subfields(tmp_path: Path):
         "1\t200\trs2\tC\tT\t.\tPASS\tAF=0.25\tGT:DP\t1|1:9\t0|0:6\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(fields="*", sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(fields="*", genotype_mode="phased")
 
     expected = np.array(
         [
@@ -71,7 +71,7 @@ def test_vcf_reader_reads_gt_when_format_field_is_not_first(tmp_path: Path):
         "1\t200\trs2\tC\tT\t60\tPASS\t.\tDP:GT\t9:1|0\t6:0|0\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(genotype_mode="phased")
 
     expected = np.array(
         [
@@ -91,7 +91,7 @@ def test_vcf_reader_sums_autosomal_partial_missing_as_missing(tmp_path: Path):
         "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\t1|1\t.|.\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+    snpobj = VCFReader(vcf_path).read(genotype_mode="dosage")
 
     np.testing.assert_array_equal(snpobj.genotypes, np.array([[-1, -1, 2, -1]], dtype=np.int8))
 
@@ -109,7 +109,7 @@ def test_vcf_reader_sums_non_diploid_partial_missing_as_haploid_dosage(tmp_path:
         "mitochondrial\t400\trs4\tA\tG\t.\tPASS\t.\tGT\t.|0\t.|1\t.|.\t1|0\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(sum_strands=True)
+    snpobj = VCFReader(vcf_path).read(genotype_mode="dosage")
 
     expected = np.array(
         [
@@ -134,7 +134,7 @@ def test_vcf_reader_polars_uses_internal_chrom_for_non_diploid_summing(tmp_path:
         "1\t200\trs2\tA\tG\t.\tPASS\t.\tGT\t0|.\t1|.\n"
     )
 
-    snpobj = VCFReaderPolars(vcf_path).read(fields=["ID"], sum_strands=True)
+    snpobj = VCFReaderPolars(vcf_path).read(fields=["ID"], genotype_mode="dosage")
 
     np.testing.assert_array_equal(snpobj.genotypes, np.array([[0, 2], [-1, -1]], dtype=np.int8))
     np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs1", "rs2"]))
@@ -168,7 +168,7 @@ def test_vcf_reader_falls_back_when_later_record_has_format_subfields(tmp_path: 
         "1\t200\trs2\tC\tT\t.\tPASS\tAF=0.25\tGT:DP\t1|1:9\t0|0:6\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(fields="*", sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(fields="*", genotype_mode="phased")
 
     expected = np.array(
         [
@@ -190,7 +190,7 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
             "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t1|1\t0|0\n"
         )
 
-    snpobj = VCFReader(vcf_path).read(sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(genotype_mode="phased")
 
     expected = np.array(
         [
@@ -216,7 +216,7 @@ def test_read_snp_dispatches_zstandard_vcf(tmp_path: Path):
             "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|1\n"
         )
 
-    snpobj = read_snp(vcf_path, sum_strands=False)
+    snpobj = read_snp(vcf_path, genotype_mode="phased")
 
     np.testing.assert_array_equal(snpobj.genotypes, np.array([[[0, 1]]], dtype=np.int8))
     np.testing.assert_array_equal(snpobj.samples, np.array(["S1"]))
@@ -232,7 +232,7 @@ def test_vcf_reader_read_supports_region(tmp_path: Path):
         "2\t200\trs3\tG\tA\t.\tPASS\t.\tGT\t0|0\t0|1\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(region="1:150-250", sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(region="1:150-250", genotype_mode="phased")
 
     np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs2"]))
     np.testing.assert_array_equal(snpobj.variants_pos, np.array([200]))
@@ -264,7 +264,7 @@ def test_vcf_reader_uses_pandas_fallback_for_non_tab_separator(tmp_path: Path):
         "1,200,rs2,C,T,.,PASS,.,GT,1|1,0|0\n"
     )
 
-    snpobj = VCFReader(vcf_path).read(separator=",", region="1:100-100", sum_strands=False)
+    snpobj = VCFReader(vcf_path).read(separator=",", region="1:100-100", genotype_mode="phased")
 
     np.testing.assert_array_equal(snpobj.variants_id.astype(str), np.array(["rs1"]))
     np.testing.assert_array_equal(snpobj.genotypes, np.array([[[0, 1], [1, 0]]], dtype=np.int8))

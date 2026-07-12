@@ -152,29 +152,29 @@ def test_vcf_gz_and_zst(data_path, snpobj_vcf):
                 cctx.copy_stream(f_in, f_out)
 
     # Test default VCFReader on .gz
-    snpobj_gz = VCFReader(gz_path).read(sum_strands=False)
+    snpobj_gz = VCFReader(gz_path).read(genotype_mode="phased")
     assert np.array_equal(snpobj_vcf.genotypes, snpobj_gz.genotypes)
     assert np.array_equal(snpobj_vcf.variants_pos, snpobj_gz.variants_pos)
 
     # Test default VCFReader on .zst
-    snpobj_zst = VCFReader(zst_path).read(sum_strands=False)
+    snpobj_zst = VCFReader(zst_path).read(genotype_mode="phased")
     assert np.array_equal(snpobj_vcf.genotypes, snpobj_zst.genotypes)
     assert np.array_equal(snpobj_vcf.variants_pos, snpobj_zst.variants_pos)
 
     # Test VCFReaderPolars on .gz
-    snpobj_polars_gz = VCFReaderPolars(gz_path).read(sum_strands=False)
+    snpobj_polars_gz = VCFReaderPolars(gz_path).read(genotype_mode="phased")
     assert np.array_equal(snpobj_vcf.genotypes, snpobj_polars_gz.genotypes)
     assert np.array_equal(snpobj_vcf.variants_pos, snpobj_polars_gz.variants_pos)
 
     # Test VCFReaderPolars on .zst
-    snpobj_polars_zst = VCFReaderPolars(zst_path).read(sum_strands=False)
+    snpobj_polars_zst = VCFReaderPolars(zst_path).read(genotype_mode="phased")
     assert np.array_equal(snpobj_vcf.genotypes, snpobj_polars_zst.genotypes)
     assert np.array_equal(snpobj_vcf.variants_pos, snpobj_polars_zst.variants_pos)
 
 
 # PGEN with compressed pvar
 def test_pgen_pvar_zst(data_path, snpobj_pgen):
-    snpobj = PGENReader(data_path + "/pgen_zst/subset").read(sum_strands=False)
+    snpobj = PGENReader(data_path + "/pgen_zst/subset").read(genotype_mode="phased")
     assert np.array_equal(snpobj_pgen.genotypes, snpobj.genotypes)
     assert np.array_equal(snpobj_pgen.variants_ref, snpobj.variants_ref)
     assert np.array_equal(snpobj_pgen.variants_alt, snpobj.variants_alt)
@@ -208,7 +208,7 @@ def test_bed_bim_fam_zst(data_path, snpobj_bed, tmp_path):
         cctx.copy_stream(f_in, f_out)
 
     # Read from zst compressed bim/fam
-    snpobj_zst = BEDReader(tmp_path / "subset").read(sum_strands=True)
+    snpobj_zst = BEDReader(tmp_path / "subset").read(genotype_mode="dosage")
     assert np.array_equal(snpobj_bed.genotypes, snpobj_zst.genotypes)
     assert np.array_equal(snpobj_bed.variants_pos, snpobj_zst.variants_pos)
     assert np.array_equal(snpobj_bed.samples, snpobj_zst.samples)
@@ -221,7 +221,7 @@ def test_bed_bim_fam_zst(data_path, snpobj_bed, tmp_path):
         shutil.copyfileobj(f_in, f_out)
     shutil.copy(bed_src, tmp_path / "subset_gz.bed")
 
-    snpobj_gz = BEDReader(tmp_path / "subset_gz").read(sum_strands=True)
+    snpobj_gz = BEDReader(tmp_path / "subset_gz").read(genotype_mode="dosage")
     assert np.array_equal(snpobj_bed.genotypes, snpobj_gz.genotypes)
     assert np.array_equal(snpobj_bed.variants_pos, snpobj_gz.variants_pos)
     assert np.array_equal(snpobj_bed.samples, snpobj_gz.samples)
@@ -250,7 +250,7 @@ def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
     with open(psam_src, "rb") as f_in, open(tmp_path / "subset.psam.zst", "wb") as f_out:
         cctx.copy_stream(f_in, f_out)
 
-    snpobj_zst = PGENReader(tmp_path / "subset").read(sum_strands=False)
+    snpobj_zst = PGENReader(tmp_path / "subset").read(genotype_mode="phased")
     assert np.array_equal(snpobj_pgen.genotypes, snpobj_zst.genotypes)
     assert np.array_equal(snpobj_pgen.variants_pos, snpobj_zst.variants_pos)
     assert np.array_equal(snpobj_pgen.samples, snpobj_zst.samples)
@@ -265,7 +265,7 @@ def test_pgen_pvar_psam_zst_and_gz(data_path, snpobj_pgen, tmp_path):
     with open(psam_src, "rb") as f_in, gzip.open(tmp_path / "subset_gz.psam.gz", "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
 
-    snpobj_gz = PGENReader(tmp_path / "subset_gz").read(sum_strands=False)
+    snpobj_gz = PGENReader(tmp_path / "subset_gz").read(genotype_mode="phased")
     assert np.array_equal(snpobj_pgen.genotypes, snpobj_gz.genotypes)
     assert np.array_equal(snpobj_pgen.variants_pos, snpobj_gz.variants_pos)
     assert np.array_equal(snpobj_pgen.samples, snpobj_gz.samples)

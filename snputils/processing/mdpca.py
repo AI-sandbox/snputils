@@ -22,7 +22,7 @@ class mdPCA:
     A class for performing missing data principal component analysis (mdPCA) on SNP data.
 
     The mdPCA class focuses on genotype segments from the ancestry of interest when the `is_masked` flag is set to `True`. It offers 
-    flexible processing options, allowing either separate handling of masked haplotype strands or combining (averaging) strands into a 
+    flexible processing options, allowing either separate handling of masked haplotypes or combining (averaging) haplotypes into a
     single composite representation for each individual. Moreover, the analysis can be performed on individual-level data, group-level SNP 
     frequencies, or a combination of both.
 
@@ -40,8 +40,8 @@ class mdPCA:
         ancestry: Optional[Union[int, str]] = None,
         method: str = 'weighted_cov_pca',
         is_masked: bool = True,
-        average_strands: bool = False,
-        force_nan_incomplete_strands: bool = False,
+        average_haplotypes: bool = False,
+        require_complete_haplotype_pair: bool = False,
         is_weighted: bool = False,
         groups_to_remove: List[str] = None,
         min_percent_snps: float = 4,
@@ -104,9 +104,9 @@ class mdPCA:
             is_masked (bool, default=True): 
                 If `True`, applies ancestry-specific masking to the genotype matrix, retaining only genotype data 
                 corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
-            average_strands (bool, default=False): 
+            average_haplotypes (bool, default=False):
                 True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-            force_nan_incomplete_strands (bool): 
+            require_complete_haplotype_pair (bool):
                 If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
                 Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
             is_weighted (bool, default=False): 
@@ -169,8 +169,8 @@ class mdPCA:
             self.__ancestry = None
         self.__method = method
         self.__is_masked = is_masked
-        self.__average_strands = average_strands
-        self.__force_nan_incomplete_strands = force_nan_incomplete_strands
+        self.__average_haplotypes = average_haplotypes
+        self.__require_complete_haplotype_pair = require_complete_haplotype_pair
         self.__is_weighted = is_weighted
         self.__groups_to_remove = groups_to_remove
         self.__min_percent_snps = min_percent_snps
@@ -317,39 +317,39 @@ class mdPCA:
         self.__is_masked = x
 
     @property
-    def average_strands(self) -> bool:
+    def average_haplotypes(self) -> bool:
         """
-        Retrieve `average_strands`.
+        Retrieve `average_haplotypes`.
         
         Returns:
             bool: True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
         """
-        return self.__average_strands
+        return self.__average_haplotypes
 
-    @average_strands.setter
-    def average_strands(self, x: bool) -> None:
+    @average_haplotypes.setter
+    def average_haplotypes(self, x: bool) -> None:
         """
-        Update `average_strands`.
+        Update `average_haplotypes`.
         """
-        self.__average_strands = x
+        self.__average_haplotypes = x
 
     @property
-    def force_nan_incomplete_strands(self) -> bool:
+    def require_complete_haplotype_pair(self) -> bool:
         """
-        Retrieve `force_nan_incomplete_strands`.
+        Retrieve `require_complete_haplotype_pair`.
         
         Returns:
             bool: If `True`, sets the result to NaN if either haplotype in a pair is NaN.
                       Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
         """
-        return self.__force_nan_incomplete_strands
+        return self.__require_complete_haplotype_pair
 
-    @force_nan_incomplete_strands.setter
-    def force_nan_incomplete_strands(self, x: bool) -> None:
+    @require_complete_haplotype_pair.setter
+    def require_complete_haplotype_pair(self, x: bool) -> None:
         """
-        Update `force_nan_incomplete_strands`.
+        Update `require_complete_haplotype_pair`.
         """
-        self.__force_nan_incomplete_strands = x
+        self.__require_complete_haplotype_pair = x
 
     @property
     def is_weighted(self) -> bool:
@@ -635,12 +635,12 @@ class mdPCA:
 
         Returns:
             list of str:
-                A list of sample identifiers based on `haplotypes_` and `average_strands`.
+                A list of sample identifiers based on `haplotypes_` and `average_haplotypes`.
         """
         haplotypes = self.haplotypes_
         if haplotypes is None:
             return None
-        if self.__average_strands:
+        if self.__average_haplotypes:
             return haplotypes
         else:
             return [x[:-2] for x in haplotypes]
@@ -1053,7 +1053,7 @@ class mdPCA:
             ancestry: Optional[Union[int, str]] = None,
             *,
             labels: Optional[Union[pd.DataFrame, str]] = None,
-            average_strands: Optional[bool] = None,
+            average_haplotypes: Optional[bool] = None,
         ) -> np.ndarray:
         """
         Fit the model to the SNP data stored in the provided `snpobj` and apply the dimensionality reduction on the same SNP data.
@@ -1077,9 +1077,9 @@ class mdPCA:
                 Alias for ``labels_file``. Pass only one of ``labels`` and ``labels_file``.
             ancestry (str, optional): 
                 Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
-            average_strands (bool, optional): 
+            average_haplotypes (bool, optional):
                 True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
-                If None, defaults to `self.average_strands`.
+                If None, defaults to `self.average_haplotypes`.
 
         Returns:
             array: 
@@ -1097,8 +1097,8 @@ class mdPCA:
             labels_file = self.labels_file
         if ancestry is None:
             ancestry = self.ancestry
-        if average_strands is None:
-            average_strands = self.average_strands
+        if average_haplotypes is None:
+            average_haplotypes = self.average_haplotypes
         
         if self.load_masks:
             # Load precomputed ancestry-based masked genotype matrix, SNP identifiers, haplotype identifiers, and weights
@@ -1109,8 +1109,8 @@ class mdPCA:
                 self.snpobj,
                 self.laiobj,
                 self.ancestry,
-                self.average_strands,
-                self.force_nan_incomplete_strands,
+                self.average_haplotypes,
+                self.require_complete_haplotype_pair,
                 self.is_masked,
                 self.rsid_or_chrompos
             )
@@ -1123,7 +1123,7 @@ class mdPCA:
                 mask,
                 variants_id,
                 haplotypes,
-                self.average_strands,
+                self.average_haplotypes,
                 self.ancestry,
                 self.min_percent_snps,
                 self.group_snp_frequencies_only,

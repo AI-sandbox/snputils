@@ -414,19 +414,19 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     return genotypes, ind_IDs, variants_id, variants_ref_map
 
 
-def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=False):
+def average_haplotype_pairs(masked_ancestry_matrix, require_complete_haplotype_pair=False):
     """                                                                                       
     Average haplotypes to obtain genotype data for individuals. 
 
     This function combines pairs of haplotypes by computing their mean.
-    If `force_nan_incomplete_strands=True`, the result is set to NaN if either haplotype in a pair is NaN.
+    If `require_complete_haplotype_pair=True`, the result is set to NaN if either haplotype in a pair is NaN.
     Otherwise, it computes the mean ignoring NaN values.
 
     Args:
         masked_ancestry_matrix (np.ndarray of shape (n_snps, n_haplotypes)): 
             The masked matrix for an ancestry, where n_snps represents the number of SNPs and 
             n_haplotypes represents the number of haplotypes.
-        force_nan_incomplete_strands (bool): 
+        require_complete_haplotype_pair (bool):
             If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
             Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
 
@@ -450,13 +450,13 @@ def average_parent_snps(masked_ancestry_matrix, force_nan_incomplete_strands=Fal
         where=count > 0,
     )
 
-    if force_nan_incomplete_strands:
+    if require_complete_haplotype_pair:
         avg_matrix[np.any(~finite_mask, axis=2)] = np.nan
 
     return avg_matrix
 
 
-def mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands=False, force_nan_incomplete_strands=False):
+def mask_genotypes(ancestry_matrix, genotypes, ancestry, average_haplotypes=False, require_complete_haplotype_pair=False):
     """
     Mask the genotype matrix by retaining only the entries that match a given ancestry.
 
@@ -472,9 +472,9 @@ def mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands=False, 
             Genetic matrix encoding the genotype information for haplotypes.
         ancestry (str): 
             Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
-        average_strands (bool, default=False): 
+        average_haplotypes (bool, default=False):
             Whether to average haplotypes for each individual. Default is `False`.
-        force_nan_incomplete_strands (bool): 
+        require_complete_haplotype_pair (bool):
             If True, sets the result to NaN if either haplotype in a pair is NaN.
             If False, computes the mean while ignoring NaNs.
 
@@ -504,10 +504,10 @@ def mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands=False, 
     # Reshape the masked array back to its original 2D form
     mask[ancestry] = mask[ancestry].reshape(ancestry_matrix.shape).astype(np.float16)
 
-    # If averaging strands is enabled, compute the average SNP values per individual
-    if average_strands:
+    # If averaging haplotypes is enabled, compute the average SNP values per individual
+    if average_haplotypes:
         start = time.time()
-        mask[ancestry] = average_parent_snps(mask[ancestry], force_nan_incomplete_strands)
+        mask[ancestry] = average_haplotype_pairs(mask[ancestry], require_complete_haplotype_pair)
         logging.info("Combining time --- %s seconds ---" % (time.time() - start))
 
     return mask
@@ -559,8 +559,8 @@ def process_genotypes(
         snpobj,
         laiobj,
         ancestry,
-        average_strands,
-        force_nan_incomplete_strands,
+        average_haplotypes,
+        require_complete_haplotype_pair,
         is_masked,
         rsid_or_chrompos,
         variants_ref_map=None,
@@ -570,8 +570,8 @@ def process_genotypes(
     SNP and individual identifiers.
 
     This function processes genotype data by restructuring it into a 2D matrix:
-    - If `average_strands=False`, the shape is `(n_snps, n_samples × 2)`, preserving haplotype data.
-    - If `average_strands=True`, the shape is `(n_snps, n_samples)`, averaging SNP values across haplotypes for each individual.
+    - If `average_haplotypes=False`, the shape is `(n_snps, n_samples × 2)`, preserving haplotype data.
+    - If `average_haplotypes=True`, the shape is `(n_snps, n_samples)`, averaging SNP values across haplotypes for each individual.
 
     If `is_masked=True`, the function filters SNP-haplotype values based on the specified ancestry, 
     replacing all other ancestry values with NaN.
@@ -583,9 +583,9 @@ def process_genotypes(
             A LocalAncestryObject instance.
         ancestry (int or str):
             Ancestry index (from ``0``) or compatible label from the LAI map.
-        average_strands (bool): 
+        average_haplotypes (bool):
             Whether to average haplotypes for each individual.
-        force_nan_incomplete_strands (bool): 
+        require_complete_haplotype_pair (bool):
             If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
             Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
         is_masked (bool): 
@@ -626,11 +626,11 @@ def process_genotypes(
         # with ancestry segments in the LocalAncestryObject
         ancestry_matrix = process_laiobj(laiobj, snpobj)
         # Mask the genotype matrix by retaining only the entries that match a given ancestry
-        mask = mask_genotypes(ancestry_matrix, genotypes, ancestry, average_strands, force_nan_incomplete_strands)
+        mask = mask_genotypes(ancestry_matrix, genotypes, ancestry, average_haplotypes, require_complete_haplotype_pair)
     else:
-        # If averaging strands is enabled, compute the average SNP values per individual
-        if average_strands:
-            genotypes = average_parent_snps(genotypes)
+        # If averaging haplotypes is enabled, compute the average SNP values per individual
+        if average_haplotypes:
+            genotypes = average_haplotype_pairs(genotypes)
         
         # Store the unmasked genotype data in the mask dictionary
         mask = {}
@@ -638,8 +638,8 @@ def process_genotypes(
 
         logging.info("No masking")
 
-    if average_strands:
-        # Remove duplicate haplotype identifiers (A/B strand labels)
+    if average_haplotypes:
+        # Remove duplicate haplotype identifiers (A/B haplotype labels)
         haplotypes = remove_AB_indIDs(haplotypes)
     
     return mask, variants_id, haplotypes, variants_ref_map
@@ -650,7 +650,7 @@ def process_labels_weights(
         mask, 
         variants_id, 
         haplotypes, 
-        average_strands, 
+        average_haplotypes,
         ancestry, 
         min_percent_snps, 
         group_snp_frequencies_only,
@@ -700,8 +700,8 @@ def process_labels_weights(
             The list may be reduced if some SNPs are not present in the `laiobj`.
         haplotypes (list of str): 
             A list of unique individual sample identifiers.  
-            If haplotypes are averaged (`average_strands=True`), duplicate haplotype labels (e.g., "A" and "B") are removed.
-        average_strands (bool): 
+            If haplotypes are averaged (`average_haplotypes=True`), duplicate haplotype labels (e.g., "A" and "B") are removed.
+        average_haplotypes (bool):
             Whether to average haplotypes for each individual.
         ancestry (str): 
             Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at `0`.
@@ -730,10 +730,10 @@ def process_labels_weights(
                 If `is_masked=False`, the full, unmasked genotype matrix is returned.
             - haplotypes (list of str):  
                 A list of unique individual sample identifiers after filtering.  
-                If haplotypes are averaged (`average_strands=True`), duplicate haplotype labels (e.g., "A" and "B") are removed.
+                If haplotypes are averaged (`average_haplotypes=True`), duplicate haplotype labels (e.g., "A" and "B") are removed.
             - label_list (np.ndarray of str):  
                 A NumPy array containing the labels assigned to each individual after processing.  
-                The labels may be repeated or adjusted depending on strand averaging and filtering criteria.
+                The labels may be repeated or adjusted depending on haplotype averaging and filtering criteria.
             - weight_list (np.ndarray of float):  
                 A NumPy array containing the weight assigned to each individual after processing.  
                 If `is_weighted=True`, weights are assigned based on the input file; otherwise, all weights default to 1.  
@@ -743,12 +743,12 @@ def process_labels_weights(
     labels_df = labels_file.copy() if isinstance(labels_file, pd.DataFrame) else pd.read_csv(labels_file, sep='\t')
     labels_df['indID'] = labels_df['indID'].astype(str)
     
-    if average_strands:
+    if average_haplotypes:
         # Keep IDs as-is and match them directly
         labels = np.array(labels_df['label'][labels_df['indID'].isin(haplotypes)])
         label_ind_IDs = np.array(labels_df['indID'][labels_df['indID'].isin(haplotypes)])
     else:
-        # Remove "A"/"B" suffixes for matching, then duplicate labels to cover both strands
+        # Remove "A"/"B" suffixes for matching, then duplicate labels to cover both haplotypes
         temp_ind_IDs = remove_AB_indIDs(haplotypes)
         labels = np.array(labels_df['label'][labels_df['indID'].isin(temp_ind_IDs)])
         labels = np.repeat(labels, 2)
@@ -768,7 +768,7 @@ def process_labels_weights(
         combinations = np.zeros(len(labels))
         combination_weights = np.zeros(len(labels))
     else:
-        if average_strands:
+        if average_haplotypes:
             weights = np.array(labels_df['weight'][labels_df['indID'].isin(haplotypes)])
             if 'combination' in labels_df.columns:
                 combinations = np.array(labels_df['combination'][labels_df['indID'].isin(haplotypes)])
@@ -780,7 +780,7 @@ def process_labels_weights(
                 combination_weights = np.ones(len(weights))
         else:
             temp_ind_IDs = remove_AB_indIDs(haplotypes)
-            # Retrieve once, then duplicate for A/B strands
+            # Retrieve once, then duplicate for A/B haplotypes
             weights = np.array(labels_df['weight'][labels_df['indID'].isin(temp_ind_IDs)])
             weights = np.repeat(weights, 2)
             if 'combination' in labels_df.columns:

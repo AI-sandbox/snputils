@@ -1,8 +1,68 @@
 from __future__ import annotations
 
-from typing import Union, Optional
+from typing import cast, Literal, Optional, overload, Union
 
 import numpy as np
+
+
+GenotypeMode = Literal["auto", "dosage", "phased"]
+ExplicitGenotypeMode = Literal["dosage", "phased"]
+
+
+_MULTIALLELIC_DOSAGE_ERROR = (
+    "genotype_mode='dosage' only supports biallelic variants; "
+    "use genotype_mode='phased' for multiallelic allele calls."
+)
+
+
+@overload
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: Literal[False],
+) -> ExplicitGenotypeMode: ...
+
+
+@overload
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: Literal[True] = True,
+) -> GenotypeMode: ...
+
+
+def normalize_genotype_mode(
+    genotype_mode: str,
+    *,
+    allow_auto: bool = True,
+) -> GenotypeMode:
+    """Validate and normalize a requested genotype representation."""
+    if not isinstance(genotype_mode, str):
+        raise TypeError("genotype_mode must be a string.")
+
+    normalized = genotype_mode.strip().lower()
+    allowed = {"dosage", "phased"}
+    if allow_auto:
+        allowed.add("auto")
+    if normalized not in allowed:
+        choices = "'auto', 'dosage', or 'phased'" if allow_auto else "'dosage' or 'phased'"
+        raise ValueError(f"genotype_mode must be {choices}.")
+    return cast(GenotypeMode, normalized)
+
+
+def validate_biallelic_hard_calls(
+    genotypes: np.ndarray,
+    *,
+    alternate_alleles: Optional[np.ndarray] = None,
+) -> None:
+    """Reject hard calls that cannot be represented by one ALT dosage value."""
+    if alternate_alleles is not None:
+        alts = np.asarray(alternate_alleles, dtype=object).ravel()
+        if any("," in str(alt) for alt in alts if alt is not None):
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+
+    if np.any(np.asarray(genotypes) > 1):
+        raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
 
 
 def sum_diploid_alleles(

@@ -24,7 +24,7 @@ def _phased_chunk_size(num_variants: int, num_samples: int) -> int:
     )
 
 
-def estimate_separate_strands_peak_bytes(
+def estimate_phased_alleles_peak_bytes(
     num_variants: int,
     num_samples: int,
     *,
@@ -58,7 +58,7 @@ def _is_contiguous_variant_chunk(variant_idxs: np.ndarray) -> bool:
     )
 
 
-def read_separate_strands(
+def read_phased_alleles(
     pgen_reader,
     variant_idxs: np.ndarray,
     num_variants: int,
@@ -135,6 +135,6 @@ def _raise_if_unphased_heterozygote(alleles: np.ndarray, phase_present: np.ndarr
     heterozygous = alleles[:, :, 0] != alleles[:, :, 1]
     if np.any(called & heterozygous & ~phase_present):
         raise ValueError(
-            "Cannot read unphased heterozygous PGEN genotypes with `sum_strands=False`; "
-            "use `sum_strands=True` to load 0/1/2 genotype dosages."
+            "Cannot read unphased heterozygous PGEN genotypes with genotype_mode='phased'; "
+            "use genotype_mode='dosage' to load 0/1/2 genotype dosages."
         )

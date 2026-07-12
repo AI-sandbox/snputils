@@ -9,7 +9,7 @@ def create_benchmark_test(
     name,
     ref_array,
     memory_profile,
-    sum_strands=True,
+    genotype_mode="dosage",
     ref_reader_func=None,
     assert_allclose=False,
     rtol=1e-7,
@@ -17,7 +17,7 @@ def create_benchmark_test(
     equal_nan=False,
     verify=True,
 ):
-    timed_reader = functools.partial(reader_func, file_path, sum_strands=sum_strands)
+    timed_reader = functools.partial(reader_func, file_path, genotype_mode=genotype_mode)
 
     if memory_profile:
         from memory_profiler import memory_usage
@@ -66,7 +66,7 @@ def create_benchmark_test(
         if ref_array is None:
             if ref_reader_func is None:
                 raise ValueError("ref_reader_func is required when ref_array is None.")
-            ref_array = ref_reader_func(file_path, sum_strands=sum_strands)
+            ref_array = ref_reader_func(file_path, genotype_mode=genotype_mode)
         if assert_allclose:
             np.testing.assert_allclose(
                 result,

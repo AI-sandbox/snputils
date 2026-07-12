@@ -85,8 +85,8 @@ class VCFWriter:
                 - `-1`: use all available processors.  
                 - Any other integer: use the specified number of jobs.
             phased: 
-                If True, genotype data is written in "maternal|paternal" format.  
-                If False, genotype data is written in "maternal/paternal" format.
+                If True, genotype data is written in "first_allele|second_allele" format.
+                If False, genotype data is written in "first_allele/second_allele" format.
         """
         del n_jobs
  

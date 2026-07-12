@@ -367,7 +367,7 @@ def _iter_snp_chunks(
             return
         gt = np.asarray(snp_reader.genotypes)
         if gt.ndim not in (2, 3):
-            raise ValueError("GWAS expects SNPObject.genotypes with shape (variants, samples[, strands]).")
+            raise ValueError("GWAS expects SNPObject.genotypes with shape (variants, samples[, haplotypes]).")
 
         sample_indices = np.asarray(sample_indices, dtype=np.int64)
         n_variants = int(gt.shape[0])
@@ -391,7 +391,7 @@ def _iter_snp_chunks(
         for chunk in snp_reader.iter_read(
             fields=["GT", "#CHROM", "POS", "ID", "REF", "ALT"],
             sample_idxs=np.asarray(sample_indices, dtype=np.uint32),
-            sum_strands=True,
+            genotype_mode="dosage",
             chunk_size=chunk_size,
         ):
             yield {
@@ -408,7 +408,7 @@ def _iter_snp_chunks(
         for chunk in snp_reader.iter_read(
             fields=["#CHROM", "CHROM", "POS", "ID", "REF", "ALT"],
             samples=list(aligned_samples),
-            sum_strands=True,
+            genotype_mode="dosage",
             chunk_size=chunk_size,
         ):
             yield {
@@ -432,7 +432,7 @@ def _iter_snp_chunks(
                 "calldata/GT",
             ],
             samples=list(aligned_samples),
-            sum_strands=True,
+            genotype_mode="dosage",
         )
         if full.genotypes is None:
             return

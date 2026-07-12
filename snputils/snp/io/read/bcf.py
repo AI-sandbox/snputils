@@ -10,7 +10,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from snputils._utils.genotypes import sum_diploid_genotypes
+from snputils._utils.genotypes import (
+    GenotypeMode,
+    _MULTIALLELIC_DOSAGE_ERROR,
+    normalize_genotype_mode,
+    sum_diploid_genotypes,
+)
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read.vcf import (
@@ -695,8 +700,8 @@ def _raise_if_unphased_bcf_gt(raw: np.ndarray, decoded: np.ndarray) -> None:
     second_allele_phased = (raw[:, 1] & 1) != 0
     if np.any(second_allele_called & ~second_allele_phased):
         raise ValueError(
-            "Cannot read unphased BCF genotypes with `sum_strands=False`; "
-            "use `sum_strands=True` to load 0/1/2 genotype dosages."
+            "Cannot read unphased BCF genotypes with genotype_mode='phased'; "
+            "use genotype_mode='dosage' to load 0/1/2 genotype dosages."
         )
 
 
@@ -909,7 +914,7 @@ def _batch_decode_gt(
     n_samples: int,
     n_records: int,
     sample_index_array: np.ndarray,
-    sum_strands: bool,
+    return_dosage: bool,
     missing_as_haploid: Optional[Union[bool, np.ndarray]] = None,
 ) -> np.ndarray:
     """Batch-decode GT data for all records using vectorized numpy operations.
@@ -922,7 +927,7 @@ def _batch_decode_gt(
         raise ValueError(f"Unsupported GT integer width in BCF FORMAT/GT: {type_size}")
     n_sel = len(sample_index_array)
     if n_vals < 1:
-        if sum_strands:
+        if return_dosage:
             return np.empty((n_records, n_sel), dtype=np.int8)
         return np.empty((n_records, n_sel, 0), dtype=np.int8)
     if n_vals not in (1, 2):
@@ -949,7 +954,7 @@ def _batch_decode_gt(
         ).ravel()
         decode_samples = n_sel
 
-    if sum_strands:
+    if return_dosage:
         out = np.empty((n_records, n_sel), dtype=np.int8)
     else:
         out = np.empty((n_records, n_sel, 2), dtype=np.int8)
@@ -973,7 +978,7 @@ def _batch_decode_gt(
         decoded = (raw.astype(np.int16, copy=False) >> 1) - 1
 
         if n_vals == 1:
-            if sum_strands:
+            if return_dosage:
                 out[start:stop] = decoded[:, :, 0].astype(np.int8, copy=False)
             else:
                 chunk = out[start:stop]
@@ -981,7 +986,7 @@ def _batch_decode_gt(
                 chunk[:, :, 1] = -1
             continue
 
-        if sum_strands:
+        if return_dosage:
             chunk_missing_as_haploid = None
             if missing_as_haploid is not None:
                 chunk_missing_as_haploid = missing_as_haploid
@@ -1054,7 +1059,7 @@ class BCFReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         region: Optional[str] = None,
-        sum_strands: Optional[bool] = None,
+        genotype_mode: GenotypeMode = "auto",
         chromosome_ploidy: Optional[str] = None,
     ) -> SNPObject:
         """
@@ -1076,13 +1081,13 @@ class BCFReader(SNPBaseReader):
                 conventions.
             region: Optional genomic region, such as ``"22"`` or
                 ``"22:100000-200000"``.
-            sum_strands: If True, sum the two diploid alleles per sample and
-                return dosages in ``genotypes``. If False, keep the two allele
-                columns separate; unphased GT calls are rejected because their
-                allele order is not meaningful. If None, preserve phased GT
-                calls and fall back to dosages for unphased GT calls.
+            genotype_mode: ``"dosage"`` returns biallelic ALT-copy counts
+                (``0``, ``1``, or ``2``) and rejects multiallelic variants.
+                ``"phased"`` keeps phased allele columns separate and rejects
+                unphased calls. ``"auto"`` (default) preserves phased calls and
+                falls back to dosage for unphased calls.
             chromosome_ploidy:
-                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
                 skips non-diploid chromosome checks and can be faster. The default None/"auto"
                 preserves existing behavior.
@@ -1096,8 +1101,9 @@ class BCFReader(SNPBaseReader):
         if variant_idxs is not None and variant_ids is not None:
             raise ValueError("Only one of variant_idxs and variant_ids can be specified.")
 
+        genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
-        if sum_strands is None:
+        if genotype_mode == "auto":
             try:
                 return self.read(
                     fields=fields,
@@ -1107,7 +1113,7 @@ class BCFReader(SNPBaseReader):
                     variant_ids=variant_ids,
                     variant_idxs=variant_idxs,
                     region=region,
-                    sum_strands=False,
+                    genotype_mode="phased",
                     chromosome_ploidy=chromosome_ploidy,
                 )
             except ValueError as exc:
@@ -1121,10 +1127,11 @@ class BCFReader(SNPBaseReader):
                     variant_ids=variant_ids,
                     variant_idxs=variant_idxs,
                     region=region,
-                    sum_strands=True,
+                    genotype_mode="dosage",
                     chromosome_ploidy=chromosome_ploidy,
                 )
-        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
+        return_dosage = genotype_mode == "dosage"
+        detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
 
         selected_fields = _normalize_fields(fields, exclude_fields)
         region_filter = _parse_vcf_region(region)
@@ -1137,13 +1144,13 @@ class BCFReader(SNPBaseReader):
         if has_filtering:
             return self._read_filtered(
                 data, body_offset, header, file_samples, sample_index_array,
-                selected_fields, region_filter, variant_ids, variant_idxs, sum_strands,
+                selected_fields, region_filter, variant_ids, variant_idxs, return_dosage,
                 detect_non_diploid,
             )
 
         return self._read_all(
             data, body_offset, header, file_samples, sample_index_array,
-            selected_fields, sum_strands, detect_non_diploid,
+            selected_fields, return_dosage, detect_non_diploid,
         )
 
     def _read_all(
@@ -1154,20 +1161,20 @@ class BCFReader(SNPBaseReader):
         file_samples: np.ndarray,
         sample_index_array: np.ndarray,
         selected_fields: list[str],
-        sum_strands: bool,
+        return_dosage: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
         """Optimized bulk read of all records with no variant filtering."""
         if selected_fields == ["GT"]:
             gt_only = self._try_read_gt_only_all(
-                data, body_offset, header, file_samples, sample_index_array, sum_strands,
+                data, body_offset, header, file_samples, sample_index_array, return_dosage,
                 detect_non_diploid,
             )
             if gt_only is not None:
                 return gt_only
         elif "GT" in selected_fields and set(selected_fields).issubset(_CORE_FIELDS):
             core = self._try_read_core_all(
-                data, body_offset, header, file_samples, sample_index_array, selected_fields, sum_strands,
+                data, body_offset, header, file_samples, sample_index_array, selected_fields, return_dosage,
                 detect_non_diploid,
             )
             if core is not None:
@@ -1178,10 +1185,12 @@ class BCFReader(SNPBaseReader):
         n_records = len(record_offsets)
 
         if n_records == 0:
-            return self._empty_snpobject(selected_fields, file_samples, sample_index_array, sum_strands)
+            return self._empty_snpobject(selected_fields, file_samples, sample_index_array, return_dosage)
 
         l_shared, l_indiv, contig_ids, positions, qual_raw, n_alleles, n_info_arr, n_fmt_arr = \
             _extract_fixed_fields(data, record_offsets)
+        if return_dosage and np.any(n_alleles > 2):
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
 
         n_file_samples = len(file_samples)
         n_selected_samples = len(sample_index_array)
@@ -1219,7 +1228,7 @@ class BCFReader(SNPBaseReader):
         # Batch GT decode
         if need_gt and n_records > 0:
             if n_file_samples == 0 and np.all(n_fmt_arr == 0):
-                if sum_strands:
+                if return_dosage:
                     genotypes = np.empty((n_records, 0), dtype=np.int8)
                 else:
                     genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
@@ -1239,12 +1248,12 @@ class BCFReader(SNPBaseReader):
                 if uniform_indiv:
                     genotypes = _batch_decode_gt(
                         data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
-                        n_file_samples, n_records, sample_index_array, sum_strands,
+                        n_file_samples, n_records, sample_index_array, return_dosage,
                         missing_as_haploid=non_diploid_chromosomes,
                     )
                 else:
                     # Fallback: per-record GT decode
-                    if sum_strands:
+                    if return_dosage:
                         genotypes = np.empty((n_records, n_selected_samples), dtype=np.int8)
                     else:
                         genotypes = np.empty((n_records, n_selected_samples, 2), dtype=np.int8)
@@ -1261,11 +1270,11 @@ class BCFReader(SNPBaseReader):
                             n_file_samples,
                             nv,
                             ts,
-                            require_phase=not sum_strands,
+                            require_phase=not return_dosage,
                             phase_sample_idxs=sample_index_array,
                         )
                         gt = gt[sample_index_array]
-                        if sum_strands:
+                        if return_dosage:
                             missing_as_haploid = None
                             if non_diploid_chromosomes is not None:
                                 missing_as_haploid = bool(non_diploid_chromosomes[i])
@@ -1465,7 +1474,7 @@ class BCFReader(SNPBaseReader):
         header: _BCFHeader,
         file_samples: np.ndarray,
         sample_index_array: np.ndarray,
-        sum_strands: bool,
+        return_dosage: bool,
         detect_non_diploid: bool,
     ) -> Optional[SNPObject]:
         """Fast path for full-file genotype-only reads.
@@ -1475,7 +1484,7 @@ class BCFReader(SNPBaseReader):
         individual sections directly.
         """
         if body_offset >= len(data):
-            return self._empty_snpobject(["GT"], file_samples, sample_index_array, sum_strands)
+            return self._empty_snpobject(["GT"], file_samples, sample_index_array, return_dosage)
         if detect_non_diploid and _header_has_non_diploid_contigs(header):
             return None
 
@@ -1490,7 +1499,7 @@ class BCFReader(SNPBaseReader):
             )
         if n_samples == 0 and n_fmt == 0:
             n_records = _count_records(data, body_offset)
-            if sum_strands:
+            if return_dosage:
                 genotypes = np.empty((n_records, 0), dtype=np.int8)
             else:
                 genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
@@ -1519,12 +1528,12 @@ class BCFReader(SNPBaseReader):
                 gt_type_size,
                 first_l_indiv,
                 sample_arg,
-                sum_strands,
+                return_dosage,
             )
             if decoded is not None:
                 gt_buffer, n_records = decoded
                 genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
-                if sum_strands:
+                if return_dosage:
                     genotypes = genotypes.reshape(n_records, len(sample_index_array))
                 else:
                     genotypes = genotypes.reshape(n_records, len(sample_index_array), 2)
@@ -1537,7 +1546,7 @@ class BCFReader(SNPBaseReader):
 
         genotypes = _batch_decode_gt(
             data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
-            n_samples, n_records, sample_index_array, sum_strands,
+            n_samples, n_records, sample_index_array, return_dosage,
         )
         return SNPObject(genotypes=genotypes)
 
@@ -1549,12 +1558,12 @@ class BCFReader(SNPBaseReader):
         file_samples: np.ndarray,
         sample_index_array: np.ndarray,
         selected_fields: list[str],
-        sum_strands: bool,
+        return_dosage: bool,
         detect_non_diploid: bool,
     ) -> Optional[SNPObject]:
         """Fast path for full-file GT plus core variant metadata reads."""
         if body_offset >= len(data):
-            return self._empty_snpobject(selected_fields, file_samples, sample_index_array, sum_strands)
+            return self._empty_snpobject(selected_fields, file_samples, sample_index_array, return_dosage)
         if detect_non_diploid and _header_has_non_diploid_contigs(header):
             return None
 
@@ -1592,7 +1601,7 @@ class BCFReader(SNPBaseReader):
             gt_type_size,
             first_l_indiv,
             sample_arg,
-            sum_strands,
+            return_dosage,
             pass_filter_id,
         )
         if decoded is None:
@@ -1611,7 +1620,7 @@ class BCFReader(SNPBaseReader):
         ) = decoded
 
         genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
-        if sum_strands:
+        if return_dosage:
             genotypes = genotypes.reshape(n_records, len(sample_index_array))
         else:
             genotypes = genotypes.reshape(n_records, len(sample_index_array), 2)
@@ -1662,7 +1671,7 @@ class BCFReader(SNPBaseReader):
         region_filter: Optional[Tuple[str, Optional[int], Optional[int]]],
         variant_ids: Optional[Sequence[str]],
         variant_idxs: Optional[Sequence[int]],
-        sum_strands: bool,
+        return_dosage: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
         """Read with variant filtering - uses the original per-record approach."""
@@ -1679,7 +1688,7 @@ class BCFReader(SNPBaseReader):
         if record_offsets_list is None:
             # No filtering was actually applied - redirect to fast path
             return self._read_all(data, body_offset, header, file_samples,
-                                  sample_index_array, selected_fields, sum_strands,
+                                  sample_index_array, selected_fields, return_dosage,
                                   detect_non_diploid)
 
         n_selected_records = len(record_offsets_list)
@@ -1689,7 +1698,7 @@ class BCFReader(SNPBaseReader):
         samples = file_samples[sample_index_array] if "IID" in selected_fields else None
 
         if "GT" in selected_fields:
-            if sum_strands:
+            if return_dosage:
                 genotypes = np.empty((n_selected_records, n_selected_samples), dtype=np.int8)
             else:
                 genotypes = np.empty((n_selected_records, n_selected_samples, 2), dtype=np.int8)
@@ -1729,6 +1738,8 @@ class BCFReader(SNPBaseReader):
             contig_id = _I32.unpack_from(data, base)[0]
             pos = _I32.unpack_from(data, base + 4)[0] + 1
             n_alleles = _U32.unpack_from(data, base + 16)[0] >> 16
+            if return_dosage and n_alleles > 2:
+                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
             n_info = _U32.unpack_from(data, base + 16)[0] & 0xFFFF
             n_fmt = _U32.unpack_from(data, base + 20)[0] >> 24
             n_samples = _U32.unpack_from(data, base + 20)[0] & 0xFFFFFF
@@ -1889,11 +1900,11 @@ class BCFReader(SNPBaseReader):
                         n_samples,
                         n_vals,
                         type_size,
-                        require_phase=not sum_strands,
+                        require_phase=not return_dosage,
                         phase_sample_idxs=sample_index_array,
                     )
                     gt = gt[sample_index_array]
-                    if sum_strands:
+                    if return_dosage:
                         genotypes[out_idx] = sum_diploid_genotypes(
                             gt,
                             missing_as_haploid=missing_as_haploid,
@@ -1955,11 +1966,11 @@ class BCFReader(SNPBaseReader):
         selected_fields: list[str],
         file_samples: np.ndarray,
         sample_index_array: np.ndarray,
-        sum_strands: bool,
+        return_dosage: bool,
     ) -> SNPObject:
         n_sel = len(sample_index_array)
         return SNPObject(
-            genotypes=np.empty((0, n_sel) if sum_strands else (0, n_sel, 2), dtype=np.int8) if "GT" in selected_fields else None,
+            genotypes=np.empty((0, n_sel) if return_dosage else (0, n_sel, 2), dtype=np.int8) if "GT" in selected_fields else None,
             calldata_gp=None,
             samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
             variants_ref=np.empty(0, dtype=object) if "REF" in selected_fields else None,

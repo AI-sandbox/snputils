@@ -283,7 +283,7 @@ def run_snputils(
     )
 
     reader = SNPReader(plink_prefix.with_suffix(".bed"))
-    snpobj = reader.read(sum_strands=True)
+    snpobj = reader.read(genotype_mode="dosage")
 
     if snpobj.samples is None or snpobj.genotypes is None:
         raise RuntimeError("BEDReader did not return genotypes or sample IDs.")
@@ -911,10 +911,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_variants=args.max_variants,
         require_biallelic=True,
         require_complete=True,
-        require_polymorphic=not args.include_monomorphic,
+        require_variable_genotypes=not args.include_monomorphic,
         snv_only=True,
         panel_url=args.panel_url,
-        sum_strands=False,
+        genotype_mode="phased",
     )
     if subset.sample_fid is None or subset.sample_sex is None:
         raise RuntimeError("load_dataset did not return population and sex labels on SNPObject.")

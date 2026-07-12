@@ -35,7 +35,7 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
                    help="#SNPs per window.")
     p.add_argument("--store-latlon-as-nvec", action="store_true",
                    help="Convert lat/lon to unit n-vectors (x,y,z).")
-    p.add_argument("--make-haploid", action="store_true",
+    p.add_argument("--expand-haplotypes", action="store_true",
                    help="Flatten diploid genotypes into haplotypes.")
     p.add_argument("--device", default="cpu",
                    help="torch device string, e.g. 'cuda:0'.")
@@ -222,7 +222,7 @@ def _write_exact_msp(
     else:
         cm_per_snp = np.asarray(cm_per_snp)
 
-    haplotypes = [f"{sample}.{strand}" for sample in samples for strand in range(2)]
+    haplotypes = [f"{sample}.{haplotype}" for sample in samples for haplotype in range(2)]
     segment_ptrs = np.zeros(n_haplotypes, dtype=np.int64)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -302,7 +302,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
     validate_phased_simulation_input(args.snp)
 
     log.info("Reading SNP input...")
-    snp_data = SNPReader(args.snp).read(sum_strands=False)
+    snp_data = SNPReader(args.snp).read(genotype_mode="phased")
 
     log.info("Reading metadata table...")
     meta = pd.read_csv(args.metadata, sep=None, engine="python")
@@ -333,7 +333,7 @@ def run_simulator_command(args: argparse.Namespace) -> int:
         snp_data             = snp_data,
         meta                 = meta,
         genetic_map          = genetic_map,
-        make_haploid         = args.make_haploid,
+        expand_haplotypes         = args.expand_haplotypes,
         window_size          = args.window_size,
         store_latlon_as_nvec = args.store_latlon_as_nvec,
         ancestry_proportions = ancestry_proportions,

@@ -357,7 +357,7 @@ def allele_freq_stream(
     else:
         chunk_iter = iter(data)
 
-    force_diploid_2d = bool(iter_kwargs.get("sum_strands", False))
+    force_diploid_2d = iter_kwargs.get("genotype_mode", "phased") == "dosage"
 
     lai_object = None
     lai_window_mapper: Optional[_IterWindowsLAIMapper] = None

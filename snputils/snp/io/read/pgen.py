@@ -6,12 +6,18 @@ import numpy as np
 import polars as pl
 import pgenlib as pg
 
-from snputils._utils.genotypes import sum_diploid_alleles
+from snputils._utils.genotypes import (
+    ExplicitGenotypeMode,
+    GenotypeMode,
+    _MULTIALLELIC_DOSAGE_ERROR,
+    normalize_genotype_mode,
+    sum_diploid_alleles,
+)
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
-    estimate_separate_strands_peak_bytes,
-    read_separate_strands,
+    estimate_phased_alleles_peak_bytes,
+    read_phased_alleles,
 )
 
 log = logging.getLogger(__name__)
@@ -67,6 +73,54 @@ def _detect_pvar_separator(line: str) -> str:
     return " "
 
 
+def _find_pvar_path(filename_noext: str) -> Optional[str]:
+    return next(
+        (
+            filename_noext + extension
+            for extension in (".pvar", ".pvar.zst", ".pvar.gz")
+            if os.path.exists(filename_noext + extension)
+        ),
+        None,
+    )
+
+
+def _open_pgen_reader(
+    filename_noext: str,
+    *,
+    raw_sample_ct: Optional[int],
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    genotype_mode: GenotypeMode,
+) -> tuple[Any, bool]:
+    """Open the biallelic fast path first; consult PVAR only after PGEN reports multiallelic data."""
+    reader_kwargs = {
+        "raw_sample_ct": raw_sample_ct,
+        "variant_ct": variant_ct,
+        "sample_subset": sample_subset,
+    }
+    try:
+        return pg.PgenReader(str.encode(filename_noext + ".pgen"), **reader_kwargs), False
+    except RuntimeError as exc:
+        if "multiallelic variants present" not in str(exc):
+            raise
+        if genotype_mode == "dosage":
+            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR) from exc
+
+    pvar_filename = _find_pvar_path(filename_noext)
+    if pvar_filename is None:
+        raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
+    with pg.PvarReader(str.encode(pvar_filename)) as pvar_reader:
+        allele_idx_offsets = pvar_reader.get_allele_idx_offsets()
+    return (
+        pg.PgenReader(
+            str.encode(filename_noext + ".pgen"),
+            allele_idx_offsets=allele_idx_offsets,
+            **reader_kwargs,
+        ),
+        True,
+    )
+
+
 @SNPBaseReader.register
 class PGENReader(SNPBaseReader):
     def read(
@@ -77,7 +131,7 @@ class PGENReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: Optional[bool] = None,
+        genotype_mode: GenotypeMode = "auto",
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
     ) -> SNPObject:
@@ -95,13 +149,13 @@ class PGENReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            sum_strands: If True, read genotype dosages in a single `int8`
-                array with values `{0, 1, 2}`. If False, read phased alleles
-                separately; this requires PGEN hardcall phase information. If
-                None, preserve phased hardcalls when possible and fall back to
-                dosages for unphased hardcalls.
+            genotype_mode: ``"dosage"`` returns one biallelic ALT-copy count per
+                sample as an ``int8`` value in ``{0, 1, 2}`` and rejects multiallelic variants. ``"phased"``
+                returns phased allele calls and requires PGEN hardcall phase
+                information. ``"auto"`` (default) preserves phased hardcalls
+                when possible and falls back to dosage for unphased hardcalls.
             chromosome_ploidy:
-                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
                 skips non-diploid chromosome checks and can be faster. The default None/"auto"
                 preserves existing behavior.
@@ -118,6 +172,7 @@ class PGENReader(SNPBaseReader):
         assert (
             variant_idxs is None or variant_ids is None
         ), "Only one of variant_idxs and variant_ids can be specified"
+        genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
 
         if isinstance(fields, str):
@@ -292,11 +347,12 @@ class PGENReader(SNPBaseReader):
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.pgen")
-            pgen_reader = pg.PgenReader(
-                str.encode(filename_noext + ".pgen"),
+            pgen_reader, contains_multiallelic = _open_pgen_reader(
+                filename_noext,
                 raw_sample_ct=file_num_samples,
                 variant_ct=file_num_variants,
                 sample_subset=sample_idxs,
+                genotype_mode=genotype_mode,
             )
 
             try:
@@ -306,17 +362,19 @@ class PGENReader(SNPBaseReader):
                     variant_idxs = np.arange(num_variants, dtype=np.uint32)
 
                 hardcall_phase_present = pgen_reader.hardcall_phase_present()
-                auto_sum_strands = sum_strands is None
-                effective_sum_strands = bool(sum_strands)
-                if auto_sum_strands:
-                    effective_sum_strands = not hardcall_phase_present
-                elif not effective_sum_strands and not hardcall_phase_present:
+                auto_mode = genotype_mode == "auto"
+                effective_return_dosage = genotype_mode == "dosage"
+                if auto_mode:
+                    effective_return_dosage = not hardcall_phase_present
+                elif not effective_return_dosage and not hardcall_phase_present:
                     raise ValueError(
                         "This PGEN file does not contain hardcall phase information, so "
-                        "`sum_strands=False` is not supported. Use `sum_strands=True` "
+                        "genotype_mode='phased' is not supported. Use genotype_mode='dosage' "
                         "to load 0/1/2 genotype dosages."
                     )
-                detect_non_diploid = effective_sum_strands and chromosome_ploidy_mode != "autosomal"
+                if effective_return_dosage and contains_multiallelic:
+                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+                detect_non_diploid = effective_return_dosage and chromosome_ploidy_mode != "autosomal"
 
                 non_diploid_mask = None
                 if detect_non_diploid:
@@ -331,23 +389,23 @@ class PGENReader(SNPBaseReader):
                         )
 
                 # required arrays: variant_idxs + sample_idxs + genotypes
-                if not effective_sum_strands:
+                if not effective_return_dosage:
                     required_ram = (
                         (num_samples + num_variants) * 4
-                        + estimate_separate_strands_peak_bytes(num_variants, num_samples)
+                        + estimate_phased_alleles_peak_bytes(num_variants, num_samples)
                     )
                 else:
                     required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
                     if non_diploid_mask is not None and hardcall_phase_present:
                         num_non_diploid = int(np.sum(non_diploid_mask))
-                        required_ram += estimate_separate_strands_peak_bytes(
+                        required_ram += estimate_phased_alleles_peak_bytes(
                             num_non_diploid,
                             num_samples,
                         )
                 log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
-                if not effective_sum_strands:
-                    genotypes = read_separate_strands(
+                if not effective_return_dosage:
+                    genotypes = read_phased_alleles(
                         pgen_reader,
                         variant_idxs,
                         num_variants,
@@ -363,7 +421,7 @@ class PGENReader(SNPBaseReader):
                                 variant_idxs[non_diploid_output_rows],
                                 dtype=np.uint32,
                             )
-                            separate = read_separate_strands(
+                            separate = read_phased_alleles(
                                 pgen_reader,
                                 non_diploid_variant_idxs,
                                 non_diploid_variant_idxs.size,
@@ -512,7 +570,7 @@ class PGENReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = False,
+        genotype_mode: ExplicitGenotypeMode = "phased",
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
         chunk_size: int = 10_000,
@@ -523,11 +581,12 @@ class PGENReader(SNPBaseReader):
         This yields a sequence of SNPObject chunks along the SNP axis.
 
         chromosome_ploidy:
-            Optional hint for chromosome-specific strand summing. Use "autosomal" when
+            Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
             all selected variants should be treated as ordinary diploid/autosomal; this
             skips non-diploid chromosome checks and can be faster. The default None/"auto"
             preserves existing behavior.
         """
+        genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         _normalize_chromosome_ploidy(chromosome_ploidy)
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
@@ -552,7 +611,7 @@ class PGENReader(SNPBaseReader):
                 sample_ids=sample_ids,
                 sample_idxs=sample_idxs,
                 variant_idxs=selector_chunk,
-                sum_strands=sum_strands,
+                genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
             )

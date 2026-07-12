@@ -24,11 +24,11 @@ def pytest_addoption(parser):
         help="Run only the benchmark case whose reader name matches this value"
     )
     parser.addoption(
-        "--sum-strands",
+        "--genotype-mode",
         action="store",
-        default="true",
-        choices=("true", "false"),
-        help="Whether readers should return summed genotype dosages or separate diploid alleles."
+        default="dosage",
+        choices=("dosage", "phased"),
+        help="Whether readers should return genotype dosages or phased allele calls."
     )
 
 
@@ -54,6 +54,6 @@ def reader_name(request):
 
 
 @pytest.fixture
-def sum_strands(request):
-    """Fixture to choose summed dosages or separate allele strands."""
-    return request.config.getoption("--sum-strands") == "true"
+def genotype_mode(request):
+    """Fixture selecting dosage or phased genotype output."""
+    return request.config.getoption("--genotype-mode")

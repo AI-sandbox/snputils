@@ -96,7 +96,7 @@ def test_from_file_accepts_compressed_metadata(tmp_path: Path, compression_suffi
 
 def test_from_embedding_uses_sample_level_pca():
     snpobj = build_synthetic_snp_dataset(n_samples=12, n_snps=40, seed=11)
-    pca = PCA(n_components=3, average_strands=True)
+    pca = PCA(n_components=3, average_haplotypes=True)
     pca.fit_transform(snpobj)
 
     covar = CovariateObject.from_embedding(pca, n_components=2)
@@ -112,7 +112,7 @@ def test_from_embedding_rejects_haplotype_expanded_rows():
     gt = rng.integers(0, 2, size=(8, 4, 2), dtype=np.int8)
     samples = np.array(["a", "b", "c", "d"], dtype=object)
     snpobj = SNPObject(genotypes=gt, samples=samples)
-    pca = PCA(n_components=2, average_strands=False)
+    pca = PCA(n_components=2, average_haplotypes=False)
     pca.fit_transform(snpobj)
 
     with pytest.raises(ValueError, match="haplotype-expanded"):
@@ -171,7 +171,7 @@ def test_merge_rejects_duplicate_column_names():
 
 def test_build_association_covariates_composes_blocks(tmp_path: Path):
     snpobj = build_synthetic_snp_dataset(n_samples=8, n_snps=30, seed=3)
-    pca = PCA(n_components=2, average_strands=True)
+    pca = PCA(n_components=2, average_haplotypes=True)
     pca.fit_transform(snpobj)
 
     samples = [str(sample) for sample in snpobj.samples]
@@ -215,7 +215,7 @@ def test_merged_covariates_work_with_run_gwas(tmp_path: Path):
     snpobj = build_synthetic_snp_dataset(n_samples=n_samples, n_snps=n_variants, seed=17)
     sample_ids = [str(sample) for sample in snpobj.samples]
 
-    pca = PCA(n_components=2, average_strands=True)
+    pca = PCA(n_components=2, average_haplotypes=True)
     pca.fit_transform(snpobj)
     pc_covar = CovariateObject.from_embedding(pca, n_components=2)
 

@@ -160,7 +160,7 @@ def covariate_object_from_embedding(
     if hap_list is not None and len(hap_list) == x_arr.shape[0]:
         if not all(str(a) == str(b) for a, b in zip(hap_list, ind_ids)):
             raise ValueError(
-                "Embedding has haplotype-expanded rows. Use average_strands=True on PCA "
+                "Embedding has haplotype-expanded rows. Use average_haplotypes=True on PCA "
                 "or provide sample-level coordinates."
             )
 

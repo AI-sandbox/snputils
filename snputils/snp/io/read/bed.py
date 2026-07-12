@@ -7,12 +7,17 @@ import numpy as np
 import polars as pl
 import pgenlib as pg
 
-from snputils._utils.genotypes import sum_diploid_alleles
+from snputils._utils.genotypes import (
+    ExplicitGenotypeMode,
+    GenotypeMode,
+    normalize_genotype_mode,
+    sum_diploid_alleles,
+)
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
-    estimate_separate_strands_peak_bytes,
-    read_separate_strands,
+    estimate_phased_alleles_peak_bytes,
+    read_phased_alleles,
 )
 
 log = logging.getLogger(__name__)
@@ -101,7 +106,7 @@ class BEDReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = True,
+        genotype_mode: GenotypeMode = "dosage",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
     ) -> SNPObject:
@@ -119,11 +124,12 @@ class BEDReader(SNPBaseReader):
             sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
-            sum_strands: If True, read genotype dosages in a single `int8`
-                array with values `{0, 1, 2}`. PLINK BED/BIM/FAM does not
-                store phase, so `False` is not supported.
+            genotype_mode: ``"dosage"`` (default) returns genotype dosages in
+                a single ``int8`` array with values ``{0, 1, 2}``. ``"auto"``
+                is equivalent to ``"dosage"``. PLINK BED/BIM/FAM does not
+                store phase, so ``"phased"`` is not supported.
             chromosome_ploidy:
-                Optional hint for chromosome-specific strand summing. Use "autosomal" when
+                Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
                 skips non-diploid chromosome checks and can be faster. The default None/"auto"
                 preserves existing behavior.
@@ -140,8 +146,10 @@ class BEDReader(SNPBaseReader):
         assert (
             variant_idxs is None or variant_ids is None
         ), "Only one of variant_idxs and variant_ids can be specified"
+        genotype_mode = normalize_genotype_mode(genotype_mode)
+        return_dosage = genotype_mode in {"auto", "dosage"}
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
-        detect_non_diploid = bool(sum_strands) and chromosome_ploidy_mode != "autosomal"
+        detect_non_diploid = bool(return_dosage) and chromosome_ploidy_mode != "autosomal"
 
         if isinstance(fields, str):
             fields = [fields]
@@ -151,10 +159,10 @@ class BEDReader(SNPBaseReader):
         fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
-        if "GT" in fields and not sum_strands:
+        if "GT" in fields and not return_dosage:
             raise ValueError(
-                "PLINK BED/BIM/FAM does not store phase, so `sum_strands=False` is not supported. "
-                "Use `sum_strands=True` to load 0/1/2 genotype dosages."
+                "PLINK BED/BIM/FAM does not store phase, so genotype_mode='phased' is not supported. "
+                "Use genotype_mode='dosage' to load 0/1/2 genotype dosages."
             )
         only_read_bed = fields == ["GT"] and variant_idxs is None and sample_idxs is None
 
@@ -273,20 +281,20 @@ class BEDReader(SNPBaseReader):
                 )
 
             # required arrays: variant_idxs + sample_idxs + genotypes
-            if not sum_strands:
+            if not return_dosage:
                 required_ram = (
                     (num_samples + num_variants) * 4
-                    + estimate_separate_strands_peak_bytes(num_variants, num_samples)
+                    + estimate_phased_alleles_peak_bytes(num_variants, num_samples)
                 )
             else:
                 required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
                 num_non_diploid = int(np.sum(non_diploid_mask)) if non_diploid_mask is not None else 0
                 if num_non_diploid:
-                    required_ram += estimate_separate_strands_peak_bytes(num_non_diploid, num_samples)
+                    required_ram += estimate_phased_alleles_peak_bytes(num_non_diploid, num_samples)
             log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
-            if not sum_strands:
-                genotypes = read_separate_strands(
+            if not return_dosage:
+                genotypes = read_phased_alleles(
                     pgen_reader,
                     variant_idxs,
                     num_variants,
@@ -297,7 +305,7 @@ class BEDReader(SNPBaseReader):
                 pgen_reader.read_list(variant_idxs, genotypes)
                 if detect_non_diploid and only_read_bed:
                     log.debug(
-                        "Skipping non-diploid BED strand-summing correction because BIM chromosome metadata was not loaded."
+                        "Skipping non-diploid BED dosage correction because BIM chromosome metadata was not loaded."
                     )
                 elif detect_non_diploid and non_diploid_mask is not None:
                     non_diploid_output_rows = np.flatnonzero(non_diploid_mask)
@@ -306,7 +314,7 @@ class BEDReader(SNPBaseReader):
                         dtype=np.uint32,
                     )
 
-                    separate = read_separate_strands(
+                    separate = read_phased_alleles(
                         pgen_reader,
                         non_diploid_variant_idxs,
                         non_diploid_variant_idxs.size,
@@ -410,7 +418,7 @@ class BEDReader(SNPBaseReader):
         sample_idxs: Optional[np.ndarray] = None,
         variant_ids: Optional[np.ndarray] = None,
         variant_idxs: Optional[np.ndarray] = None,
-        sum_strands: bool = True,
+        genotype_mode: ExplicitGenotypeMode = "dosage",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
@@ -421,11 +429,12 @@ class BEDReader(SNPBaseReader):
         This yields a sequence of SNPObject chunks along the SNP axis.
 
         chromosome_ploidy:
-            Optional hint for chromosome-specific strand summing. Use "autosomal" when
+            Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
             all selected variants should be treated as ordinary diploid/autosomal; this
             skips non-diploid chromosome checks and can be faster. The default None/"auto"
             preserves existing behavior.
         """
+        genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         _normalize_chromosome_ploidy(chromosome_ploidy)
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
@@ -450,7 +459,7 @@ class BEDReader(SNPBaseReader):
                 sample_ids=sample_ids,
                 sample_idxs=sample_idxs,
                 variant_idxs=selector_chunk,
-                sum_strands=sum_strands,
+                genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
             )

@@ -129,14 +129,14 @@ def aggregate_pop_allele_freq(
     ancestry: Optional[Union[str, int]] = None,
     calldata_lai: Optional[np.ndarray] = None,
     pseudohaploid: Union[bool, int] = False,
-    force_diploid_2d: bool = False,
+    force_diploid_2d: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, List[Any]]:
     """
     Aggregate sample-level genotypes into per-population allele frequencies.
 
     Genotype encoding supported:
         - 3D (n_snps, n_samples, 2): haplotype calls in {0,1}, missing as negative or NaN
-        - 2D (n_snps, n_samples): diploid dosages in {0,1,2} or haploid in {0,1}; missing as negative or NaN
+        - 2D (n_snps, n_samples): diploid dosages in {0,1,2}; missing as negative or NaN
 
     Returns:
         afs: float array (n_snps, n_pops)

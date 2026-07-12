@@ -83,7 +83,7 @@ def plot_lai(
     """
     Plot LAI (Local Ancestry Inference) data with customizable options. Each row 
     represents the ancestry of a sample at the window level, distinguishing 
-    between maternal and paternal strands. Whitespace is used to separate 
+    between haplotype_0 and haplotype_1. Whitespace is used to separate
     individual samples.
 
     Args:
@@ -105,7 +105,7 @@ def plot_lai(
     """
     # The `lai` field is a 2D array containing the window-wise ancestry 
     # information for each individual. Consecutive rows of the transformed form 
-    # correspond to the maternal and paternal ancestries of the same individual
+    # correspond to the haplotype_0 and haplotype_1 ancestries of the same individual
     lai_T = laiobj.lai.T
     
     # Obtain number of samples and windows
@@ -124,19 +124,19 @@ def plot_lai(
     
     if sort:
         # Reshape `lai_T` to a 3D array where the third dimension represents 
-        # pairs of consecutive rows, corresponding to maternal and paternal ancestries
+        # pairs of consecutive rows, corresponding to haplotype_0 and haplotype_1 ancestries
         # Dimension: n_samples x 2 x n_windows
-        maternal_paternal_pairs = lai_T.reshape(n_samples, 2, n_windows)
+        haplotype_pairs = lai_T.reshape(n_samples, 2, n_windows)
         
-        # Reshape `maternal_paternal_pairs` to a 2D array where each row contains 
-        # concatenated maternal and paternal ancestries
+        # Reshape `haplotype_pairs` to a 2D array where each row contains
+        # concatenated haplotype_0 and haplotype_1 ancestries
         # Dimension: n_samples x (2·n_windows)
-        if maternal_paternal_pairs.ndim != 3:
-            raise ValueError("maternal_paternal_pairs must be a 3D array, got array with ndim=" + str(maternal_paternal_pairs.ndim))
-        num_samples, num_maternal_paternal, num_windows = cast(Tuple[int, int, int], maternal_paternal_pairs.shape)
+        if haplotype_pairs.ndim != 3:
+            raise ValueError("haplotype_pairs must be a 3D array, got array with ndim=" + str(haplotype_pairs.ndim))
+        num_samples, num_haplotypes, num_windows = cast(Tuple[int, int, int], haplotype_pairs.shape)
         
-        flat_ancestry_pairs = maternal_paternal_pairs.reshape(
-            num_samples, num_maternal_paternal * num_windows
+        flat_ancestry_pairs = haplotype_pairs.reshape(
+            num_samples, num_haplotypes * num_windows
         )
 
         # Determine the most frequent ancestry for each sample
@@ -168,8 +168,8 @@ def plot_lai(
             sample_ids = None
         
         # Sort `lai_T` based on most frequent ancestry
-        num_samples, num_maternal_paternal, num_windows = cast(Tuple[int, int, int], maternal_paternal_pairs.shape)
-        lai_T = maternal_paternal_pairs[all_sorted_row_idxs, :].reshape(
+        num_samples, num_haplotypes, num_windows = cast(Tuple[int, int, int], haplotype_pairs.shape)
+        lai_T = haplotype_pairs[all_sorted_row_idxs, :].reshape(
             -1, num_windows
         )
     

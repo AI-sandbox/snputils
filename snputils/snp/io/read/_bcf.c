@@ -334,8 +334,8 @@ reject_unphased_second_allele(const unsigned char *gt, Py_ssize_t type_size)
     if (second >= 0 && (second_raw & 1u) == 0) {
         PyErr_SetString(
             PyExc_ValueError,
-            "Cannot read unphased BCF genotypes with `sum_strands=False`; "
-            "use `sum_strands=True` to load 0/1/2 genotype dosages.");
+            "Cannot read unphased BCF genotypes with genotype_mode='phased'; "
+            "use genotype_mode='dosage' to load 0/1/2 genotype dosages.");
         return -1;
     }
     return 0;
@@ -405,7 +405,7 @@ decode_gt(PyObject *self, PyObject *args)
     Py_ssize_t body_offset, gt_rel_offset, n_samples, n_vals, type_size, expected_l_indiv;
     Py_ssize_t n_selected, row_width, capacity_records, output_size;
     Py_ssize_t offset, n_records;
-    int sum_strands;
+    int return_dosage;
     int all_samples;
     const unsigned char *data;
     Py_ssize_t data_len;
@@ -422,7 +422,7 @@ decode_gt(PyObject *self, PyObject *args)
             &type_size,
             &expected_l_indiv,
             &sample_indices_obj,
-            &sum_strands)) {
+            &return_dosage)) {
         return NULL;
     }
 
@@ -466,12 +466,12 @@ decode_gt(PyObject *self, PyObject *args)
         sample_seq = NULL;
     }
 
-    if (!sum_strands && n_selected > PY_SSIZE_T_MAX / 2) {
+    if (!return_dosage && n_selected > PY_SSIZE_T_MAX / 2) {
         PyMem_Free(sample_indices);
         PyErr_SetString(PyExc_MemoryError, "BCF genotype row is too large.");
         return NULL;
     }
-    row_width = sum_strands ? n_selected : n_selected * 2;
+    row_width = return_dosage ? n_selected : n_selected * 2;
 
     if (PyObject_GetBuffer(data_obj, &data_view, PyBUF_SIMPLE) < 0) {
         PyMem_Free(sample_indices);
@@ -530,6 +530,20 @@ decode_gt(PyObject *self, PyObject *args)
         }
         l_shared = (Py_ssize_t)l_shared_u32;
         l_indiv = (Py_ssize_t)l_indiv_u32;
+        if (return_dosage && l_shared >= 20) {
+            const unsigned char *n_alleles_ptr = data + offset + 8 + 16;
+            uint32_t n_alleles = (uint32_t)n_alleles_ptr[2] | ((uint32_t)n_alleles_ptr[3] << 8);
+            if (n_alleles > 2) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "genotype_mode='dosage' only supports biallelic variants; use genotype_mode='phased' for multiallelic allele calls."
+                );
+                return NULL;
+            }
+        }
         if (expected_l_indiv >= 0 && l_indiv != expected_l_indiv) {
             Py_DECREF(out);
             PyBuffer_Release(&data_view);
@@ -579,7 +593,7 @@ decode_gt(PyObject *self, PyObject *args)
         }
         row = PyByteArray_AS_STRING(out) + n_records * row_width;
 
-        if (sum_strands) {
+        if (return_dosage) {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;
@@ -649,7 +663,7 @@ decode_core(PyObject *self, PyObject *args)
     Py_ssize_t body_offset, gt_rel_offset, n_samples, n_vals, type_size, expected_l_indiv;
     Py_ssize_t n_selected, gt_row_width, capacity_records, output_size;
     Py_ssize_t offset, n_records;
-    int sum_strands;
+    int return_dosage;
     int all_samples;
     int pass_filter_id;
     const unsigned char *data;
@@ -667,7 +681,7 @@ decode_core(PyObject *self, PyObject *args)
             &type_size,
             &expected_l_indiv,
             &sample_indices_obj,
-            &sum_strands,
+            &return_dosage,
             &pass_filter_id)) {
         return NULL;
     }
@@ -712,12 +726,12 @@ decode_core(PyObject *self, PyObject *args)
         sample_seq = NULL;
     }
 
-    if (!sum_strands && n_selected > PY_SSIZE_T_MAX / 2) {
+    if (!return_dosage && n_selected > PY_SSIZE_T_MAX / 2) {
         PyMem_Free(sample_indices);
         PyErr_SetString(PyExc_MemoryError, "BCF genotype row is too large.");
         return NULL;
     }
-    gt_row_width = sum_strands ? n_selected : n_selected * 2;
+    gt_row_width = return_dosage ? n_selected : n_selected * 2;
 
     if (PyObject_GetBuffer(data_obj, &data_view, PyBUF_SIMPLE) < 0) {
         PyMem_Free(sample_indices);
@@ -826,6 +840,13 @@ decode_core(PyObject *self, PyObject *args)
         chrom_id = read_i32_le_raw(data, base);
         pos0 = read_i32_le_raw(data, base + 4);
         n_alleles = n_alleles_info_u32 >> 16;
+        if (return_dosage && n_alleles > 2) {
+            PyErr_SetString(
+                PyExc_ValueError,
+                "genotype_mode='dosage' only supports biallelic variants; use genotype_mode='phased' for multiallelic allele calls."
+            );
+            goto error;
+        }
         if ((n_fmt_samples_u32 & 0xFFFFFFu) != (uint32_t)n_samples) {
             PyErr_SetString(PyExc_ValueError, "BCF record sample count does not match header sample count.");
             goto error;
@@ -935,7 +956,7 @@ decode_core(PyObject *self, PyObject *args)
         }
 
         gt_row = PyByteArray_AS_STRING(gt_out) + n_records * gt_row_width;
-        if (sum_strands) {
+        if (return_dosage) {
             for (Py_ssize_t out_sample = 0; out_sample < n_selected; out_sample++) {
                 Py_ssize_t sample = all_samples ? out_sample : sample_indices[out_sample];
                 const unsigned char *gt = data + gt_offset + sample * n_vals * type_size;

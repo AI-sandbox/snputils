@@ -9,6 +9,7 @@ import subprocess
 log = logging.getLogger(__name__)
 import tempfile
 
+from snputils._utils.genotypes import ExplicitGenotypeMode, normalize_genotype_mode
 from snputils._utils.printing import format_repr
 
 GRGType = Union[pyg.GRG, pyg.MutableGRG]
@@ -221,7 +222,7 @@ class GRGObject:
 
     def to_snpobject(
         self,
-        sum_strands: bool = False,
+        genotype_mode: ExplicitGenotypeMode = "phased",
         chrom: str = ".",
         sample_prefix: str = "sample",
     ):
@@ -231,9 +232,9 @@ class GRGObject:
         Notes:
             - This materializes the full genotype matrix, so memory usage scales with
               `num_mutations * num_samples`.
-            - For diploid GRGs and `sum_strands=False`, output has shape
+            - For diploid GRGs and ``genotype_mode="phased"``, output has shape
               `(n_snps, n_samples, 2)`.
-            - For `sum_strands=True`, output has shape `(n_snps, n_samples)` with
+            - For ``genotype_mode="dosage"``, output has shape `(n_snps, n_samples)` with
               per-individual allele counts.
         """
         from snputils.snp.genobj.snpobj import SNPObject
@@ -255,11 +256,13 @@ class GRGObject:
 
         n_individuals = n_haplotypes // ploidy
         chrom = str(chrom)
+        genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
+        return_dosage = genotype_mode == "dosage"
 
         def _empty(shape):
             return np.empty(shape, dtype=np.int8)
 
-        if sum_strands:
+        if return_dosage:
             if n_mutations == 0:
                 genotypes = _empty((0, n_individuals))
             elif ploidy == 1:
@@ -277,7 +280,7 @@ class GRGObject:
             if ploidy != 2:
                 raise ValueError(
                     "Phased SNPObject output requires diploid GRGs. "
-                    "Use `sum_strands=True` for non-diploid data."
+                    "Use genotype_mode='dosage' for non-diploid data."
                 )
             if n_mutations == 0:
                 genotypes = _empty((0, n_individuals, ploidy))

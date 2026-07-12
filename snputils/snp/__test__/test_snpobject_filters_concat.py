@@ -1608,6 +1608,74 @@ def test_correct_flipped_variants_inverts_called_alleles_inplace():
     )
 
 
+def test_correct_flipped_variants_leaves_partial_complements_unchanged():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["C"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected is query
+    assert corrected.variants_ref.tolist() == ["A"]
+    assert corrected.variants_alt.tolist() == ["C"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[0, 1, 2]], dtype=np.int8))
+
+
+def test_correct_flipped_variants_applies_consistent_complemented_swap():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["C"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["T"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected.variants_ref.tolist() == ["G"]
+    assert corrected.variants_alt.tolist() == ["T"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[2, 1, 0]], dtype=np.int8))
+
+
+def test_correct_flipped_variants_leaves_strand_ambiguous_pairs_unchanged():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["T"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["T"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected is query
+    assert corrected.variants_ref.tolist() == ["A"]
+    assert corrected.variants_alt.tolist() == ["T"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[0, 1, 2]], dtype=np.int8))
+
+
 def test_common_variant_intersection_rejects_duplicated_shared_ids():
     query = SNPObject(variants_id=np.array(["rs1", "rs1"], dtype=object))
     reference = SNPObject(variants_id=np.array(["rs1"], dtype=object))

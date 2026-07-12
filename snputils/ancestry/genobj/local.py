@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from snputils.snp.genobj.snpobj import SNPObject
 
 from snputils._utils.printing import array_shape, format_repr
+from snputils._utils.ancestry import known_lai_values
 from .base import AncestryObject
 
 log = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ class LocalAncestryObject(AncestryObject):
             raise ValueError("`lai` must be a 2D array with shape (n_windows, n_haplotypes).")
         
         # Determine the number of unique ancestries and samples from the LAI array
-        n_ancestries = len(np.unique(lai))
+        n_ancestries = len(np.unique(known_lai_values(lai)))
         n_haplotypes = lai.shape[1]
         n_samples = n_haplotypes // 2
 
@@ -320,7 +321,7 @@ class LocalAncestryObject(AncestryObject):
         Returns:
             int: The total number of unique ancestries.
         """
-        return len(np.unique(self.__lai))
+        return len(np.unique(known_lai_values(self.__lai)))
     
     @property
     def n_haplotypes(self) -> int:
@@ -804,7 +805,7 @@ class LocalAncestryObject(AncestryObject):
             ancestry_map (dict, optional): A dictionary mapping ancestry codes to region names, if available.
         """
         # Get unique ancestries from LAI data
-        unique_ancestries = np.unique(self.lai)
+        unique_ancestries = np.unique(known_lai_values(self.lai))
 
         if self.ancestry_map is not None:
             # Check if all unique ancestries in the LAI are present in the ancestry map

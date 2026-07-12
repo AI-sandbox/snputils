@@ -10,6 +10,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
+from snputils._utils.ancestry import known_lai_values
 from snputils._utils.genotypes import sum_diploid_genotypes, validate_biallelic_hard_calls
 from snputils._utils.printing import array_shape, format_repr
 
@@ -574,7 +575,7 @@ class SNPObject:
             int: The total number of unique ancestries.
         """
         if self.__calldata_lai is not None:
-            return len(np.unique(self.__calldata_lai))
+            return len(np.unique(known_lai_values(self.__calldata_lai)))
         else:
             raise ValueError("Unable to determine the total number of ancestries: no relevant data is available.")
 

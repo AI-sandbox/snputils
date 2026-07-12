@@ -312,6 +312,7 @@ def _aggregate_to_pop_allele_freq(
     afs, counts, pops = aggregate_pop_allele_freq(
         genotypes=genotypes,
         sample_labels=sample_labels,
+        alternate_alleles=None if snpobj is None else snpobj.variants_alt,
         ancestry=ancestry,
         calldata_lai=calldata_lai,
         pseudohaploid=pseudohaploid,

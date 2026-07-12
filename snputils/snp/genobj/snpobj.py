@@ -978,6 +978,7 @@ class SNPObject:
         afs, counts, pops = aggregate_pop_allele_freq(
             genotypes=gt,
             sample_labels=labels,
+            alternate_alleles=self.variants_alt,
             ancestry=ancestry,
             calldata_lai=calldata_lai,
             pseudohaploid=pseudohaploid,

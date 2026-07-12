@@ -429,6 +429,7 @@ def allele_freq_stream(
         afs_chunk, counts_chunk, pops = aggregate_pop_allele_freq(
             genotypes=gt_chunk,
             sample_labels=labels,
+            alternate_alleles=getattr(chunk, "variants_alt", None),
             ancestry=ancestry,
             calldata_lai=calldata_lai,
             pseudohaploid=pseudohaploid,

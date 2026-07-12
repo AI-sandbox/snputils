@@ -1628,3 +1628,25 @@ def test_common_variant_intersection_returns_aligned_indices():
     assert common == ["rs2", "rs1", "rs3"]
     np.testing.assert_array_equal(query_idx, np.array([0, 1, 2]))
     np.testing.assert_array_equal(reference_idx, np.array([2, 0, 1]))
+
+
+@pytest.mark.parametrize("index_by", ["id", "pos+id"])
+def test_common_variant_intersection_excludes_missing_ids(index_by):
+    missing_ids = np.array([".", "", None, np.nan, "rs1"], dtype=object)
+    metadata = {
+        "variants_id": missing_ids,
+        "variants_chrom": np.array(["1"] * 5, dtype=object),
+        "variants_pos": np.arange(1, 6),
+    }
+    query = SNPObject(**metadata)
+    reference = SNPObject(**metadata)
+
+    common, query_idx, reference_idx = query.get_common_variants_intersection(
+        reference,
+        index_by=index_by,
+    )
+
+    expected_identifier = "rs1" if index_by == "id" else "1-5-rs1"
+    assert common == [expected_identifier]
+    np.testing.assert_array_equal(query_idx, np.array([4]))
+    np.testing.assert_array_equal(reference_idx, np.array([4]))

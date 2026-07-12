@@ -21,6 +21,16 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _is_missing_variant_id(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bytes):
+        value = value.decode()
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return True
+    return str(value).strip() in {"", "."}
+
+
 def _paired_common_indices(
     query_identifiers: Sequence[Any],
     reference_identifiers: Sequence[Any],
@@ -28,8 +38,12 @@ def _paired_common_indices(
     query_positions: Dict[Any, List[int]] = {}
     reference_positions: Dict[Any, List[int]] = {}
     for index, identifier in enumerate(query_identifiers):
+        if identifier is None:
+            continue
         query_positions.setdefault(identifier, []).append(index)
     for index, identifier in enumerate(reference_identifiers):
+        if identifier is None:
+            continue
         reference_positions.setdefault(identifier, []).append(index)
 
     common_ids = [identifier for identifier in query_positions if identifier in reference_positions]
@@ -4494,14 +4508,26 @@ class SNPObject:
             query_identifiers = [f"{chrom}-{pos}" for chrom, pos in zip(self['variants_chrom'], self['variants_pos'])]
             reference_identifiers = [f"{chrom}-{pos}" for chrom, pos in zip(snpobj['variants_chrom'], snpobj['variants_pos'])]
         elif index_by == 'id':
-            query_identifiers = self['variants_id'].tolist()
-            reference_identifiers = snpobj['variants_id'].tolist()
-        elif index_by == 'pos+id':
             query_identifiers = [
-                f"{chrom}-{pos}-{ids}" for chrom, pos, ids in zip(self['variants_chrom'], self['variants_pos'], self['variants_id'])
+                None if _is_missing_variant_id(identifier) else identifier
+                for identifier in self['variants_id'].tolist()
             ]
             reference_identifiers = [
-                f"{chrom}-{pos}-{ids}" for chrom, pos, ids in zip(snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_id'])
+                None if _is_missing_variant_id(identifier) else identifier
+                for identifier in snpobj['variants_id'].tolist()
+            ]
+        elif index_by == 'pos+id':
+            query_identifiers = [
+                None if _is_missing_variant_id(identifier) else f"{chrom}-{pos}-{identifier}"
+                for chrom, pos, identifier in zip(
+                    self['variants_chrom'], self['variants_pos'], self['variants_id']
+                )
+            ]
+            reference_identifiers = [
+                None if _is_missing_variant_id(identifier) else f"{chrom}-{pos}-{identifier}"
+                for chrom, pos, identifier in zip(
+                    snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_id']
+                )
             ]
         else:
             raise ValueError("`index_by` must be one of 'pos', 'id', or 'pos+id'.")

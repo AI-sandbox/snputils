@@ -380,6 +380,95 @@ def _prepare_inputs(
     )
 
 
+def _prepare_weir_cockerham_inputs(
+    data: Any,
+    sample_labels: Optional[Sequence[str]],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+    """Aggregate diploid hard calls without discarding observed heterozygosity."""
+    try:
+        from snputils.snp.genobj.snpobj import SNPObject  # type: ignore
+    except Exception:
+        SNPObject = ()  # type: ignore
+
+    if not isinstance(data, SNPObject):
+        raise ValueError(
+            "method='weir_cockerham' requires diploid hard-call genotypes in an SNPObject; "
+            "allele-frequency summaries do not contain observed heterozygosity."
+        )
+    if data.genotypes is None:
+        raise ValueError("method='weir_cockerham' requires hard-call genotype data in `genotypes`.")
+
+    if data.variants_alt is not None:
+        alts = np.asarray(data.variants_alt, dtype=object).ravel()
+        if any("," in str(alt) for alt in alts if alt is not None):
+            raise ValueError("method='weir_cockerham' currently supports only biallelic variants.")
+
+    genotypes = np.asarray(data.genotypes)
+    if genotypes.ndim not in (2, 3):
+        raise ValueError("method='weir_cockerham' requires a 2D or 3D genotype array.")
+    if genotypes.ndim == 3 and genotypes.shape[2] != 2:
+        raise ValueError("method='weir_cockerham' requires diploid genotypes.")
+
+    if not np.issubdtype(genotypes.dtype, np.number):
+        try:
+            genotypes = genotypes.astype(float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("method='weir_cockerham' requires numeric hard-call genotypes.") from exc
+    if np.issubdtype(genotypes.dtype, np.complexfloating):
+        raise ValueError("method='weir_cockerham' requires real-valued hard-call genotypes.")
+
+    if np.any(np.isinf(genotypes)):
+        raise ValueError("method='weir_cockerham' does not support infinite genotype values.")
+
+    missing = np.isnan(genotypes) | (genotypes < 0)
+    present_values = genotypes[~missing]
+    if genotypes.ndim == 3:
+        if present_values.size and not np.all(np.isin(present_values, (0, 1))):
+            raise ValueError(
+                "method='weir_cockerham' requires biallelic hard calls encoded as 0/1 alleles."
+            )
+        called = ~np.any(missing, axis=2)
+        dosages = np.where(called, np.where(missing, 0.0, genotypes).sum(axis=2), np.nan)
+    else:
+        if present_values.size and not np.all(np.isin(present_values, (0, 1, 2))):
+            raise ValueError(
+                "method='weir_cockerham' requires hard-call dosages encoded as 0, 1, or 2."
+            )
+        called = ~missing
+        dosages = np.where(called, np.rint(genotypes), np.nan)
+
+    if sample_labels is None:
+        sample_labels = _default_sample_labels_from_snpobj(data)
+    labels = np.asarray(sample_labels)
+    if labels.ndim != 1:
+        labels = labels.ravel()
+    if labels.shape[0] != genotypes.shape[1]:
+        raise ValueError("'sample_labels' must have length equal to the number of samples in `genotypes`.")
+
+    populations, population_indices = np.unique(labels, return_inverse=True)
+    n_snps = genotypes.shape[0]
+    allele_frequencies = np.full((n_snps, populations.size), np.nan, dtype=float)
+    sample_counts = np.zeros((n_snps, populations.size), dtype=np.int64)
+    observed_heterozygosity = np.full((n_snps, populations.size), np.nan, dtype=float)
+
+    for population_index in range(populations.size):
+        columns = population_indices == population_index
+        population_called = called[:, columns]
+        counts = population_called.sum(axis=1)
+        sample_counts[:, population_index] = counts
+        nonempty = counts > 0
+        allele_frequencies[nonempty, population_index] = (
+            np.where(population_called, dosages[:, columns], 0.0).sum(axis=1)[nonempty]
+            / (2.0 * counts[nonempty])
+        )
+        observed_heterozygosity[nonempty, population_index] = (
+            (population_called & (dosages[:, columns] == 1)).sum(axis=1)[nonempty]
+            / counts[nonempty]
+        )
+
+    return allele_frequencies, sample_counts, observed_heterozygosity, populations.tolist()
+
+
 def _build_blocks(
     n_snps: int,
     blocks: Optional[np.ndarray],
@@ -1286,7 +1375,8 @@ def fst(
         - ``weir_cockerham``:
             Weir and Cockerham's theta for two populations. Computes per-SNP
             variance components ``a``, ``b``, and ``c``, then uses a ratio-of-sums
-            jackknife with ``num = a`` and ``den = a + b + c``.
+            jackknife with ``num = a`` and ``den = a + b + c``. This method
+            requires diploid hard-call genotypes in a ``SNPObject``.
         - ``tsallis``:
             Tsallis q-entropy F-statistic. For two populations, computes
             per-SNP total entropy S_q(Bern(p_bar)) and within entropy
@@ -1306,16 +1396,33 @@ def fst(
             ``tsallis_weights="sample_size"`` uses per-SNP haplotype count weights.
 
     Notes:
-      * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
-      * For WC we use expected heterozygosity h_i = 2 p_i (1 - p_i) from allele freqs.
-      * SNPs with n<=1 in either pop or with invalid denominators are ignored.
-      * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
+      * Hudson and Tsallis accept either SNPObject or (afs, counts, pops).
+      * Weir-Cockerham uses observed heterozygosity from diploid biallelic hard calls.
+      * SNPs with at most one called individual in either population or with invalid denominators are ignored.
+      * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. Weir-Cockerham does not support this option.
     """
     method = str(method).strip().lower().replace("-", "_")
     if method not in {"hudson", "weir_cockerham", "tsallis"}:
         raise ValueError("method must be 'hudson', 'weir_cockerham', or 'tsallis'")
 
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
+    observed_heterozygosity = None
+    if method == "weir_cockerham":
+        if ancestry is not None:
+            raise ValueError("method='weir_cockerham' does not support ancestry-specific calls.")
+        if pseudohaploid is not False:
+            raise ValueError("method='weir_cockerham' requires diploid genotypes and does not support pseudohaploid calls.")
+        afs, counts, observed_heterozygosity, pops = _prepare_weir_cockerham_inputs(
+            data,
+            sample_labels,
+        )
+    else:
+        afs, counts, pops = _prepare_inputs(
+            data,
+            sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+        )
     n_snps, n_pops = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -1398,9 +1505,9 @@ def fst(
                 n_bar = n / 2.0
                 p_bar = np.where(n > 0, (n1 * p1 + n2 * p2) / n, np.nan)
                 s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
-                h1 = 2.0 * p1 * (1.0 - p1)
-                h2 = 2.0 * p2 * (1.0 - p2)
-                h_bar = 0.5 * (h1 + h2)
+                h1 = observed_heterozygosity[:, i]
+                h2 = observed_heterozygosity[:, j]
+                h_bar = (n1 * h1 + n2 * h2) / n
                 n_c = n - (n1 * n1 + n2 * n2) / np.where(n > 0, n, np.nan)  # == 2*n1*n2/n
                 # components
                 a = (n_bar / n_c) * (s2 - (p_bar * (1.0 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1.0))
@@ -1408,8 +1515,15 @@ def fst(
                 c = 0.5 * h_bar
                 num_snp = a
                 den_snp = a + b + c
-            # Need at least 2 haplotypes per pop and well-defined denominators
-            snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
+            snp_mask = (
+                valid
+                & np.isfinite(h1)
+                & np.isfinite(h2)
+                & (n1 > 1)
+                & (n2 > 1)
+                & np.isfinite(num_snp)
+                & np.isfinite(den_snp)
+            )
         elif method == "tsallis":
             # Tsallis q-entropy F-statistic.
             #

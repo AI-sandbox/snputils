@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
@@ -284,14 +285,79 @@ def test_fst_hudson_basic():
 
 
 def test_fst_weir_cockerham_basic():
-    afs, counts, pops = _toy_data()
-    res = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2)
+    genotypes = np.array(
+        [
+            [1, 1, 0, 0, 1, 1, 2, 2],
+            [2, 0, 0, 0, 0, 2, 2, 2],
+        ],
+        dtype=np.int8,
+    )
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+    res = fst(
+        SNPObject(genotypes=genotypes),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    )
     assert res.shape[0] == 1
     row = res.iloc[0]
     assert row.method == "weir_cockerham"
     assert np.isfinite(row.est)
-    assert row.n_blocks == 3
-    assert row.n_snps == 6
+    assert row.n_blocks == 2
+    assert row.n_snps == 2
+
+
+def test_fst_weir_cockerham_rejects_allele_frequency_summaries():
+    afs, counts, pops = _toy_data()
+
+    with pytest.raises(ValueError, match="observed heterozygosity"):
+        fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="weir_cockerham")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"pseudohaploid": True}, "pseudohaploid"),
+        ({"ancestry": "0"}, "ancestry-specific"),
+    ],
+)
+def test_fst_weir_cockerham_rejects_unsupported_call_types(kwargs, message):
+    snpobj = SNPObject(genotypes=np.array([[0, 1, 1, 2]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match=message):
+        fst(
+            snpobj,
+            pop1=["X"],
+            pop2=["Y"],
+            sample_labels=["X", "X", "Y", "Y"],
+            method="weir_cockerham",
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "snpobj",
+    [
+        SNPObject(
+            genotypes=np.array([[0, 1, 1, 2]], dtype=np.int8),
+            variants_alt=np.array(["G,T"]),
+        ),
+        SNPObject(
+            genotypes=np.array([[[0, 0], [0, 2], [0, 1], [1, 1]]], dtype=np.int8),
+        ),
+    ],
+)
+def test_fst_weir_cockerham_rejects_multiallelic_calls(snpobj):
+    with pytest.raises(ValueError, match="biallelic"):
+        fst(
+            snpobj,
+            pop1=["X"],
+            pop2=["Y"],
+            sample_labels=["X", "X", "Y", "Y"],
+            method="weir_cockerham",
+        )
 
 
 def test_fst_all_pairs_default():
@@ -314,12 +380,33 @@ def test_fst_invalid_method_raises():
 def test_fst_ignores_snp_with_too_small_n():
     afs, counts, pops = _toy_data()
     counts2 = counts.copy()
-    # Make first SNP invalid in A (n=1) so it is dropped for both methods
     counts2[0, pops.index("A")] = 1
     r_h = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="hudson", block_size=2).iloc[0]
-    r_w = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2).iloc[0]
-    assert r_h.n_snps < 6 and r_w.n_snps < 6
-    assert np.isfinite(r_h.est) and np.isfinite(r_w.est)
+    assert r_h.n_snps < 6
+    assert np.isfinite(r_h.est)
+
+
+def test_fst_weir_cockerham_ignores_snp_with_too_few_called_individuals():
+    genotypes = np.array(
+        [
+            [1, -1, -1, -1, 1, 1, 2, 2],
+            [1, 1, 0, 0, 1, 1, 2, 2],
+        ],
+        dtype=np.int8,
+    )
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+
+    row = fst(
+        SNPObject(genotypes=genotypes),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    ).iloc[0]
+
+    assert row.n_snps == 1
+    assert np.isfinite(row.est)
 
 
 def test_fst_blocks_with_labels_invariant():
@@ -331,34 +418,50 @@ def test_fst_blocks_with_labels_invariant():
     alt  = fst((afs[perm], counts[perm], pops), pop1=["A"], pop2=["B"], method="hudson", blocks=labels[perm]).est.iloc[0]
     assert np.isclose(base, alt, atol=1e-15)
 
-def test_fst_weir_cockerham_matches_manual_ratio_of_sums():
-    afs = np.array([[0.10, 0.90],
-                    [0.25, 0.75],
-                    [0.40, 0.60]], dtype=float)
-    counts = np.array([[40, 30],
-                       [40, 30],
-                       [40, 30]], dtype=float)
-    pops = ["X", "Y"]
+@pytest.mark.parametrize(
+    ("genotypes", "expected"),
+    [
+        ([1, 1, 0, 0, 1, 1, 2, 2], 1.0 / 3.0),
+        ([2, 0, 0, 0, 0, 2, 2, 2], 0.2),
+    ],
+)
+def test_fst_weir_cockerham_uses_observed_heterozygosity(genotypes, expected):
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+    snpobj = SNPObject(genotypes=np.asarray([genotypes], dtype=np.int8))
 
-    p1, p2 = afs[:, 0], afs[:, 1]
-    n1, n2 = counts[:, 0], counts[:, 1]
-    n = n1 + n2
-    n_bar = n / 2.0
-    p_bar = (n1 * p1 + n2 * p2) / n
-    s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
-    h1 = 2 * p1 * (1 - p1)
-    h2 = 2 * p2 * (1 - p2)
-    h_bar = 0.5 * (h1 + h2)
-    n_c = n - (n1 * n1 + n2 * n2) / n  # == 2*n1*n2/n for r=2
+    estimate = fst(
+        snpobj,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    ).est.iloc[0]
 
-    a = (n_bar / n_c) * (s2 - (p_bar * (1 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1))
-    b = (n_bar / (n_bar - 1)) * (p_bar * (1 - p_bar) - 0.5 * s2 - ((2 * n_bar - 1) / (4 * n_bar)) * h_bar)
-    c = 0.5 * h_bar
+    assert np.isclose(estimate, expected, rtol=1e-12, atol=1e-12)
 
-    expected = np.nansum(a) / np.nansum(a + b + c)
 
-    res = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=3).est.iloc[0]
-    assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
+def test_fst_weir_cockerham_accepts_diploid_allele_calls():
+    dosages = np.array([[1, 1, 0, 0, 1, 1, 2, 2]], dtype=np.int8)
+    alleles = np.stack([dosages // 2, dosages - dosages // 2], axis=2)
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+
+    dosage_estimate = fst(
+        SNPObject(genotypes=dosages),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+    allele_estimate = fst(
+        SNPObject(genotypes=alleles),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+
+    assert np.isclose(allele_estimate, dosage_estimate, rtol=1e-12, atol=1e-12)
 
 
 def test_fst_tsallis_basic():
@@ -504,17 +607,28 @@ def test_fst_hudson_identical_populations_expected_bias():
     assert np.isclose(est, expected, atol=1e-12)
 
 
-def test_fst_weir_cockerham_identical_populations_expected_bias():
-    # Same setup; WC has half the finite-sample bias of Hudson in this scenario
-    afs = np.array([[0.1, 0.1],
-                    [0.3, 0.3],
-                    [0.7, 0.7]], dtype=float)
-    counts = np.full_like(afs, 40.0)
-    pops = ["X", "Y"]
+def test_fst_weir_cockerham_distinguishes_genotypes_with_identical_frequencies():
+    labels = np.array(["X", "X", "Y", "Y"])
+    all_heterozygous = SNPObject(genotypes=np.array([[1, 1, 1, 1]], dtype=np.int8))
+    balanced_homozygous = SNPObject(genotypes=np.array([[0, 2, 0, 2]], dtype=np.int8))
 
-    est = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=2).est.iloc[0]
-    expected = -0.5 / (40.0 - 1.0)   # = -1/(2*39)
-    assert np.isclose(est, expected, atol=1e-12)
+    heterozygous_estimate = fst(
+        all_heterozygous,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+    homozygous_estimate = fst(
+        balanced_homozygous,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+
+    assert np.isclose(heterozygous_estimate, 0.0, atol=1e-12)
+    assert np.isclose(homozygous_estimate, -1.0, atol=1e-12)
 
 
 def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():

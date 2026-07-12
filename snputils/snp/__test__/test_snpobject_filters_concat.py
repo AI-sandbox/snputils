@@ -43,6 +43,23 @@ def test_variant_filters_cover_biallelic_complete_and_variable_genotypes():
     assert filtered.genotypes.shape == (1, 3, 2)
 
 
+def test_filter_variable_genotypes_compares_unordered_allele_pairs():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 2], [1, 1]],
+                [[0, 1], [1, 0]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["different_genotypes", "phase_only"], dtype=object),
+    )
+
+    filtered = snpobj.filter_variable_genotypes()
+
+    assert filtered.variants_id.tolist() == ["different_genotypes"]
+
+
 def test_filter_variants_accepts_boolean_mask():
     snpobj = _toy_snpobj()
 

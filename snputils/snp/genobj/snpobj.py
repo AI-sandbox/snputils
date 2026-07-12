@@ -3604,24 +3604,27 @@ class SNPObject:
 
         This filters on genotype variability, not allele polymorphism. For example,
         a site where every called sample is heterozygous has one observed genotype
-        value and is therefore removed.
+        value and is therefore removed. Phase order is ignored when comparing
+        phased allele calls.
         """
         if self.genotypes is None:
             raise ValueError("Genotype data `genotypes` is None.")
         gt = np.asarray(self.genotypes)
         if gt.ndim == 3:
             called = np.all(gt >= 0, axis=2)
-            dosages = gt.sum(axis=2, dtype=np.int16)
         elif gt.ndim == 2:
             called = gt >= 0
-            dosages = gt
         else:
             raise ValueError("'genotypes' must be a 2D or 3D array.")
 
         mask = np.zeros(gt.shape[0], dtype=bool)
         for i in range(gt.shape[0]):
-            observed = dosages[i, called[i]]
-            mask[i] = np.unique(observed).size >= 2
+            observed = gt[i, called[i]]
+            if gt.ndim == 3:
+                observed = np.sort(observed, axis=1)
+                mask[i] = np.unique(observed, axis=0).shape[0] >= 2
+            else:
+                mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
     def filter_variants_by_call_rate(

@@ -34,3 +34,16 @@ def test_missing_lai_states_are_not_counted_as_ancestries():
 
     assert laiobj.n_ancestries == 2
     assert snpobj.n_ancestries == 2
+
+
+def test_reordering_samples_keeps_adjacent_haplotype_pairs():
+    laiobj = LocalAncestryObject(
+        haplotypes=["s1.0", "s1.1", "s2.0", "s2.1"],
+        lai=np.array([[10, 11, 20, 21]]),
+    )
+
+    reordered = laiobj.filter_samples(samples=["s2", "s1"], reorder=True)
+
+    assert reordered.samples == ["s2", "s1"]
+    assert reordered.haplotypes == ["s2.0", "s2.1", "s1.0", "s1.1"]
+    np.testing.assert_array_equal(reordered.lai, np.array([[20, 21, 10, 11]]))

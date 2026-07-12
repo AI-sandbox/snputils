@@ -589,7 +589,9 @@ class LocalAncestryObject(AncestryObject):
 
         # Filter / reorder arrays
         if ordered_sample_indices is not None:
-            hap_idx = np.concatenate([2*ordered_sample_indices, 2*ordered_sample_indices + 1])
+            hap_idx = np.column_stack(
+                (2 * ordered_sample_indices, 2 * ordered_sample_indices + 1)
+            ).ravel()
             filtered_lai = self['lai'][:, hap_idx]
             filtered_haplotypes = np.array(self['haplotypes'])[hap_idx].tolist()
             filtered_samples = (

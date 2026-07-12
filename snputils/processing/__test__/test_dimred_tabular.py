@@ -53,8 +53,57 @@ def test_pca_row_haplotype_ids_3d_two_rows_per_sample():
     samples = np.array(["x", "y"], dtype=object)
     snp = SNPObject(genotypes=gt, samples=samples)
     out = pca_row_haplotype_ids(snp, average_haplotypes=False)
-    assert len(out) == 4
-    assert out[0].startswith("x|") and out[1].startswith("x|")
+    assert out == ["x|0", "x|1", "y|0", "y|1"]
+
+
+def test_pca_expanded_rows_preserve_haplotypes_across_variants():
+    gt = np.array(
+        [
+            [[0, 1], [1, 0]],
+            [[1, 0], [0, 1]],
+            [[0, 0], [1, 1]],
+        ],
+        dtype=np.int8,
+    )
+    snp = SNPObject(genotypes=gt, samples=np.array(["x", "y"], dtype=object))
+
+    pca = PCA(average_haplotypes=False)
+    observed = pca._get_data_from_snpobj(snp)
+
+    np.testing.assert_array_equal(
+        observed,
+        np.array(
+            [
+                [0, 1, 0],
+                [1, 0, 0],
+                [1, 0, 1],
+                [0, 1, 1],
+            ],
+            dtype=float,
+        ),
+    )
+
+
+def test_pca_expanded_sample_subset_keeps_both_haplotypes():
+    gt = np.array(
+        [
+            [[0, 1], [1, 0]],
+            [[1, 0], [0, 1]],
+        ],
+        dtype=np.int8,
+    )
+    snp = SNPObject(genotypes=gt, samples=np.array(["x", "y"], dtype=object))
+
+    pca = PCA(average_haplotypes=False)
+    observed = pca._get_data_from_snpobj(snp, samples_subset=[1])
+    row_ids = pca_row_haplotype_ids(
+        snp,
+        average_haplotypes=False,
+        samples_subset=[1],
+    )
+
+    np.testing.assert_array_equal(observed, np.array([[1, 0], [0, 1]], dtype=float))
+    assert row_ids == ["y|0", "y|1"]
 
 
 def test_save_embedding_table_from_model_writes(tmp_path: pathlib.Path):

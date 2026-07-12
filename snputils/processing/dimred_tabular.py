@@ -68,30 +68,29 @@ def pca_row_haplotype_ids(
             "Set sample IDs on the SNPObject or pass explicit row IDs to save_embedding_table."
         )
     s = np.asarray(snpobj.samples, dtype=str)
+    gt = snpobj.genotypes
+    if gt.ndim not in (2, 3):
+        raise ValueError(f"genotypes must be 2D or 3D, got {gt.ndim}D")
+    if len(s) != gt.shape[1]:
+        raise ValueError(
+            f"Length of samples ({len(s)}) does not match genotype matrix ({gt.shape[1]} samples)."
+        )
     if isinstance(samples_subset, int):
         s = s[: int(samples_subset)]
     elif samples_subset is not None:
         s = s[np.asarray(samples_subset, dtype=int)]
 
-    gt = snpobj.genotypes
     if gt.ndim == 2:
         return [str(x) for x in s.tolist()]
     if gt.ndim == 3:
         if average_haplotypes:
             return [str(x) for x in s.tolist()]
-        # Same tensor layout as PCA._get_data_from_snpobj: (n_samples, n_snps, 2) then ravel rows.
-        n_samples, n_snps, _ = np.transpose(gt.astype(float), (1, 0, 2)).shape
-        if len(s) != n_samples:
-            raise ValueError(
-                f"Length of samples ({len(s)}) does not match genotype matrix ({n_samples} samples)."
-            )
-        out: List[str] = []
-        for r in range(n_samples * 2):
-            lin = int(r * n_snps)
-            i, _, k = np.unravel_index(lin, (n_samples, n_snps, 2))
-            out.append(f"{s[int(i)]}|{int(k)}")
-        return out
-    raise ValueError(f"genotypes must be 2D or 3D, got {gt.ndim}D")
+        return [
+            f"{sample}|{haplotype}"
+            for sample in s
+            for haplotype in range(gt.shape[2])
+        ]
+    raise AssertionError(gt.ndim)
 
 
 def pca_row_individual_ids(haplotype_row_ids: Sequence[str]) -> List[str]:

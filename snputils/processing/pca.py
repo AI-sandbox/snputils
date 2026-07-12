@@ -856,19 +856,20 @@ class PCA:
             X = np.transpose(snpobj.genotypes.astype(float), (1,0))
         elif snpobj.genotypes.ndim == 3:
             X = np.transpose(snpobj.genotypes.astype(float), (1,0,2))
-        
-            if average_haplotypes:
-                X = np.mean(X, axis=2)
-            else:
-                X = np.reshape(X, (-1, X.shape[1]))
         else:
             raise ValueError(f"Invalid shape for `genotypes`: expected a 2D or 3D array, but got {snpobj.genotypes.ndim}D array.")
-    
+
         # Handle sample and SNP subsets
         if isinstance(samples_subset, int):
             X = X[:samples_subset]
         elif isinstance(samples_subset, list):
             X = X[samples_subset]
+
+        if snpobj.genotypes.ndim == 3:
+            if average_haplotypes:
+                X = np.mean(X, axis=2)
+            else:
+                X = np.transpose(X, (0, 2, 1)).reshape(-1, X.shape[1])
         
         if isinstance(snps_subset, int):
             X = X[:, :snps_subset]

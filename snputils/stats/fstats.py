@@ -179,11 +179,42 @@ def _jackknife_block_ratio_estimates(
     *,
     min_abs_den: float = 1e-12,
 ) -> BlockJackknifeResult:
+    num_block_sums = np.asarray(num_block_sums, dtype=float)
     den_block_sums = np.asarray(den_block_sums, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        block_estimates = np.asarray(num_block_sums, dtype=float) / den_block_sums
-    block_estimates = np.where(np.abs(den_block_sums) > min_abs_den, block_estimates, np.nan)
-    return _weighted_jackknife_from_block_estimates(block_estimates, block_lengths)
+    block_lengths = np.asarray(block_lengths, dtype=float)
+    valid = (
+        np.isfinite(num_block_sums)
+        & np.isfinite(den_block_sums)
+        & np.isfinite(block_lengths)
+        & (block_lengths > 0)
+    )
+    if not np.any(valid):
+        return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), 0, 0)
+
+    num_block_sums = num_block_sums[valid]
+    den_block_sums = den_block_sums[valid]
+    block_lengths = block_lengths[valid]
+    denominator = float(np.sum(den_block_sums))
+    if abs(denominator) <= min_abs_den:
+        return BlockJackknifeResult(
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            int(block_lengths.size),
+            int(np.sum(block_lengths)),
+        )
+
+    estimate = float(np.sum(num_block_sums) / denominator)
+    result = _weighted_jackknife_ratio_from_block_sums(
+        num_block_sums,
+        den_block_sums,
+        block_lengths,
+        denominator_est_threshold=0.0,
+    )
+    z = float(estimate / result.se) if result.se > 0 else float("nan")
+    p = float(math.erfc(abs(z) / math.sqrt(2))) if np.isfinite(z) else float("nan")
+    return BlockJackknifeResult(estimate, result.se, z, p, result.n_blocks, result.n_snps)
 
 def _weighted_jackknife_ratio_from_block_sums(
     num_block_sums: np.ndarray,

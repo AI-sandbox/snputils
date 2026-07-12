@@ -540,11 +540,8 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
     # num = corrected f2 sum, den = uncorrected f2 + within-pop het sum.
     raw_ratio = num_sum / den_sum
 
-    # The reported fst() estimate uses weighted delete-one-block jackknife
-    # over block-level ratios, matching ADMIXTOOLS style estimation.
     block_ids = np.arange(afs.shape[0]) // 2
     n_blocks = int(block_ids.max()) + 1
-    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
     num_block = np.zeros(n_blocks, dtype=float)
     den_block = np.zeros(n_blocks, dtype=float)
     for b in range(n_blocks):
@@ -558,17 +555,40 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
         num_block[b] = float(np.sum(num_snp))
         den_block[b] = float(np.sum(dxy))
 
-    block_est = num_block / den_block
-    weights = block_lengths
-    weight_sum = float(np.sum(weights))
-    tot = float(np.average(block_est, weights=weights))
-    rel = weights / weight_sum
-    loo = (tot - block_est * rel) / (1.0 - rel)
-    h = weight_sum / weights
-    jk_expected = float(np.average(loo, weights=(1.0 - 1.0 / h)))
-
     assert np.isclose(raw_ratio, num_block.sum() / den_block.sum(), rtol=1e-12, atol=1e-12)
-    assert np.isclose(fst_row.est, jk_expected, rtol=1e-12, atol=1e-12)
+    assert np.isclose(fst_row.est, raw_ratio, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_hudson_ratio_of_sums_with_missing_data():
+    afs = np.array([
+        [0.01, 0.02],
+        [0.01, 0.02],
+        [0.10, 0.90],
+        [0.10, 0.90],
+        [0.40, 0.60],
+        [np.nan, 0.50],
+    ])
+    counts = np.full_like(afs, 100.0)
+    counts[-1, 0] = 0.0
+
+    p1 = afs[:-1, 0]
+    p2 = afs[:-1, 1]
+    n1 = counts[:-1, 0]
+    n2 = counts[:-1, 1]
+    dxy = p1 * (1.0 - p2) + p2 * (1.0 - p1)
+    pi1 = 2.0 * p1 * (1.0 - p1) * n1 / (n1 - 1.0)
+    pi2 = 2.0 * p2 * (1.0 - p2) * n2 / (n2 - 1.0)
+    expected = np.sum(dxy - 0.5 * (pi1 + pi2)) / np.sum(dxy)
+
+    result = fst(
+        (afs, counts, ["A", "B"]),
+        pop1=["A"],
+        pop2=["B"],
+        method="hudson",
+        block_size=2,
+    )
+
+    assert np.isclose(result.est.iloc[0], expected, rtol=1e-12, atol=1e-12)
 
 
 def test_fst_and_f2_pseudohaploid():

@@ -305,44 +305,79 @@ def process_beagle(beagle_file, rs_ID_dict, rsid_or_chrompos):
     return genotypes, ind_IDs, variants_id, rs_ID_dict
 
 
-def _normalize_ref_allele(ref_allele):
-    if isinstance(ref_allele, bytes):
-        ref_allele = ref_allele.decode()
-    if ref_allele is None:
+def _normalize_allele(allele):
+    if isinstance(allele, bytes):
+        allele = allele.decode()
+    if allele is None:
         return None
-    return str(ref_allele)
+    allele = str(allele).strip().upper()
+    if allele in {"", ".", "NAN"}:
+        return None
+    return allele
 
 
-def harmonize_genotypes_by_variants_ref(genotypes, variants_id, variants_ref, variants_ref_map):
+def harmonize_genotypes_by_alleles(
+    genotypes,
+    variants_id,
+    variants_ref,
+    variants_alt,
+    variants_allele_map,
+):
     """
-    Flip genotype encoding when a shared variant uses a different REF allele in a
-    later array.
-
-    This mirrors the legacy maasMDS pipeline, which kept a shared variant->REF
-    mapping while loading multiple arrays and inverted 0/1 calls whenever a later
-    array used the opposite reference allele for the same variant.
+    Harmonize shared biallelic variants using complete REF/ALT allele pairs.
     """
-    if variants_ref_map is None or variants_ref is None or len(variants_ref) != len(variants_id):
-        return genotypes, variants_ref_map
+    if variants_allele_map is None:
+        return genotypes, variants_allele_map
+    if variants_ref is None or variants_alt is None:
+        raise ValueError(
+            "Genotype harmonization requires both `variants_ref` and `variants_alt`."
+        )
+    if len(variants_ref) != len(variants_id) or len(variants_alt) != len(variants_id):
+        raise ValueError(
+            "Genotype harmonization requires one REF and ALT value per variant."
+        )
 
     for i, variant_id in enumerate(variants_id):
-        current_ref = _normalize_ref_allele(variants_ref[i])
-        if current_ref is None:
+        current_ref = _normalize_allele(variants_ref[i])
+        current_alt = _normalize_allele(variants_alt[i])
+        if current_ref is None or current_alt is None:
+            raise ValueError(
+                f"Cannot harmonize variant {variant_id!r}: REF and ALT must both be present."
+            )
+        current_pair = (current_ref, current_alt)
+
+        canonical_pair = variants_allele_map.get(variant_id)
+        if canonical_pair is None:
+            variants_allele_map[variant_id] = current_pair
             continue
 
-        canonical_ref = variants_ref_map.get(variant_id)
-        if canonical_ref is None:
-            variants_ref_map[variant_id] = current_ref
-            continue
+        if not isinstance(canonical_pair, (tuple, list)) or len(canonical_pair) != 2:
+            raise ValueError(
+                f"Cannot harmonize variant {variant_id!r}: canonical allele mapping must contain a REF/ALT pair."
+            )
+        canonical_ref = _normalize_allele(canonical_pair[0])
+        canonical_alt = _normalize_allele(canonical_pair[1])
+        if canonical_ref is None or canonical_alt is None:
+            raise ValueError(
+                f"Cannot harmonize variant {variant_id!r}: canonical REF and ALT must both be present."
+            )
+        canonical_pair = (canonical_ref, canonical_alt)
 
-        if current_ref != canonical_ref:
-            non_missing = ~np.isnan(genotypes[i])
+        if current_pair == canonical_pair:
+            continue
+        if current_pair == (canonical_alt, canonical_ref):
+            non_missing = np.isfinite(genotypes[i]) & (genotypes[i] >= 0)
             genotypes[i, non_missing] = 1 - genotypes[i, non_missing]
+            continue
+        raise ValueError(
+            f"Cannot harmonize variant {variant_id!r}: allele pairs {canonical_pair!r} "
+            f"and {current_pair!r} are neither identical nor REF/ALT swaps."
+        )
 
-    return genotypes, variants_ref_map
+    return genotypes, variants_allele_map
 
 
-def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
+def process_snpobj(snpobj, rsid_or_chrompos, variants_allele_map=None):
     """                                                                                       
     Process genotype data from a SNPObject:
     - Reshape the 3D genotype array (n_snps, n_samples, 2) to 2D (n_snps, n_samples × 2). 
@@ -358,8 +393,8 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
             A SNPObject instance.
         rsid_or_chrompos (int):
             Variant ID format: ``1`` for rsID, ``2`` for chromosome/position.
-        variants_ref_map (dict, optional):
-            Existing REF map when harmonizing several arrays; use ``None`` for the first array.
+        variants_allele_map (dict, optional):
+            Existing REF/ALT-pair map when harmonizing several arrays; use ``None`` for the first array.
 
     Returns:
         Tuple:
@@ -372,7 +407,7 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
             - list of int or float: 
                 List of variant identifiers, formatted based on `rsid_or_chrompos` selection.
             - dict:
-                Updated shared REF-allele map used to keep genotype encoding
+                Updated shared REF/ALT-pair map used to keep genotype encoding
                 consistent across arrays.
     """
     start_time = time.time()
@@ -396,12 +431,13 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     else:
         sys.exit("Illegal value for rsid_or_chrompos. Choose 1 for rsID format or 2 for Chromosome_position format.")
 
-    if variants_ref_map is not None:
-        genotypes, variants_ref_map = harmonize_genotypes_by_variants_ref(
+    if variants_allele_map is not None:
+        genotypes, variants_allele_map = harmonize_genotypes_by_alleles(
             genotypes,
             variants_id,
             snpobj['variants_ref'],
-            variants_ref_map,
+            snpobj['variants_alt'],
+            variants_allele_map,
         )
 
     # Extract individual sample IDs
@@ -411,7 +447,7 @@ def process_snpobj(snpobj, rsid_or_chrompos, variants_ref_map=None):
     ind_IDs = np.array([f"{sample}_{suffix}" for sample in samples for suffix in ["A", "B"]])
     
     logging.info("SNPObject Processing Time: --- %s seconds ---" % (time.time() - start_time))
-    return genotypes, ind_IDs, variants_id, variants_ref_map
+    return genotypes, ind_IDs, variants_id, variants_allele_map
 
 
 def average_haplotype_pairs(masked_ancestry_matrix, require_complete_haplotype_pair=False):
@@ -563,7 +599,7 @@ def process_genotypes(
         require_complete_haplotype_pair,
         is_masked,
         rsid_or_chrompos,
-        variants_ref_map=None,
+        variants_allele_map=None,
     ): 
     """                                                                                       
     Process genotype data with optional ancestry-based masking and return the corresponding 
@@ -593,8 +629,8 @@ def process_genotypes(
             corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
         rsid_or_chrompos (int):
             Variant ID format: ``1`` for rsID, ``2`` for chromosome/position.
-        variants_ref_map (dict, optional):
-            Running REF-allele map when scanning multiple arrays. Pass ``None`` for the first
+        variants_allele_map (dict, optional):
+            Running REF/ALT-pair map when scanning multiple arrays. Pass ``None`` for the first
             array; downstream callers should pass the dict returned from the previous
             ``process_snpobj`` / ``process_genotypes`` call so genotypes stay comparable.
 
@@ -606,19 +642,19 @@ def process_genotypes(
                 SNP identifiers after harmonization and LAI overlap.
             haplotypes (list of str):
                 Sample or haplotype identifiers after filtering.
-            variants_ref_map (dict):
-                Updated shared REF map to pass into the next array.
+            variants_allele_map (dict):
+                Updated shared REF/ALT-pair map to pass into the next array.
     """
     # Obtain the masked genotype matrices, SNP identifiers, and haplotype identifiers
     logging.info("------ Array Processing: ------")
     
     # Extract genotype data, sample identifiers, and variant identifiers from the SNPObject.
     # When processing multiple arrays, keep genotype encoding aligned to a shared
-    # REF allele map so cross-array distances are comparable.
-    genotypes, haplotypes, variants_id, variants_ref_map = process_snpobj(
+    # REF/ALT allele-pair map so cross-array distances are comparable.
+    genotypes, haplotypes, variants_id, variants_allele_map = process_snpobj(
         snpobj,
         rsid_or_chrompos,
-        variants_ref_map=variants_ref_map,
+        variants_allele_map=variants_allele_map,
     )
 
     if is_masked:
@@ -642,7 +678,7 @@ def process_genotypes(
         # Remove duplicate haplotype identifiers (A/B haplotype labels)
         haplotypes = remove_AB_indIDs(haplotypes)
     
-    return mask, variants_id, haplotypes, variants_ref_map
+    return mask, variants_id, haplotypes, variants_allele_map
 
 
 def process_labels_weights(

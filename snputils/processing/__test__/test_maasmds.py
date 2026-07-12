@@ -1,8 +1,13 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from snputils.processing._utils.gen_tools import process_genotypes, process_labels_weights
+from snputils.processing._utils.gen_tools import (
+    harmonize_genotypes_by_alleles,
+    process_genotypes,
+    process_labels_weights,
+)
 from snputils.processing._utils.mds_distance import (
     binary_intersection,
     conversion_metrics,
@@ -142,9 +147,9 @@ def _manual_multi_array_run(
     groups = []
     weights = []
 
-    variants_ref_map = {}
+    variants_allele_map = {}
     for array_index, (snpobj, laiobj) in enumerate(zip(snpobjs, laiobjs)):
-        mask, variants_id, haplotypes, variants_ref_map = process_genotypes(
+        mask, variants_id, haplotypes, variants_allele_map = process_genotypes(
             snpobj,
             laiobj,
             ancestry,
@@ -152,7 +157,7 @@ def _manual_multi_array_run(
             require_complete_haplotype_pair=False,
             is_masked=True,
             rsid_or_chrompos=1,
-            variants_ref_map=variants_ref_map,
+            variants_allele_map=variants_allele_map,
         )
         mask, haplotypes, current_groups, current_weights = process_labels_weights(
             labels_file,
@@ -360,8 +365,8 @@ def test_process_genotypes_harmonizes_flipped_reference_alleles_across_arrays():
         variants_alt=["G", "T", "A"],
     )
     laiobjs = [_make_laiobj(["A1", "A2"]), _make_laiobj(["B1", "B2"])]
-    variants_ref_map = {}
-    _, _, _, variants_ref_map = process_genotypes(
+    variants_allele_map = {}
+    _, _, _, variants_allele_map = process_genotypes(
         array1,
         laiobjs[0],
         0,
@@ -369,9 +374,9 @@ def test_process_genotypes_harmonizes_flipped_reference_alleles_across_arrays():
         require_complete_haplotype_pair=False,
         is_masked=True,
         rsid_or_chrompos=1,
-        variants_ref_map=variants_ref_map,
+        variants_allele_map=variants_allele_map,
     )
-    flipped_mask, flipped_variants, flipped_haplotypes, variants_ref_map = process_genotypes(
+    flipped_mask, flipped_variants, flipped_haplotypes, variants_allele_map = process_genotypes(
         array2_flipped,
         laiobjs[1],
         0,
@@ -379,7 +384,7 @@ def test_process_genotypes_harmonizes_flipped_reference_alleles_across_arrays():
         require_complete_haplotype_pair=False,
         is_masked=True,
         rsid_or_chrompos=1,
-        variants_ref_map=variants_ref_map,
+        variants_allele_map=variants_allele_map,
     )
     expected_mask, expected_variants, expected_haplotypes, _ = process_genotypes(
         array2_expected,
@@ -389,9 +394,37 @@ def test_process_genotypes_harmonizes_flipped_reference_alleles_across_arrays():
         require_complete_haplotype_pair=False,
         is_masked=True,
         rsid_or_chrompos=1,
-        variants_ref_map={},
+        variants_allele_map={},
     )
 
     np.testing.assert_array_equal(flipped_variants, expected_variants)
     np.testing.assert_array_equal(flipped_haplotypes, expected_haplotypes)
     np.testing.assert_allclose(flipped_mask[0], expected_mask[0], atol=1e-8)
+
+
+@pytest.mark.parametrize(
+    ("current_ref", "current_alt"),
+    [("G", "T"), ("A", "G")],
+)
+def test_harmonization_rejects_nonmatching_allele_pairs(current_ref, current_alt):
+    genotypes = np.array([[0.0, 1.0, np.nan]])
+
+    with pytest.raises(ValueError, match="neither identical nor REF/ALT swaps"):
+        harmonize_genotypes_by_alleles(
+            genotypes,
+            variants_id=[1],
+            variants_ref=[current_ref],
+            variants_alt=[current_alt],
+            variants_allele_map={1: ("A", "C")},
+        )
+
+
+def test_harmonization_requires_complete_ref_alt_metadata():
+    with pytest.raises(ValueError, match="requires both.*variants_ref.*variants_alt"):
+        harmonize_genotypes_by_alleles(
+            np.array([[0.0, 1.0]]),
+            variants_id=[1],
+            variants_ref=["A"],
+            variants_alt=None,
+            variants_allele_map={},
+        )

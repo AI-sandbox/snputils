@@ -93,6 +93,15 @@ def test_read_pheno_accepts_compressed_text(tmp_path: Path, compression_suffix: 
     assert phenotype.values.tolist() == [170, 180]
 
 
+@pytest.mark.parametrize("requested", ["BMI", "IID"])
+def test_read_pheno_rejects_requested_nonphenotype_column(tmp_path: Path, requested: str):
+    path = tmp_path / "phenotype.pheno"
+    path.write_text("FID IID HEIGHT\nF1 S1 170\nF2 S2 180\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"Phenotype column '{requested}'.*not found"):
+        read_pheno(path, col=requested)
+
+
 @pytest.mark.parametrize("compression_suffix", [".gz", ".zst"])
 def test_multi_phen_reader_accepts_compressed_text(tmp_path: Path, compression_suffix: str):
     path = tmp_path / f"phenotypes.tsv{compression_suffix}"

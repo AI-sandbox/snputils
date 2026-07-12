@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import zstandard as zstd
 
-from snputils.phenotype import MultiPhenReader, MultiPhenotypeObject, read_pheno
+from snputils.phenotype import MultiPhenReader, MultiPhenotypeObject, PhenotypeObject, read_pheno
 
 
 def _write_compressed_text(path: Path, contents: str) -> None:
@@ -47,6 +47,22 @@ def test_multi_phenotype_object_rejects_duplicate_samples():
                 }
             )
         )
+
+
+def test_quantitative_phenotype_has_no_case_control_classification():
+    phenotype = PhenotypeObject(
+        samples=["S0", "S1", "S2"],
+        values=[165.0, 172.0, 181.0],
+        phenotype_name="height",
+        quantitative=True,
+    )
+
+    assert phenotype.cases is None
+    assert phenotype.controls is None
+    assert phenotype.n_cases is None
+    assert phenotype.n_controls is None
+    assert phenotype.cases_haplotypes is None
+    assert phenotype.controls_haplotypes is None
 
 
 def test_multi_phen_reader_uses_iid_convention_and_drops_fid(tmp_path: Path):

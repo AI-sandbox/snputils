@@ -1545,6 +1545,56 @@ def test_merge_inplace_preserves_sample_sex_when_left_has_no_fid():
     assert left.genotypes.shape == (2, 2, 2)
 
 
+def test_merge_fills_missing_call_arrays_instead_of_discarding_data():
+    left = SNPObject(
+        genotypes=np.array([[[0, 1]], [[1, 1]]], dtype=np.int8),
+        calldata_lai=np.array([[0, 1], [1, 0]], dtype=np.uint8),
+        samples=np.array(["left"]),
+        variants_id=np.array(["v1", "v2"]),
+    )
+    right_gp = np.array([[[0.2, 0.3, 0.5]], [[0.7, 0.2, 0.1]]], dtype=np.float32)
+    right = SNPObject(
+        calldata_gp=right_gp,
+        samples=np.array(["right"]),
+        variants_id=np.array(["v1", "v2"]),
+    )
+
+    merged = left.merge(right)
+
+    np.testing.assert_array_equal(merged.genotypes[:, 0], left.genotypes[:, 0])
+    np.testing.assert_array_equal(merged.genotypes[:, 1], -1)
+    np.testing.assert_array_equal(merged.calldata_lai[:, :2], left.calldata_lai)
+    np.testing.assert_array_equal(merged.calldata_lai[:, 2:], -1)
+    assert np.issubdtype(merged.calldata_lai.dtype, np.signedinteger)
+    assert np.isnan(merged.calldata_gp[:, 0]).all()
+    np.testing.assert_allclose(merged.calldata_gp[:, 1], right_gp[:, 0])
+
+
+def test_concat_fills_missing_call_arrays_instead_of_discarding_data():
+    left = SNPObject(
+        genotypes=np.array([[0, 2]], dtype=np.int8),
+        calldata_lai=np.array([[[0, 1], [1, 0]]], dtype=np.uint8),
+        samples=np.array(["s1", "s2"]),
+        variants_id=np.array(["v1"]),
+    )
+    right_gp = np.array([[[0.2, 0.3, 0.5], [0.7, 0.2, 0.1]]], dtype=np.float32)
+    right = SNPObject(
+        calldata_gp=right_gp,
+        samples=np.array(["s1", "s2"]),
+        variants_id=np.array(["v2"]),
+    )
+
+    concatenated = left.concat(right)
+
+    np.testing.assert_array_equal(concatenated.genotypes[0], left.genotypes[0])
+    np.testing.assert_array_equal(concatenated.genotypes[1], -1)
+    np.testing.assert_array_equal(concatenated.calldata_lai[0], left.calldata_lai[0])
+    np.testing.assert_array_equal(concatenated.calldata_lai[1], -1)
+    assert np.issubdtype(concatenated.calldata_lai.dtype, np.signedinteger)
+    assert np.isnan(concatenated.calldata_gp[0]).all()
+    np.testing.assert_allclose(concatenated.calldata_gp[1], right_gp[0])
+
+
 def test_correct_flipped_variants_inverts_dosages_and_preserves_missing_values():
     query = SNPObject(
         genotypes=np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),

@@ -65,6 +65,45 @@ def _paired_common_indices(
     return common_ids, query_idx, reference_idx
 
 
+def _concatenate_optional_arrays(
+    left: Optional[np.ndarray],
+    right: Optional[np.ndarray],
+    *,
+    axis: int,
+    left_missing_shape: Tuple[int, ...],
+    right_missing_shape: Tuple[int, ...],
+    missing_value: Union[int, float],
+    name: str,
+) -> Optional[np.ndarray]:
+    if left is None and right is None:
+        return None
+
+    left_array = None if left is None else np.asarray(left)
+    right_array = None if right is None else np.asarray(right)
+    template = left_array if left_array is not None else right_array
+
+    if np.isnan(missing_value):
+        dtype = np.result_type(template.dtype, np.float32)
+    elif template.dtype.kind in "ub":
+        dtype = np.result_type(template.dtype, np.int8)
+    else:
+        dtype = template.dtype
+
+    if left_array is None:
+        left_array = np.full(left_missing_shape, missing_value, dtype=dtype)
+        right_array = right_array.astype(dtype, copy=False)
+    elif right_array is None:
+        left_array = left_array.astype(dtype, copy=False)
+        right_array = np.full(right_missing_shape, missing_value, dtype=dtype)
+
+    if left_array.ndim != right_array.ndim:
+        raise ValueError(f"Cannot concatenate SNPObjects: `{name}` dimensions differ.")
+    for dimension in range(left_array.ndim):
+        if dimension != axis and left_array.shape[dimension] != right_array.shape[dimension]:
+            raise ValueError(f"Cannot concatenate SNPObjects: incompatible `{name}` shapes.")
+    return np.concatenate([left_array, right_array], axis=axis)
+
+
 class SNPObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
@@ -4693,9 +4732,20 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
                     "Ensure both objects have the same genotype representation before merging."
                 )
-            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=1)
-        else:
-            genotypes = None
+        genotype_template = self.genotypes if self.genotypes is not None else snpobj.genotypes
+        if genotype_template is not None and genotype_template.ndim not in (2, 3):
+            raise ValueError("Cannot merge SNPObjects: `genotypes` must be 2D or 3D.")
+        genotype_tail = () if genotype_template is None else genotype_template.shape[2:]
+        n_genotype_variants = 0 if genotype_template is None else genotype_template.shape[0]
+        genotypes = _concatenate_optional_arrays(
+            self.genotypes,
+            snpobj.genotypes,
+            axis=1,
+            left_missing_shape=(n_genotype_variants, self.n_samples) + genotype_tail,
+            right_missing_shape=(n_genotype_variants, snpobj.n_samples) + genotype_tail,
+            missing_value=-1,
+            name="genotypes",
+        )
 
         # Merge samples if present and compatible, handling duplicates if `force_samples=True`
         merged_fid: Optional[np.ndarray] = None
@@ -4747,9 +4797,30 @@ class SNPObject:
                     f"`self.calldata_lai` has {self.calldata_lai.shape[0]} SNPs, "
                     f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[0]} SNPs."
                 )
-            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=1)
+        lai_template = self.calldata_lai if self.calldata_lai is not None else snpobj.calldata_lai
+        if lai_template is None:
+            left_lai_shape = right_lai_shape = (0, 0)
+        elif lai_template.ndim == 2:
+            template_samples = self.n_samples if self.calldata_lai is not None else snpobj.n_samples
+            if template_samples == 0 or lai_template.shape[1] % template_samples:
+                raise ValueError("Cannot merge SNPObjects: invalid 2D `calldata_lai` shape.")
+            haplotypes_per_sample = lai_template.shape[1] // template_samples
+            left_lai_shape = (lai_template.shape[0], haplotypes_per_sample * self.n_samples)
+            right_lai_shape = (lai_template.shape[0], haplotypes_per_sample * snpobj.n_samples)
+        elif lai_template.ndim == 3:
+            left_lai_shape = (lai_template.shape[0], self.n_samples) + lai_template.shape[2:]
+            right_lai_shape = (lai_template.shape[0], snpobj.n_samples) + lai_template.shape[2:]
         else:
-            calldata_lai = None
+            raise ValueError("Cannot merge SNPObjects: `calldata_lai` must be 2D or 3D.")
+        calldata_lai = _concatenate_optional_arrays(
+            self.calldata_lai,
+            snpobj.calldata_lai,
+            axis=1,
+            left_missing_shape=left_lai_shape,
+            right_missing_shape=right_lai_shape,
+            missing_value=-1,
+            name="calldata_lai",
+        )
 
         if self.calldata_gp is not None and snpobj.calldata_gp is not None:
             if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
@@ -4768,9 +4839,18 @@ class SNPObject:
                 raise ValueError(
                     "Cannot merge SNPObjects: genotype probability columns differ."
                 )
-            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=1)
-        else:
-            calldata_gp = None
+        gp_template = self.calldata_gp if self.calldata_gp is not None else snpobj.calldata_gp
+        gp_tail = () if gp_template is None else gp_template.shape[2:]
+        n_gp_variants = 0 if gp_template is None else gp_template.shape[0]
+        calldata_gp = _concatenate_optional_arrays(
+            self.calldata_gp,
+            snpobj.calldata_gp,
+            axis=1,
+            left_missing_shape=(n_gp_variants, self.n_samples) + gp_tail,
+            right_missing_shape=(n_gp_variants, snpobj.n_samples) + gp_tail,
+            missing_value=np.nan,
+            name="calldata_gp",
+        )
 
         if inplace:
             self.genotypes = genotypes
@@ -4843,9 +4923,19 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
                     "Ensure both objects have the same genotype representation before merging."
                 )
-            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=0)
-        else:
-            genotypes = None
+        genotype_template = self.genotypes if self.genotypes is not None else snpobj.genotypes
+        if genotype_template is not None and genotype_template.ndim not in (2, 3):
+            raise ValueError("Cannot concatenate SNPObjects: `genotypes` must be 2D or 3D.")
+        genotype_tail = () if genotype_template is None else genotype_template.shape[1:]
+        genotypes = _concatenate_optional_arrays(
+            self.genotypes,
+            snpobj.genotypes,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + genotype_tail,
+            right_missing_shape=(snpobj.n_snps,) + genotype_tail,
+            missing_value=-1,
+            name="genotypes",
+        )
 
         if self.samples is not None and snpobj.samples is not None:
             if not np.array_equal(self.samples, snpobj.samples):
@@ -4895,9 +4985,17 @@ class SNPObject:
                     f"`self.calldata_lai` has {self.calldata_lai.shape[1]} samples, "
                     f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[1]} samples."
                 )
-            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=0)
-        else:
-            calldata_lai = None
+        lai_template = self.calldata_lai if self.calldata_lai is not None else snpobj.calldata_lai
+        lai_tail = () if lai_template is None else lai_template.shape[1:]
+        calldata_lai = _concatenate_optional_arrays(
+            self.calldata_lai,
+            snpobj.calldata_lai,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + lai_tail,
+            right_missing_shape=(snpobj.n_snps,) + lai_tail,
+            missing_value=-1,
+            name="calldata_lai",
+        )
 
         if self.calldata_gp is not None and snpobj.calldata_gp is not None:
             if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
@@ -4910,9 +5008,17 @@ class SNPObject:
                 raise ValueError(
                     "Cannot concatenate SNPObjects: genotype probability sample/probability dimensions differ."
                 )
-            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=0)
-        else:
-            calldata_gp = None
+        gp_template = self.calldata_gp if self.calldata_gp is not None else snpobj.calldata_gp
+        gp_tail = () if gp_template is None else gp_template.shape[1:]
+        calldata_gp = _concatenate_optional_arrays(
+            self.calldata_gp,
+            snpobj.calldata_gp,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + gp_tail,
+            right_missing_shape=(snpobj.n_snps,) + gp_tail,
+            missing_value=np.nan,
+            name="calldata_gp",
+        )
 
         if inplace:
             self.genotypes = genotypes

@@ -105,7 +105,7 @@ class mdPCA:
                 If `True`, applies ancestry-specific masking to the genotype matrix, retaining only genotype data 
                 corresponding to the specified `ancestry`. If `False`, uses the full, unmasked genotype matrix.
             average_haplotypes (bool, default=False):
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+                True if the two haplotypes are to be combined (averaged) for each individual, or False otherwise.
             require_complete_haplotype_pair (bool):
                 If `True`, sets the result to NaN if either haplotype in a pair is NaN. 
                 Otherwise, computes the mean while ignoring NaNs (e.g., 0|NaN -> 0, 1|NaN -> 1).
@@ -322,7 +322,7 @@ class mdPCA:
         Retrieve `average_haplotypes`.
         
         Returns:
-            bool: True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+            bool: True if the two haplotypes are to be combined (averaged) for each individual, or False otherwise.
         """
         return self.__average_haplotypes
 
@@ -1078,7 +1078,7 @@ class mdPCA:
             ancestry (str, optional): 
                 Ancestry for which dimensionality reduction is to be performed. Ancestry counter starts at 0.
             average_haplotypes (bool, optional):
-                True if the haplotypes from the two parents are to be combined (averaged) for each individual, or False otherwise.
+                True if the two haplotypes are to be combined (averaged) for each individual, or False otherwise.
                 If None, defaults to `self.average_haplotypes`.
 
         Returns:

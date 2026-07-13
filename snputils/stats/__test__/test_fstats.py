@@ -690,7 +690,7 @@ def test_fst_weir_cockerham_distinguishes_genotypes_with_identical_frequencies()
     assert np.isclose(homozygous_estimate, -1.0, atol=1e-12)
 
 
-def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
+def test_fst_hudson_matches_weighted_block_estimate():
     afs, counts, pops = _toy_data()
     # Use A and B from toy; all counts are 20 so masks align
     pop1 = ["A"]
@@ -728,11 +728,21 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
         num_block[b] = float(np.sum(num_snp))
         den_block[b] = float(np.sum(dxy))
 
+    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
+    block_estimates = num_block / den_block
+    weight_sum = float(np.sum(block_lengths))
+    total = float(np.average(block_estimates, weights=block_lengths))
+    relative_lengths = block_lengths / weight_sum
+    leave_one_out = (total - block_estimates * relative_lengths) / (1.0 - relative_lengths)
+    h = weight_sum / block_lengths
+    weighted_block_estimate = float(np.average(leave_one_out, weights=(1.0 - 1.0 / h)))
+
     assert np.isclose(raw_ratio, num_block.sum() / den_block.sum(), rtol=1e-12, atol=1e-12)
-    assert np.isclose(fst_row.est, raw_ratio, rtol=1e-12, atol=1e-12)
+    assert not np.isclose(weighted_block_estimate, raw_ratio, rtol=1e-6, atol=1e-8)
+    assert np.isclose(fst_row.est, weighted_block_estimate, rtol=1e-12, atol=1e-12)
 
 
-def test_fst_hudson_ratio_of_sums_with_missing_data():
+def test_fst_hudson_weighted_blocks_with_missing_data():
     afs = np.array([
         [0.01, 0.02],
         [0.01, 0.02],
@@ -751,7 +761,16 @@ def test_fst_hudson_ratio_of_sums_with_missing_data():
     dxy = p1 * (1.0 - p2) + p2 * (1.0 - p1)
     pi1 = 2.0 * p1 * (1.0 - p1) * n1 / (n1 - 1.0)
     pi2 = 2.0 * p2 * (1.0 - p2) * n2 / (n2 - 1.0)
-    expected = np.sum(dxy - 0.5 * (pi1 + pi2)) / np.sum(dxy)
+    num_snp = dxy - 0.5 * (pi1 + pi2)
+    num_block = np.array([num_snp[:2].sum(), num_snp[2:4].sum(), num_snp[4:].sum()])
+    den_block = np.array([dxy[:2].sum(), dxy[2:4].sum(), dxy[4:].sum()])
+    block_lengths = np.array([2.0, 2.0, 1.0])
+    block_estimates = num_block / den_block
+    total = float(np.average(block_estimates, weights=block_lengths))
+    relative_lengths = block_lengths / block_lengths.sum()
+    leave_one_out = (total - block_estimates * relative_lengths) / (1.0 - relative_lengths)
+    h = block_lengths.sum() / block_lengths
+    expected = float(np.average(leave_one_out, weights=(1.0 - 1.0 / h)))
 
     result = fst(
         (afs, counts, ["A", "B"]),

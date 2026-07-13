@@ -179,42 +179,11 @@ def _jackknife_block_ratio_estimates(
     *,
     min_abs_den: float = 1e-12,
 ) -> BlockJackknifeResult:
-    num_block_sums = np.asarray(num_block_sums, dtype=float)
     den_block_sums = np.asarray(den_block_sums, dtype=float)
-    block_lengths = np.asarray(block_lengths, dtype=float)
-    valid = (
-        np.isfinite(num_block_sums)
-        & np.isfinite(den_block_sums)
-        & np.isfinite(block_lengths)
-        & (block_lengths > 0)
-    )
-    if not np.any(valid):
-        return BlockJackknifeResult(float("nan"), float("nan"), float("nan"), float("nan"), 0, 0)
-
-    num_block_sums = num_block_sums[valid]
-    den_block_sums = den_block_sums[valid]
-    block_lengths = block_lengths[valid]
-    denominator = float(np.sum(den_block_sums))
-    if abs(denominator) <= min_abs_den:
-        return BlockJackknifeResult(
-            float("nan"),
-            float("nan"),
-            float("nan"),
-            float("nan"),
-            int(block_lengths.size),
-            int(np.sum(block_lengths)),
-        )
-
-    estimate = float(np.sum(num_block_sums) / denominator)
-    result = _weighted_jackknife_ratio_from_block_sums(
-        num_block_sums,
-        den_block_sums,
-        block_lengths,
-        denominator_est_threshold=0.0,
-    )
-    z = float(estimate / result.se) if result.se > 0 else float("nan")
-    p = float(math.erfc(abs(z) / math.sqrt(2))) if np.isfinite(z) else float("nan")
-    return BlockJackknifeResult(estimate, result.se, z, p, result.n_blocks, result.n_snps)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        block_estimates = np.asarray(num_block_sums, dtype=float) / den_block_sums
+    block_estimates = np.where(np.abs(den_block_sums) > min_abs_den, block_estimates, np.nan)
+    return _weighted_jackknife_from_block_estimates(block_estimates, block_lengths)
 
 def _weighted_jackknife_ratio_from_block_sums(
     num_block_sums: np.ndarray,
@@ -1433,10 +1402,13 @@ def fst(
 
     Methods:
         - ``hudson``:
-            Ratio-of-averages following Hudson 1992 / Bhatia 2013. Uses
+            Weighted block estimate using the Hudson 1992 / Bhatia 2013
+            per-SNP components. Uses
             ``num = d_xy - 0.5*(pi_x + pi_y)`` and ``den = d_xy``, where
             ``d_xy = p_x*(1-p_y) + p_y*(1-p_x)`` and
-            ``pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)``.
+            ``pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)``. The reported estimate is
+            the SNP-count-weighted mean of block-level ``sum(num)/sum(den)``
+            ratios, followed by the weighted delete-one-block jackknife.
         - ``weir_cockerham``:
             Weir and Cockerham's theta for two populations. Computes per-SNP
             variance components ``a``, ``b``, and ``c``, then uses a ratio-of-sums

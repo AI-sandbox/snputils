@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import zstandard as zstd
 
-from snputils.phenotype import MultiPhenReader, MultiPhenotypeObject, read_pheno
+from snputils.phenotype import MultiPhenReader, MultiPhenotypeObject, PhenotypeObject, read_pheno
 
 
 def _write_compressed_text(path: Path, contents: str) -> None:
@@ -47,6 +47,22 @@ def test_multi_phenotype_object_rejects_duplicate_samples():
                 }
             )
         )
+
+
+def test_quantitative_phenotype_has_no_case_control_classification():
+    phenotype = PhenotypeObject(
+        samples=["S0", "S1", "S2"],
+        values=[165.0, 172.0, 181.0],
+        phenotype_name="height",
+        quantitative=True,
+    )
+
+    assert phenotype.cases is None
+    assert phenotype.controls is None
+    assert phenotype.n_cases is None
+    assert phenotype.n_controls is None
+    assert phenotype.cases_haplotypes is None
+    assert phenotype.controls_haplotypes is None
 
 
 def test_multi_phen_reader_uses_iid_convention_and_drops_fid(tmp_path: Path):
@@ -91,6 +107,15 @@ def test_read_pheno_accepts_compressed_text(tmp_path: Path, compression_suffix: 
     assert phenotype.samples == ["S1", "S2"]
     assert phenotype.phenotype_name == "height"
     assert phenotype.values.tolist() == [170, 180]
+
+
+@pytest.mark.parametrize("requested", ["BMI", "IID"])
+def test_read_pheno_rejects_requested_nonphenotype_column(tmp_path: Path, requested: str):
+    path = tmp_path / "phenotype.pheno"
+    path.write_text("FID IID HEIGHT\nF1 S1 170\nF2 S2 180\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"Phenotype column '{requested}'.*not found"):
+        read_pheno(path, col=requested)
 
 
 @pytest.mark.parametrize("compression_suffix", [".gz", ".zst"])

@@ -9,9 +9,18 @@ if TYPE_CHECKING:
     from snputils.snp.genobj.snpobj import SNPObject
 
 from snputils._utils.printing import array_shape, format_repr
+from snputils._utils.ancestry import known_lai_values
 from .base import AncestryObject
 
 log = logging.getLogger(__name__)
+
+
+def _sample_id_from_haplotype(haplotype: object) -> str:
+    text = str(haplotype)
+    sample, separator, phase = text.rpartition('.')
+    if separator and sample and phase in {'0', '1'}:
+        return sample
+    return text
 
 
 class LocalAncestryObject(AncestryObject):
@@ -64,7 +73,7 @@ class LocalAncestryObject(AncestryObject):
             raise ValueError("`lai` must be a 2D array with shape (n_windows, n_haplotypes).")
         
         # Determine the number of unique ancestries and samples from the LAI array
-        n_ancestries = len(np.unique(lai))
+        n_ancestries = len(np.unique(known_lai_values(lai)))
         n_haplotypes = lai.shape[1]
         n_samples = n_haplotypes // 2
 
@@ -186,7 +195,7 @@ class LocalAncestryObject(AncestryObject):
         if self.__samples is not None:
             return self.__samples
         elif self.__haplotypes is not None:
-            return [hap.split('.')[0] for hap in self.__haplotypes][::2]
+            return [_sample_id_from_haplotype(hap) for hap in self.__haplotypes][::2]
         else:
             return None
     
@@ -312,7 +321,7 @@ class LocalAncestryObject(AncestryObject):
         Returns:
             int: The total number of unique ancestries.
         """
-        return len(np.unique(self.__lai))
+        return len(np.unique(known_lai_values(self.__lai)))
     
     @property
     def n_haplotypes(self) -> int:
@@ -507,7 +516,7 @@ class LocalAncestryObject(AncestryObject):
             samples = np.asarray(samples).ravel()
             # Extract sample names from haplotype identifiers
             haplotype_ids = np.array(self['haplotypes'])
-            sample_names = np.array([hap.split('.')[0] for hap in haplotype_ids])
+            sample_names = np.array([_sample_id_from_haplotype(hap) for hap in haplotype_ids])
             # Create mask for haplotypes belonging to specified samples
             mask_samples = np.isin(sample_names, samples)
         else:
@@ -549,7 +558,9 @@ class LocalAncestryObject(AncestryObject):
 
             # Source of sample names for ordering logic
             haplotype_ids = np.array(self['haplotypes'])
-            sample_names_by_sample = np.array([hap.split('.')[0] for hap in haplotype_ids])[::2]
+            sample_names_by_sample = np.array(
+                [_sample_id_from_haplotype(hap) for hap in haplotype_ids]
+            )[::2]
 
             # Respect the order in `samples`
             if samples is not None:
@@ -578,7 +589,9 @@ class LocalAncestryObject(AncestryObject):
 
         # Filter / reorder arrays
         if ordered_sample_indices is not None:
-            hap_idx = np.concatenate([2*ordered_sample_indices, 2*ordered_sample_indices + 1])
+            hap_idx = np.column_stack(
+                (2 * ordered_sample_indices, 2 * ordered_sample_indices + 1)
+            ).ravel()
             filtered_lai = self['lai'][:, hap_idx]
             filtered_haplotypes = np.array(self['haplotypes'])[hap_idx].tolist()
             filtered_samples = (
@@ -660,13 +673,20 @@ class LocalAncestryObject(AncestryObject):
 
         # Extract attributes from SNPObject if provided
         if snpobject is not None:
-            variants_chrom = variants_chrom or snpobject.variants_chrom
-            variants_pos = variants_pos or snpobject.variants_pos
-            variants_ref = variants_ref or snpobject.variants_ref
-            variants_alt = variants_alt or snpobject.variants_alt
-            variants_filter_pass = variants_filter_pass or snpobject.variants_filter_pass
-            variants_id = variants_id or snpobject.variants_id
-            variants_qual = variants_qual or snpobject.variants_qual
+            if variants_chrom is None:
+                variants_chrom = snpobject.variants_chrom
+            if variants_pos is None:
+                variants_pos = snpobject.variants_pos
+            if variants_ref is None:
+                variants_ref = snpobject.variants_ref
+            if variants_alt is None:
+                variants_alt = snpobject.variants_alt
+            if variants_filter_pass is None:
+                variants_filter_pass = snpobject.variants_filter_pass
+            if variants_id is None:
+                variants_id = snpobject.variants_id
+            if variants_qual is None:
+                variants_qual = snpobject.variants_qual
 
         n_samples = self.n_samples
         lai_reshaped = self.lai.reshape(self.n_windows, n_samples, 2).astype(int) if lai_format == "3D" else None
@@ -794,7 +814,7 @@ class LocalAncestryObject(AncestryObject):
             ancestry_map (dict, optional): A dictionary mapping ancestry codes to region names, if available.
         """
         # Get unique ancestries from LAI data
-        unique_ancestries = np.unique(self.lai)
+        unique_ancestries = np.unique(known_lai_values(self.lai))
 
         if self.ancestry_map is not None:
             # Check if all unique ancestries in the LAI are present in the ancestry map

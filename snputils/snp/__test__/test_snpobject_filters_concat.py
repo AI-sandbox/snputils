@@ -43,6 +43,23 @@ def test_variant_filters_cover_biallelic_complete_and_variable_genotypes():
     assert filtered.genotypes.shape == (1, 3, 2)
 
 
+def test_filter_variable_genotypes_compares_unordered_allele_pairs():
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 2], [1, 1]],
+                [[0, 1], [1, 0]],
+            ],
+            dtype=np.int8,
+        ),
+        variants_id=np.array(["different_genotypes", "phase_only"], dtype=object),
+    )
+
+    filtered = snpobj.filter_variable_genotypes()
+
+    assert filtered.variants_id.tolist() == ["different_genotypes"]
+
+
 def test_filter_variants_accepts_boolean_mask():
     snpobj = _toy_snpobj()
 
@@ -1526,3 +1543,346 @@ def test_merge_inplace_preserves_sample_sex_when_left_has_no_fid():
     assert left.samples.tolist() == ["s1", "s2"]
     assert left.sample_sex.tolist() == ["1", "2"]
     assert left.genotypes.shape == (2, 2, 2)
+
+
+def test_merge_fills_missing_call_arrays_instead_of_discarding_data():
+    left = SNPObject(
+        genotypes=np.array([[[0, 1]], [[1, 1]]], dtype=np.int8),
+        calldata_lai=np.array([[0, 1], [1, 0]], dtype=np.uint8),
+        samples=np.array(["left"]),
+        variants_id=np.array(["v1", "v2"]),
+    )
+    right_gp = np.array([[[0.2, 0.3, 0.5]], [[0.7, 0.2, 0.1]]], dtype=np.float32)
+    right = SNPObject(
+        calldata_gp=right_gp,
+        samples=np.array(["right"]),
+        variants_id=np.array(["v1", "v2"]),
+    )
+
+    merged = left.merge(right)
+
+    np.testing.assert_array_equal(merged.genotypes[:, 0], left.genotypes[:, 0])
+    np.testing.assert_array_equal(merged.genotypes[:, 1], -1)
+    np.testing.assert_array_equal(merged.calldata_lai[:, :2], left.calldata_lai)
+    np.testing.assert_array_equal(merged.calldata_lai[:, 2:], -1)
+    assert np.issubdtype(merged.calldata_lai.dtype, np.signedinteger)
+    assert np.isnan(merged.calldata_gp[:, 0]).all()
+    np.testing.assert_allclose(merged.calldata_gp[:, 1], right_gp[:, 0])
+
+
+@pytest.mark.parametrize(
+    ("field", "right_value"),
+    [
+        ("variants_chrom", "2"),
+        ("variants_pos", 20),
+        ("variants_ref", "C"),
+        ("variants_alt", "T"),
+        ("variants_id", "v2"),
+    ],
+)
+def test_merge_rejects_misaligned_variants(field, right_value):
+    metadata = {
+        "variants_chrom": np.array(["1"]),
+        "variants_pos": np.array([10]),
+        "variants_ref": np.array(["A"]),
+        "variants_alt": np.array(["G"]),
+        "variants_id": np.array(["v1"]),
+    }
+    left = SNPObject(
+        genotypes=np.array([[0]], dtype=np.int8),
+        samples=np.array(["left"]),
+        **metadata,
+    )
+    right_metadata = {name: values.copy() for name, values in metadata.items()}
+    right_metadata[field][0] = right_value
+    right = SNPObject(
+        genotypes=np.array([[2]], dtype=np.int8),
+        samples=np.array(["right"]),
+        **right_metadata,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        left.merge(right)
+
+
+def test_merge_validates_and_combines_ancestry_maps():
+    left = SNPObject(
+        calldata_lai=np.array([[0, 1]], dtype=np.int8),
+        samples=np.array(["left"]),
+        variants_id=np.array(["v1"]),
+        ancestry_map={"0": "AFR", "1": "EUR"},
+    )
+    compatible = SNPObject(
+        calldata_lai=np.array([[1, 2]], dtype=np.int8),
+        samples=np.array(["right"]),
+        variants_id=np.array(["v1"]),
+        ancestry_map={"1": "EUR", "2": "AMR"},
+    )
+
+    merged = left.merge(compatible)
+
+    assert merged.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+
+    conflicting = compatible.copy()
+    conflicting.ancestry_map = {"1": "EAS"}
+    with pytest.raises(ValueError, match="ancestry code.*both"):
+        left.merge(conflicting)
+
+
+def test_concat_fills_missing_call_arrays_instead_of_discarding_data():
+    left = SNPObject(
+        genotypes=np.array([[0, 2]], dtype=np.int8),
+        calldata_lai=np.array([[[0, 1], [1, 0]]], dtype=np.uint8),
+        samples=np.array(["s1", "s2"]),
+        variants_id=np.array(["v1"]),
+    )
+    right_gp = np.array([[[0.2, 0.3, 0.5], [0.7, 0.2, 0.1]]], dtype=np.float32)
+    right = SNPObject(
+        calldata_gp=right_gp,
+        samples=np.array(["s1", "s2"]),
+        variants_id=np.array(["v2"]),
+    )
+
+    concatenated = left.concat(right)
+
+    np.testing.assert_array_equal(concatenated.genotypes[0], left.genotypes[0])
+    np.testing.assert_array_equal(concatenated.genotypes[1], -1)
+    np.testing.assert_array_equal(concatenated.calldata_lai[0], left.calldata_lai[0])
+    np.testing.assert_array_equal(concatenated.calldata_lai[1], -1)
+    assert np.issubdtype(concatenated.calldata_lai.dtype, np.signedinteger)
+    assert np.isnan(concatenated.calldata_gp[0]).all()
+    np.testing.assert_allclose(concatenated.calldata_gp[1], right_gp[0])
+
+
+def test_concat_rejects_cross_representation_sample_count_mismatch_without_ids():
+    left = SNPObject(genotypes=np.zeros((1, 2), dtype=np.int8))
+    right = SNPObject(calldata_gp=np.zeros((1, 3, 3), dtype=np.float32))
+
+    with pytest.raises(ValueError, match=r"sample count differs \(2 != 3\)"):
+        left.concat(right)
+
+
+def test_concat_rejects_internally_inconsistent_sample_dimensions():
+    left = SNPObject(
+        genotypes=np.zeros((1, 2), dtype=np.int8),
+        calldata_gp=np.zeros((1, 3, 3), dtype=np.float32),
+    )
+    right = SNPObject(genotypes=np.zeros((1, 2), dtype=np.int8))
+
+    with pytest.raises(ValueError, match=r"`self` has inconsistent sample dimensions"):
+        left.concat(right)
+
+
+def test_concat_preserves_right_only_ancestry_map_with_right_only_lai():
+    left = SNPObject(genotypes=np.array([[0, 2]], dtype=np.int8))
+    right = SNPObject(
+        calldata_lai=np.array([[[0, 1], [1, 2]]], dtype=np.int8),
+        ancestry_map={"0": "AFR", "1": "EUR", "2": "AMR"},
+    )
+
+    concatenated = left.concat(right)
+
+    assert concatenated.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+    np.testing.assert_array_equal(
+        concatenated.calldata_lai[0],
+        np.full_like(right.calldata_lai[0], -1),
+    )
+    np.testing.assert_array_equal(concatenated.calldata_lai[1], right.calldata_lai[0])
+
+
+def test_concat_merges_ancestry_maps_inplace_and_rejects_conflicts():
+    left = SNPObject(
+        calldata_lai=np.array([[[0, 1]]], dtype=np.int8),
+        ancestry_map={"0": "AFR", "1": "EUR"},
+    )
+    compatible = SNPObject(
+        calldata_lai=np.array([[[1, 2]]], dtype=np.int8),
+        ancestry_map={"1": "EUR", "2": "AMR"},
+    )
+
+    result = left.concat(compatible, inplace=True)
+
+    assert result is left
+    assert left.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+
+    conflicting = SNPObject(
+        calldata_lai=np.array([[[1, 2]]], dtype=np.int8),
+        ancestry_map={"1": "EAS", "2": "AMR"},
+    )
+    with pytest.raises(ValueError, match=r"ancestry code.*maps to both"):
+        left.concat(conflicting)
+
+
+def test_correct_flipped_variants_inverts_dosages_and_preserves_missing_values():
+    query = SNPObject(
+        genotypes=np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["G"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(
+        reference,
+        check_complement=False,
+        log_stats=False,
+    )
+
+    np.testing.assert_allclose(
+        corrected.genotypes,
+        np.array([[2.0, 1.0, 0.0, -1.0, np.nan]]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        query.genotypes,
+        np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),
+        equal_nan=True,
+    )
+
+
+def test_correct_flipped_variants_inverts_called_alleles_inplace():
+    query = SNPObject(
+        genotypes=np.array([[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, np.nan]]]),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["G"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    result = query.correct_flipped_variants(
+        reference,
+        check_complement=False,
+        log_stats=False,
+        inplace=True,
+    )
+
+    assert result is None
+    np.testing.assert_allclose(
+        query.genotypes,
+        np.array([[[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [-1.0, np.nan]]]),
+        equal_nan=True,
+    )
+
+
+def test_correct_flipped_variants_leaves_partial_complements_unchanged():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["C"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected is query
+    assert corrected.variants_ref.tolist() == ["A"]
+    assert corrected.variants_alt.tolist() == ["C"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[0, 1, 2]], dtype=np.int8))
+
+
+def test_correct_flipped_variants_applies_consistent_complemented_swap():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["C"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["G"]),
+        variants_alt=np.array(["T"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected.variants_ref.tolist() == ["G"]
+    assert corrected.variants_alt.tolist() == ["T"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[2, 1, 0]], dtype=np.int8))
+
+
+def test_correct_flipped_variants_leaves_strand_ambiguous_pairs_unchanged():
+    query = SNPObject(
+        genotypes=np.array([[0, 1, 2]], dtype=np.int8),
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["T"]),
+    )
+    reference = SNPObject(
+        variants_chrom=np.array(["1"]),
+        variants_pos=np.array([10]),
+        variants_ref=np.array(["T"]),
+        variants_alt=np.array(["A"]),
+    )
+
+    corrected = query.correct_flipped_variants(reference, log_stats=False)
+
+    assert corrected is query
+    assert corrected.variants_ref.tolist() == ["A"]
+    assert corrected.variants_alt.tolist() == ["T"]
+    np.testing.assert_array_equal(corrected.genotypes, np.array([[0, 1, 2]], dtype=np.int8))
+
+
+def test_common_variant_intersection_rejects_duplicated_shared_ids():
+    query = SNPObject(variants_id=np.array(["rs1", "rs1"], dtype=object))
+    reference = SNPObject(variants_id=np.array(["rs1"], dtype=object))
+
+    with pytest.raises(ValueError, match="duplicated shared identifiers.*rs1"):
+        query.get_common_variants_intersection(reference, index_by="id")
+
+
+def test_common_variant_intersection_returns_aligned_indices():
+    query = SNPObject(variants_id=np.array(["rs2", "rs1", "rs3"], dtype=object))
+    reference = SNPObject(variants_id=np.array(["rs1", "rs3", "rs2"], dtype=object))
+
+    common, query_idx, reference_idx = query.get_common_variants_intersection(
+        reference,
+        index_by="id",
+    )
+
+    assert common == ["rs2", "rs1", "rs3"]
+    np.testing.assert_array_equal(query_idx, np.array([0, 1, 2]))
+    np.testing.assert_array_equal(reference_idx, np.array([2, 0, 1]))
+
+
+@pytest.mark.parametrize("index_by", ["id", "pos+id"])
+def test_common_variant_intersection_excludes_missing_ids(index_by):
+    missing_ids = np.array([".", "", None, np.nan, "rs1"], dtype=object)
+    metadata = {
+        "variants_id": missing_ids,
+        "variants_chrom": np.array(["1"] * 5, dtype=object),
+        "variants_pos": np.arange(1, 6),
+    }
+    query = SNPObject(**metadata)
+    reference = SNPObject(**metadata)
+
+    common, query_idx, reference_idx = query.get_common_variants_intersection(
+        reference,
+        index_by=index_by,
+    )
+
+    expected_identifier = "rs1" if index_by == "id" else "1-5-rs1"
+    assert common == [expected_identifier]
+    np.testing.assert_array_equal(query_idx, np.array([4]))
+    np.testing.assert_array_equal(reference_idx, np.array([4]))

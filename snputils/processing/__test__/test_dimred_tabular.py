@@ -2,6 +2,7 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from snputils.processing.dimred_tabular import (
     build_embedding_dataframe,
@@ -53,8 +54,108 @@ def test_pca_row_haplotype_ids_3d_two_rows_per_sample():
     samples = np.array(["x", "y"], dtype=object)
     snp = SNPObject(genotypes=gt, samples=samples)
     out = pca_row_haplotype_ids(snp, average_haplotypes=False)
-    assert len(out) == 4
-    assert out[0].startswith("x|") and out[1].startswith("x|")
+    assert out == ["x|0", "x|1", "y|0", "y|1"]
+
+
+def test_pca_expanded_rows_preserve_haplotypes_across_variants():
+    gt = np.array(
+        [
+            [[0, 1], [1, 0]],
+            [[1, 0], [0, 1]],
+            [[0, 0], [1, 1]],
+        ],
+        dtype=np.int8,
+    )
+    snp = SNPObject(genotypes=gt, samples=np.array(["x", "y"], dtype=object))
+
+    pca = PCA(average_haplotypes=False)
+    observed = pca._get_data_from_snpobj(snp)
+
+    np.testing.assert_array_equal(
+        observed,
+        np.array(
+            [
+                [0, 1, 0],
+                [1, 0, 0],
+                [1, 0, 1],
+                [0, 1, 1],
+            ],
+            dtype=float,
+        ),
+    )
+
+
+def test_pca_expanded_sample_subset_keeps_both_haplotypes():
+    gt = np.array(
+        [
+            [[0, 1], [1, 0]],
+            [[1, 0], [0, 1]],
+        ],
+        dtype=np.int8,
+    )
+    snp = SNPObject(genotypes=gt, samples=np.array(["x", "y"], dtype=object))
+
+    pca = PCA(average_haplotypes=False)
+    observed = pca._get_data_from_snpobj(snp, samples_subset=[1])
+    row_ids = pca_row_haplotype_ids(
+        snp,
+        average_haplotypes=False,
+        samples_subset=[1],
+    )
+
+    np.testing.assert_array_equal(observed, np.array([[1, 0], [0, 1]], dtype=float))
+    assert row_ids == ["y|0", "y|1"]
+
+
+@pytest.mark.parametrize(
+    "genotypes",
+    [
+        np.array([[[0.0, -1.0]]]),
+        np.array([[np.nan]]),
+        np.array([[np.inf]]),
+    ],
+)
+def test_pca_rejects_missing_and_nonfinite_genotypes(genotypes):
+    snp = SNPObject(genotypes=genotypes)
+
+    with pytest.raises(ValueError, match="missing or non-finite"):
+        PCA()._get_data_from_snpobj(snp)
+
+
+@pytest.mark.parametrize("average_haplotypes", [True, False])
+def test_pca_rejects_multiallelic_allele_indexes(average_haplotypes):
+    snp = SNPObject(genotypes=np.array([[[0, 2]], [[1, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="only biallelic allele calls"):
+        PCA()._get_data_from_snpobj(snp, average_haplotypes=average_haplotypes)
+
+
+@pytest.mark.parametrize(
+    "genotypes",
+    [
+        np.array([[0, 1]], dtype=np.int8),
+        np.array([[[0, 1], [1, 1]]], dtype=np.int8),
+    ],
+)
+def test_pca_rejects_multiallelic_variant_metadata(genotypes):
+    snp = SNPObject(
+        genotypes=genotypes,
+        variants_alt=np.array(["C,G"], dtype=object),
+    )
+
+    with pytest.raises(ValueError, match="only biallelic variants"):
+        PCA()._get_data_from_snpobj(snp)
+
+
+def test_pca_allows_biallelic_subset_of_object_with_multiallelic_variant():
+    snp = SNPObject(
+        genotypes=np.array([[[0, 2]], [[0, 1]]], dtype=np.int8),
+        variants_alt=np.array(["C,G", "T"], dtype=object),
+    )
+
+    observed = PCA()._get_data_from_snpobj(snp, snps_subset=[1])
+
+    np.testing.assert_array_equal(observed, np.array([[0.5]]))
 
 
 def test_save_embedding_table_from_model_writes(tmp_path: pathlib.Path):

@@ -126,6 +126,7 @@ def aggregate_pop_allele_freq(
     genotypes: np.ndarray,
     sample_labels: Sequence[Any],
     *,
+    alternate_alleles: Optional[np.ndarray] = None,
     ancestry: Optional[Union[str, int]] = None,
     calldata_lai: Optional[np.ndarray] = None,
     pseudohaploid: Union[bool, int] = False,
@@ -146,6 +147,30 @@ def aggregate_pop_allele_freq(
     gt = np.asarray(genotypes)
     if gt.ndim not in (2, 3):
         raise ValueError("'genotypes' must be 2D or 3D array")
+
+    if alternate_alleles is not None:
+        alts = np.asarray(alternate_alleles, dtype=object).ravel()
+        if any("," in str(alt) for alt in alts if alt is not None):
+            raise ValueError("Allele-frequency statistics currently support only biallelic variants.")
+
+    if np.issubdtype(gt.dtype, np.complexfloating):
+        raise ValueError("Allele-frequency statistics require real-valued genotypes.")
+    if np.issubdtype(gt.dtype, np.number):
+        numeric_gt = gt
+    else:
+        try:
+            numeric_gt = gt.astype(float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Allele-frequency statistics require numeric genotypes.") from exc
+
+    if np.any(np.isposinf(numeric_gt)):
+        raise ValueError("Allele-frequency statistics do not support infinite genotype values.")
+    if gt.ndim == 3:
+        called = np.isfinite(numeric_gt) & (numeric_gt >= 0)
+        if np.any(called & (numeric_gt != 0) & (numeric_gt != 1)):
+            raise ValueError("Allele-frequency statistics currently support only biallelic allele calls.")
+    elif np.any(numeric_gt > 2):
+        raise ValueError("Allele-frequency statistics currently support only biallelic dosages between 0 and 2.")
 
     n_snps = gt.shape[0]
     n_samples = gt.shape[1]

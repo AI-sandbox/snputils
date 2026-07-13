@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.stats import f2, f3, f4, d_stat, f4_ratio, fst
@@ -107,16 +108,75 @@ def test_f4_identity_additivity():
 
 def test_f2_equals_f4_self_definition():
     afs, counts, pops = _toy_data()
-    f2_ab = f2((afs, counts, pops), pop1=["A"], pop2=["B"], apply_correction=False, block_size=2).est.iloc[0]
+    f2_ab = f2((afs, counts, pops), pop1=["A"], pop2=["B"], apply_correction=True, block_size=2).est.iloc[0]
     f4_abab = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["B"], block_size=2).est.iloc[0]
     assert np.isclose(f2_ab, f4_abab, atol=1e-12)
 
 
 def test_f3_equals_f4_cross_definition():
     afs, counts, pops = _toy_data()
-    f3_a_bc = f3((afs, counts, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=False, block_size=2).est.iloc[0]
+    f3_a_bc = f3((afs, counts, pops), target=["A"], ref1=["B"], ref2=["C"], apply_correction=True, block_size=2).est.iloc[0]
     f4_abac = f4((afs, counts, pops), a=["A"], b=["B"], c=["A"], d=["C"], block_size=2).est.iloc[0]
     assert np.isclose(f3_a_bc, f4_abac, atol=1e-12)
+
+
+def test_f4_repeated_populations_apply_finite_sample_correction():
+    afs = np.array([[0.25, 0.75]] * 4, dtype=float)
+    counts = np.full_like(afs, 4.0)
+    data = (afs, counts, ["A", "B"])
+
+    f2_ab = f2(data, pop1=["A"], pop2=["B"], block_size=2).iloc[0]
+    f4_abab = f4(data, a=["A"], b=["B"], c=["A"], d=["B"], block_size=2).iloc[0]
+
+    assert np.isclose(f2_ab.est, 0.125, atol=1e-12)
+    assert np.isclose(f4_abab.est, f2_ab.est, atol=1e-12)
+    assert f4_abab.n_snps == f2_ab.n_snps
+
+
+def test_f4_distinct_populations_remain_uncorrected():
+    afs = np.array(
+        [
+            [0.25, 0.75, 0.20, 0.60],
+            [0.40, 0.10, 0.80, 0.30],
+        ]
+    )
+    counts = np.full_like(afs, 4.0)
+    expected = np.mean((afs[:, 0] - afs[:, 1]) * (afs[:, 2] - afs[:, 3]))
+
+    observed = f4(
+        (afs, counts, ["A", "B", "C", "D"]),
+        a=["A"],
+        b=["B"],
+        c=["C"],
+        d=["D"],
+        block_size=1,
+    ).est.iloc[0]
+
+    assert np.isclose(observed, expected, atol=1e-12)
+
+
+def test_repeated_population_correction_handles_low_counts_and_f4_ratio():
+    afs = np.array(
+        [[0.25, 0.75], [0.20, 0.60], [0.40, np.nan], [0.80, 0.30]],
+        dtype=float,
+    )
+    counts = np.full_like(afs, 4.0)
+    counts[0, 0] = 1.0
+    counts[2, 1] = 0.0
+    data = (afs, counts, ["A", "B"])
+
+    f2_ab = f2(data, pop1=["A"], pop2=["B"], block_size=1).iloc[0]
+    f4_abab = f4(data, a=["A"], b=["B"], c=["A"], d=["B"], block_size=1).iloc[0]
+    ratio = f4_ratio(
+        data,
+        num=[("A", "B", "A", "B")],
+        den=[("B", "A", "B", "A")],
+        block_size=1,
+    ).iloc[0]
+
+    assert np.isclose(f4_abab.est, f2_ab.est, atol=1e-12)
+    assert f4_abab.n_snps == f2_ab.n_snps == 2
+    assert np.isclose(ratio.est, 1.0, atol=1e-12)
     
 
 def test_f3_corrected_equals_f4_minus_target_term():
@@ -284,14 +344,79 @@ def test_fst_hudson_basic():
 
 
 def test_fst_weir_cockerham_basic():
-    afs, counts, pops = _toy_data()
-    res = fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2)
+    genotypes = np.array(
+        [
+            [1, 1, 0, 0, 1, 1, 2, 2],
+            [2, 0, 0, 0, 0, 2, 2, 2],
+        ],
+        dtype=np.int8,
+    )
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+    res = fst(
+        SNPObject(genotypes=genotypes),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    )
     assert res.shape[0] == 1
     row = res.iloc[0]
     assert row.method == "weir_cockerham"
     assert np.isfinite(row.est)
-    assert row.n_blocks == 3
-    assert row.n_snps == 6
+    assert row.n_blocks == 2
+    assert row.n_snps == 2
+
+
+def test_fst_weir_cockerham_rejects_allele_frequency_summaries():
+    afs, counts, pops = _toy_data()
+
+    with pytest.raises(ValueError, match="observed heterozygosity"):
+        fst((afs, counts, pops), pop1=["A"], pop2=["B"], method="weir_cockerham")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"pseudohaploid": True}, "pseudohaploid"),
+        ({"ancestry": "0"}, "ancestry-specific"),
+    ],
+)
+def test_fst_weir_cockerham_rejects_unsupported_call_types(kwargs, message):
+    snpobj = SNPObject(genotypes=np.array([[0, 1, 1, 2]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match=message):
+        fst(
+            snpobj,
+            pop1=["X"],
+            pop2=["Y"],
+            sample_labels=["X", "X", "Y", "Y"],
+            method="weir_cockerham",
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "snpobj",
+    [
+        SNPObject(
+            genotypes=np.array([[0, 1, 1, 2]], dtype=np.int8),
+            variants_alt=np.array(["G,T"]),
+        ),
+        SNPObject(
+            genotypes=np.array([[[0, 0], [0, 2], [0, 1], [1, 1]]], dtype=np.int8),
+        ),
+    ],
+)
+def test_fst_weir_cockerham_rejects_multiallelic_calls(snpobj):
+    with pytest.raises(ValueError, match="biallelic"):
+        fst(
+            snpobj,
+            pop1=["X"],
+            pop2=["Y"],
+            sample_labels=["X", "X", "Y", "Y"],
+            method="weir_cockerham",
+        )
 
 
 def test_fst_all_pairs_default():
@@ -314,12 +439,33 @@ def test_fst_invalid_method_raises():
 def test_fst_ignores_snp_with_too_small_n():
     afs, counts, pops = _toy_data()
     counts2 = counts.copy()
-    # Make first SNP invalid in A (n=1) so it is dropped for both methods
     counts2[0, pops.index("A")] = 1
     r_h = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="hudson", block_size=2).iloc[0]
-    r_w = fst((afs, counts2, pops), pop1=["A"], pop2=["B"], method="weir_cockerham", block_size=2).iloc[0]
-    assert r_h.n_snps < 6 and r_w.n_snps < 6
-    assert np.isfinite(r_h.est) and np.isfinite(r_w.est)
+    assert r_h.n_snps < 6
+    assert np.isfinite(r_h.est)
+
+
+def test_fst_weir_cockerham_ignores_snp_with_too_few_called_individuals():
+    genotypes = np.array(
+        [
+            [1, -1, -1, -1, 1, 1, 2, 2],
+            [1, 1, 0, 0, 1, 1, 2, 2],
+        ],
+        dtype=np.int8,
+    )
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+
+    row = fst(
+        SNPObject(genotypes=genotypes),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    ).iloc[0]
+
+    assert row.n_snps == 1
+    assert np.isfinite(row.est)
 
 
 def test_fst_blocks_with_labels_invariant():
@@ -331,34 +477,50 @@ def test_fst_blocks_with_labels_invariant():
     alt  = fst((afs[perm], counts[perm], pops), pop1=["A"], pop2=["B"], method="hudson", blocks=labels[perm]).est.iloc[0]
     assert np.isclose(base, alt, atol=1e-15)
 
-def test_fst_weir_cockerham_matches_manual_ratio_of_sums():
-    afs = np.array([[0.10, 0.90],
-                    [0.25, 0.75],
-                    [0.40, 0.60]], dtype=float)
-    counts = np.array([[40, 30],
-                       [40, 30],
-                       [40, 30]], dtype=float)
-    pops = ["X", "Y"]
+@pytest.mark.parametrize(
+    ("genotypes", "expected"),
+    [
+        ([1, 1, 0, 0, 1, 1, 2, 2], 1.0 / 3.0),
+        ([2, 0, 0, 0, 0, 2, 2, 2], 0.2),
+    ],
+)
+def test_fst_weir_cockerham_uses_observed_heterozygosity(genotypes, expected):
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+    snpobj = SNPObject(genotypes=np.asarray([genotypes], dtype=np.int8))
 
-    p1, p2 = afs[:, 0], afs[:, 1]
-    n1, n2 = counts[:, 0], counts[:, 1]
-    n = n1 + n2
-    n_bar = n / 2.0
-    p_bar = (n1 * p1 + n2 * p2) / n
-    s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
-    h1 = 2 * p1 * (1 - p1)
-    h2 = 2 * p2 * (1 - p2)
-    h_bar = 0.5 * (h1 + h2)
-    n_c = n - (n1 * n1 + n2 * n2) / n  # == 2*n1*n2/n for r=2
+    estimate = fst(
+        snpobj,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+        block_size=1,
+    ).est.iloc[0]
 
-    a = (n_bar / n_c) * (s2 - (p_bar * (1 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1))
-    b = (n_bar / (n_bar - 1)) * (p_bar * (1 - p_bar) - 0.5 * s2 - ((2 * n_bar - 1) / (4 * n_bar)) * h_bar)
-    c = 0.5 * h_bar
+    assert np.isclose(estimate, expected, rtol=1e-12, atol=1e-12)
 
-    expected = np.nansum(a) / np.nansum(a + b + c)
 
-    res = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=3).est.iloc[0]
-    assert np.isclose(res, expected, rtol=1e-12, atol=1e-12)
+def test_fst_weir_cockerham_accepts_diploid_allele_calls():
+    dosages = np.array([[1, 1, 0, 0, 1, 1, 2, 2]], dtype=np.int8)
+    alleles = np.stack([dosages // 2, dosages - dosages // 2], axis=2)
+    labels = np.array(["X"] * 4 + ["Y"] * 4)
+
+    dosage_estimate = fst(
+        SNPObject(genotypes=dosages),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+    allele_estimate = fst(
+        SNPObject(genotypes=alleles),
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+
+    assert np.isclose(allele_estimate, dosage_estimate, rtol=1e-12, atol=1e-12)
 
 
 def test_fst_tsallis_basic():
@@ -504,20 +666,31 @@ def test_fst_hudson_identical_populations_expected_bias():
     assert np.isclose(est, expected, atol=1e-12)
 
 
-def test_fst_weir_cockerham_identical_populations_expected_bias():
-    # Same setup; WC has half the finite-sample bias of Hudson in this scenario
-    afs = np.array([[0.1, 0.1],
-                    [0.3, 0.3],
-                    [0.7, 0.7]], dtype=float)
-    counts = np.full_like(afs, 40.0)
-    pops = ["X", "Y"]
+def test_fst_weir_cockerham_distinguishes_genotypes_with_identical_frequencies():
+    labels = np.array(["X", "X", "Y", "Y"])
+    all_heterozygous = SNPObject(genotypes=np.array([[1, 1, 1, 1]], dtype=np.int8))
+    balanced_homozygous = SNPObject(genotypes=np.array([[0, 2, 0, 2]], dtype=np.int8))
 
-    est = fst((afs, counts, pops), pop1=["X"], pop2=["Y"], method="weir_cockerham", block_size=2).est.iloc[0]
-    expected = -0.5 / (40.0 - 1.0)   # = -1/(2*39)
-    assert np.isclose(est, expected, atol=1e-12)
+    heterozygous_estimate = fst(
+        all_heterozygous,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+    homozygous_estimate = fst(
+        balanced_homozygous,
+        pop1=["X"],
+        pop2=["Y"],
+        sample_labels=labels,
+        method="weir_cockerham",
+    ).est.iloc[0]
+
+    assert np.isclose(heterozygous_estimate, 0.0, atol=1e-12)
+    assert np.isclose(homozygous_estimate, -1.0, atol=1e-12)
 
 
-def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
+def test_fst_hudson_matches_weighted_block_estimate():
     afs, counts, pops = _toy_data()
     # Use A and B from toy; all counts are 20 so masks align
     pop1 = ["A"]
@@ -540,11 +713,8 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
     # num = corrected f2 sum, den = uncorrected f2 + within-pop het sum.
     raw_ratio = num_sum / den_sum
 
-    # The reported fst() estimate uses weighted delete-one-block jackknife
-    # over block-level ratios, matching ADMIXTOOLS style estimation.
     block_ids = np.arange(afs.shape[0]) // 2
     n_blocks = int(block_ids.max()) + 1
-    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
     num_block = np.zeros(n_blocks, dtype=float)
     den_block = np.zeros(n_blocks, dtype=float)
     for b in range(n_blocks):
@@ -558,17 +728,59 @@ def test_fst_hudson_equals_ratio_of_sums_of_f2_and_within_hets():
         num_block[b] = float(np.sum(num_snp))
         den_block[b] = float(np.sum(dxy))
 
-    block_est = num_block / den_block
-    weights = block_lengths
-    weight_sum = float(np.sum(weights))
-    tot = float(np.average(block_est, weights=weights))
-    rel = weights / weight_sum
-    loo = (tot - block_est * rel) / (1.0 - rel)
-    h = weight_sum / weights
-    jk_expected = float(np.average(loo, weights=(1.0 - 1.0 / h)))
+    block_lengths = np.bincount(block_ids, minlength=n_blocks).astype(float)
+    block_estimates = num_block / den_block
+    weight_sum = float(np.sum(block_lengths))
+    total = float(np.average(block_estimates, weights=block_lengths))
+    relative_lengths = block_lengths / weight_sum
+    leave_one_out = (total - block_estimates * relative_lengths) / (1.0 - relative_lengths)
+    h = weight_sum / block_lengths
+    weighted_block_estimate = float(np.average(leave_one_out, weights=(1.0 - 1.0 / h)))
 
     assert np.isclose(raw_ratio, num_block.sum() / den_block.sum(), rtol=1e-12, atol=1e-12)
-    assert np.isclose(fst_row.est, jk_expected, rtol=1e-12, atol=1e-12)
+    assert not np.isclose(weighted_block_estimate, raw_ratio, rtol=1e-6, atol=1e-8)
+    assert np.isclose(fst_row.est, weighted_block_estimate, rtol=1e-12, atol=1e-12)
+
+
+def test_fst_hudson_weighted_blocks_with_missing_data():
+    afs = np.array([
+        [0.01, 0.02],
+        [0.01, 0.02],
+        [0.10, 0.90],
+        [0.10, 0.90],
+        [0.40, 0.60],
+        [np.nan, 0.50],
+    ])
+    counts = np.full_like(afs, 100.0)
+    counts[-1, 0] = 0.0
+
+    p1 = afs[:-1, 0]
+    p2 = afs[:-1, 1]
+    n1 = counts[:-1, 0]
+    n2 = counts[:-1, 1]
+    dxy = p1 * (1.0 - p2) + p2 * (1.0 - p1)
+    pi1 = 2.0 * p1 * (1.0 - p1) * n1 / (n1 - 1.0)
+    pi2 = 2.0 * p2 * (1.0 - p2) * n2 / (n2 - 1.0)
+    num_snp = dxy - 0.5 * (pi1 + pi2)
+    num_block = np.array([num_snp[:2].sum(), num_snp[2:4].sum(), num_snp[4:].sum()])
+    den_block = np.array([dxy[:2].sum(), dxy[2:4].sum(), dxy[4:].sum()])
+    block_lengths = np.array([2.0, 2.0, 1.0])
+    block_estimates = num_block / den_block
+    total = float(np.average(block_estimates, weights=block_lengths))
+    relative_lengths = block_lengths / block_lengths.sum()
+    leave_one_out = (total - block_estimates * relative_lengths) / (1.0 - relative_lengths)
+    h = block_lengths.sum() / block_lengths
+    expected = float(np.average(leave_one_out, weights=(1.0 - 1.0 / h)))
+
+    result = fst(
+        (afs, counts, ["A", "B"]),
+        pop1=["A"],
+        pop2=["B"],
+        method="hudson",
+        block_size=2,
+    )
+
+    assert np.isclose(result.est.iloc[0], expected, rtol=1e-12, atol=1e-12)
 
 
 def test_fst_and_f2_pseudohaploid():

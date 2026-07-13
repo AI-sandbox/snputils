@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from snputils._utils.ancestry import known_lai_mask, known_lai_values
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read import LAIReader
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
@@ -242,10 +243,13 @@ def _remove_hla_windows(lai_obj) -> int:
 
 def _resolve_ancestries(lai_obj) -> List[Tuple[int, str]]:
     if lai_obj.ancestry_map is None:
-        return [(int(code), f"ANC{int(code)}") for code in sorted(np.unique(lai_obj.lai).astype(int))]
+        codes = sorted(int(code) for code in np.unique(known_lai_values(lai_obj.lai)))
+        return [(code, f"ANC{code}") for code in codes]
     pairs = []
     for code_str, label in lai_obj.ancestry_map.items():
-        pairs.append((int(code_str), str(label)))
+        code = int(code_str)
+        if code >= 0:
+            pairs.append((code, str(label)))
     return sorted(pairs, key=lambda x: x[0])
 
 
@@ -256,12 +260,16 @@ def _resolve_ancestries_from_metadata(
     sample_indices: Optional[np.ndarray] = None,
 ) -> List[Tuple[int, str]]:
     if ancestry_map is not None:
-        pairs = [(int(code), str(label)) for code, label in ancestry_map.items()]
+        pairs = [
+            (int(code), str(label))
+            for code, label in ancestry_map.items()
+            if int(code) >= 0
+        ]
         return sorted(pairs, key=lambda x: x[0])
 
     unique_codes: set[int] = set()
     for chunk in lai_reader.iter_windows(chunk_size=chunk_size, sample_indices=sample_indices):
-        unique_codes.update(int(code) for code in np.unique(chunk["lai"]))
+        unique_codes.update(int(code) for code in np.unique(known_lai_values(chunk["lai"])))
     return [(code, f"ANC{code}") for code in sorted(unique_codes)]
 
 
@@ -384,19 +392,26 @@ def _compute_group_counts_from_lai(
     haplotype_1: np.ndarray,
     ancestry_code: int,
     y_binary: np.ndarray,
+    called_samples: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute group (dosage-bin) counts directly from haplotype arrays.
 
     Avoids materializing the full dosage array by computing counts directly
     from the haplotype_0/haplotype_1 match indicators.
     """
-    n_samples = haplotype_0.shape[1]
-    cases_total = int(np.sum(y_binary))
-
-    m = haplotype_0 == ancestry_code
-    p = haplotype_1 == ancestry_code
+    if called_samples is None:
+        m = haplotype_0 == ancestry_code
+        p = haplotype_1 == ancestry_code
+        samples_total: Union[int, np.ndarray] = haplotype_0.shape[1]
+    else:
+        m = called_samples & (haplotype_0 == ancestry_code)
+        p = called_samples & (haplotype_1 == ancestry_code)
+        samples_total = np.sum(called_samples, axis=1, dtype=np.int64)
 
     y_int = y_binary.astype(np.int64, copy=False)
+    cases_total: Union[int, np.ndarray] = (
+        int(np.sum(y_int)) if called_samples is None else called_samples @ y_int
+    )
 
     sum_m = np.sum(m, axis=1, dtype=np.int64)
     sum_p = np.sum(p, axis=1, dtype=np.int64)
@@ -407,7 +422,7 @@ def _compute_group_counts_from_lai(
     del both
 
     n1 = sum_m + sum_p - 2 * n2
-    n0 = n_samples - n1 - n2
+    n0 = samples_total - n1 - n2
 
     cm = m @ y_int
     cp = p @ y_int
@@ -423,12 +438,17 @@ def _compute_dosage_from_lai(
     haplotype_0: np.ndarray,
     haplotype_1: np.ndarray,
     ancestry_code: int,
+    called_samples: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Materialize per-sample ancestry dosage from haplotype_0/haplotype_1 LAI haplotypes."""
-    return (
+    dosage = (
         (haplotype_0 == ancestry_code).astype(np.uint8)
         + (haplotype_1 == ancestry_code).astype(np.uint8)
     )
+    if called_samples is None:
+        return dosage
+    signed_dosage = dosage.astype(np.int8, copy=False)
+    return np.where(called_samples, signed_dosage, np.int8(-1))
 
 
 def _compute_linear_stats_from_lai(
@@ -436,6 +456,7 @@ def _compute_linear_stats_from_lai(
     haplotype_1: np.ndarray,
     ancestry_code: int,
     y: np.ndarray,
+    called_samples: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute sufficient statistics for OLS on dosage groups directly from haplotype arrays.
 
@@ -446,10 +467,14 @@ def _compute_linear_stats_from_lai(
 
     These three arrays are sufficient to perform closed-form OLS.
     """
-    n_samples = haplotype_0.shape[1]
-
-    m = haplotype_0 == ancestry_code
-    p = haplotype_1 == ancestry_code
+    if called_samples is None:
+        m = haplotype_0 == ancestry_code
+        p = haplotype_1 == ancestry_code
+        samples_total: Union[int, np.ndarray] = haplotype_0.shape[1]
+    else:
+        m = called_samples & (haplotype_0 == ancestry_code)
+        p = called_samples & (haplotype_1 == ancestry_code)
+        samples_total = np.sum(called_samples, axis=1, dtype=np.int64)
 
     both = m & p
     n2 = np.sum(both, axis=1, dtype=np.int64)
@@ -457,13 +482,18 @@ def _compute_linear_stats_from_lai(
     sum_m = np.sum(m, axis=1, dtype=np.int64)
     sum_p = np.sum(p, axis=1, dtype=np.int64)
     n1 = sum_m + sum_p - 2 * n2
-    n0 = n_samples - n1 - n2
+    n0 = samples_total - n1 - n2
 
     y_f64 = y.astype(np.float64, copy=False)
     y_sq = y_f64 * y_f64
 
-    sum_y_total = float(np.sum(y_f64))
-    sum_y2_total = float(np.sum(y_sq))
+    if called_samples is None:
+        sum_y_total: Union[float, np.ndarray] = float(np.sum(y_f64))
+        sum_y2_total: Union[float, np.ndarray] = float(np.sum(y_sq))
+    else:
+        called_f64 = called_samples.astype(np.float64)
+        sum_y_total = called_f64 @ y_f64
+        sum_y2_total = called_f64 @ y_sq
 
     # dosage=2: both haplotype_0 and haplotype_1 match
     sy2 = both.astype(np.float64) @ y_f64
@@ -488,6 +518,67 @@ def _compute_linear_stats_from_lai(
     sum_y = np.stack([sy0, sy1, sy2], axis=1)
     sum_y2 = np.stack([sy0_sq, sy1_sq, sy2_sq], axis=1)
     return n_counts, sum_y, sum_y2
+
+
+def _fit_linear_with_covariates_complete_cases(
+    dosage_batch: np.ndarray,
+    y: np.ndarray,
+    covar_matrix: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit windows after excluding samples whose ancestry dosage is missing."""
+    n_windows = dosage_batch.shape[0]
+    beta = np.full(n_windows, np.nan, dtype=np.float64)
+    se = np.full(n_windows, np.nan, dtype=np.float64)
+    t_stat = np.full(n_windows, np.nan, dtype=np.float64)
+    p = np.full(n_windows, np.nan, dtype=np.float64)
+    errcode = np.full(n_windows, "NO_OBS", dtype=object)
+    called = dosage_batch >= 0
+    obs_ct = np.sum(called, axis=1, dtype=np.int64)
+
+    masks, inverse = np.unique(called, axis=0, return_inverse=True)
+    for group_index, sample_mask in enumerate(masks):
+        window_indexes = np.flatnonzero(inverse == group_index)
+        if int(np.sum(sample_mask)) <= 2 + covar_matrix.shape[1]:
+            continue
+        y_subset = y[sample_mask]
+        covar_subset = covar_matrix[sample_mask]
+        y_resid, q = _prepare_fwl(y_subset, covar_subset)
+        fitted = _fit_linear_batch_with_covariates(
+            dosage_batch[window_indexes][:, sample_mask],
+            y_resid,
+            q,
+            n_covar=covar_matrix.shape[1],
+        )
+        beta[window_indexes], se[window_indexes], t_stat[window_indexes], p[window_indexes], errcode[window_indexes] = fitted
+    return beta, se, t_stat, p, errcode, obs_ct
+
+
+def _fit_logistic_with_covariates_complete_cases(
+    dosage_batch: np.ndarray,
+    y_binary: np.ndarray,
+    covar_matrix: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit windows after excluding samples whose ancestry dosage is missing."""
+    n_windows = dosage_batch.shape[0]
+    beta = np.full(n_windows, np.nan, dtype=np.float64)
+    se = np.full(n_windows, np.nan, dtype=np.float64)
+    z_stat = np.full(n_windows, np.nan, dtype=np.float64)
+    p = np.full(n_windows, np.nan, dtype=np.float64)
+    test = np.full(n_windows, "ADD", dtype=object)
+    errcode = np.full(n_windows, "NO_OBS", dtype=object)
+    called = dosage_batch >= 0
+    obs_ct = np.sum(called, axis=1, dtype=np.int64)
+
+    masks, inverse = np.unique(called, axis=0, return_inverse=True)
+    for group_index, sample_mask in enumerate(masks):
+        window_indexes = np.flatnonzero(inverse == group_index)
+        fitted = _fit_logistic_batch_with_covariates(
+            dosage_batch[window_indexes][:, sample_mask],
+            y_binary[sample_mask],
+            covar_matrix[sample_mask],
+        )
+        beta[window_indexes], se[window_indexes], z_stat[window_indexes], p[window_indexes], test[window_indexes], errcode[window_indexes] = fitted
+    return beta, se, z_stat, p, test, errcode, obs_ct
 
 
 def run_admixture_mapping(
@@ -711,6 +802,11 @@ def run_admixture_mapping(
 
                 haplotype_0 = chunk_lai[:, 0::2]
                 haplotype_1 = chunk_lai[:, 1::2]
+                if np.issubdtype(chunk_lai.dtype, np.unsignedinteger):
+                    called_samples = None
+                else:
+                    called_mask = known_lai_mask(haplotype_0) & known_lai_mask(haplotype_1)
+                    called_samples = None if np.all(called_mask) else called_mask
                 n_windows_in_chunk = chunk_lai.shape[0]
                 n_win_processed = n_windows_in_chunk
 
@@ -732,30 +828,48 @@ def run_admixture_mapping(
                                 haplotype_0,
                                 haplotype_1,
                                 ancestry_code_int,
+                                called_samples,
                             )
-                            beta_arr, se_arr, t_arr, p_arr, errcode_arr = _fit_linear_batch_with_covariates(
-                                dosage_batch,
-                                y_resid,
-                                q_fwl,
-                                n_covar=n_covar,
-                            )
-                            df_linear = float(obs_ct - (2 + n_covar))
+                            if called_samples is None:
+                                beta_arr, se_arr, t_arr, p_arr, errcode_arr = _fit_linear_batch_with_covariates(
+                                    dosage_batch,
+                                    y_resid,
+                                    q_fwl,
+                                    n_covar=n_covar,
+                                )
+                                obs_ct_arr = np.full(n_windows_in_chunk, obs_ct, dtype=np.int64)
+                            else:
+                                beta_arr, se_arr, t_arr, p_arr, errcode_arr, obs_ct_arr = _fit_linear_with_covariates_complete_cases(
+                                    dosage_batch,
+                                    y_f64,
+                                    covar_f64,
+                                )
+                            df_linear: Union[float, np.ndarray] = obs_ct_arr - (2 + n_covar)
                         else:
                             n_batch, sy_batch, sy2_batch = _compute_linear_stats_from_lai(
-                                haplotype_0, haplotype_1, ancestry_code_int, y_f64,
+                                haplotype_0,
+                                haplotype_1,
+                                ancestry_code_int,
+                                y_f64,
+                                called_samples,
                             )
                             beta_arr, se_arr, t_arr, p_arr, errcode_arr = _fit_linear_batch(
                                 n_batch, sy_batch, sy2_batch,
                             )
-                            df_linear = float(obs_ct - 2)
+                            obs_ct_arr = np.sum(n_batch, axis=1, dtype=np.float64).astype(np.int64)
+                            df_linear = obs_ct_arr - 2
 
                         if ci is not None:
-                            ci_low_arr, ci_high_arr = _compute_linear_ci_beta(
-                                beta_arr,
-                                se_arr,
-                                ci=ci,
-                                df=df_linear,
-                            )
+                            ci_low_arr = np.full(n_windows_in_chunk, np.nan, dtype=np.float64)
+                            ci_high_arr = np.full(n_windows_in_chunk, np.nan, dtype=np.float64)
+                            for df_value in np.unique(df_linear):
+                                same_df = df_linear == df_value
+                                ci_low_arr[same_df], ci_high_arr[same_df] = _compute_linear_ci_beta(
+                                    beta_arr[same_df],
+                                    se_arr[same_df],
+                                    ci=ci,
+                                    df=float(df_value),
+                                )
                         else:
                             ci_low_arr = ci_high_arr = None
 
@@ -772,7 +886,7 @@ def run_admixture_mapping(
                                 ancestry_label,
                                 ancestry_label,
                                 "LINEAR",
-                                obs_ct,
+                                int(obs_ct_arr[i]),
                                 beta_arr[i],
                                 se_arr[i],
                                 t_arr[i],
@@ -795,19 +909,33 @@ def run_admixture_mapping(
                                 haplotype_0,
                                 haplotype_1,
                                 ancestry_code_int,
+                                called_samples,
                             )
-                            beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr = _fit_logistic_batch_with_covariates(
-                                dosage_batch,
-                                y_binary,
-                                covar_f64,
-                            )
+                            if called_samples is None:
+                                beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr = _fit_logistic_batch_with_covariates(
+                                    dosage_batch,
+                                    y_binary,
+                                    covar_f64,
+                                )
+                                obs_ct_arr = np.full(n_windows_in_chunk, obs_ct, dtype=np.int64)
+                            else:
+                                beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr, obs_ct_arr = _fit_logistic_with_covariates_complete_cases(
+                                    dosage_batch,
+                                    y_binary,
+                                    covar_f64,
+                                )
                         else:
                             n_counts_batch, c_counts_batch = _compute_group_counts_from_lai(
-                                haplotype_0, haplotype_1, ancestry_code_int, y_binary,
+                                haplotype_0,
+                                haplotype_1,
+                                ancestry_code_int,
+                                y_binary,
+                                called_samples,
                             )
                             beta_arr, se_arr, z_arr, p_arr, test_arr, errcode_arr = _fit_logistic_batch(
                                 n_counts_batch, c_counts_batch,
                             )
+                            obs_ct_arr = np.sum(n_counts_batch, axis=1, dtype=np.float64).astype(np.int64)
                         or_arr = _odds_ratio_batch(beta_arr)
                         if ci is not None:
                             ci_low_arr, ci_high_arr = _compute_logistic_ci_or(beta_arr, se_arr, ci=ci)
@@ -827,7 +955,7 @@ def run_admixture_mapping(
                                 ancestry_label,
                                 ancestry_label,
                                 test_arr[i],
-                                obs_ct,
+                                int(obs_ct_arr[i]),
                                 beta_arr[i],
                                 or_arr[i],
                                 se_arr[i],

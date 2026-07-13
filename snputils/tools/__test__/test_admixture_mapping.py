@@ -18,12 +18,12 @@ from snputils.ancestry.io.local.read.__test__.fixtures import (
 from snputils.ancestry.io.local.write import FLAREWriter
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj.snpobj import SNPObject
-from snputils.tools.admixture_mapping import run_admixture_mapping
+from snputils.tools.admixture_mapping import _compute_dosage_from_lai, run_admixture_mapping
 
 
 def _write_phe(path: Path, sample_ids: Sequence[str], y_binary: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("#FID IID PHENO\n")
+        handle.write("#FID IID toy\n")
         for sid, yi in zip(sample_ids, y_binary):
             status = 2 if int(yi) == 1 else 1
             handle.write(f"{sid} {sid} {status}\n")
@@ -421,14 +421,14 @@ def test_flare_input_matches_msp_input(tmp_path: Path):
         phe_path=phe_path,
         lai_source=lai_path,
         results_path=out_msp,
-        phe_id="PHENO",
+        phe_id="toy",
         batch_size=7,
     )
     flare_results = run_admixture_mapping(
         phe_path=phe_path,
         lai_source=flare_path,
         results_path=out_flare,
-        phe_id="PHENO",
+        phe_id="toy",
         batch_size=7,
     )
 
@@ -501,7 +501,7 @@ def test_internal_total_memory_cap_enforced(tmp_path: Path):
 
 def _write_phe_quantitative(path: Path, sample_ids: Sequence[str], y: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("#FID IID PHENO\n")
+        handle.write("#FID IID toy\n")
         for sid, yi in zip(sample_ids, y):
             handle.write(f"{sid} {sid} {yi}\n")
 
@@ -1235,6 +1235,177 @@ def test_keep_remove_filtering_matches_prefiltered_inputs(tmp_path: Path):
     np.testing.assert_allclose(
         filtered[num_cols].to_numpy(),
         reference[num_cols].to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+def test_missing_lai_is_excluded_per_window_and_not_reported_as_ancestry(tmp_path: Path):
+    sample_ids, y, lai, chromosomes, starts, ends, _ = make_synthetic_dataset(
+        n_samples=80, n_windows=4, seed=919
+    )
+    lai_missing = lai.astype(np.int8)
+    lai_missing[0, 0:2] = -1
+    haplotypes = [f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)]
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai_missing,
+        samples=list(sample_ids),
+        ancestry_map=None,
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+    phenotype = PhenotypeObject(sample_ids, y, phenotype_name="PHENO")
+
+    observed = run_admixture_mapping(
+        phe_path=phenotype,
+        lai_source=laiobj,
+        results_path=tmp_path / "missing",
+        batch_size=4,
+        keep_hla=True,
+    )
+
+    assert "ANC-1" not in set(observed["ANCESTRY"])
+    first_window = observed[observed["POS"].astype(int) == int(starts[0])].copy()
+    later_windows = observed[observed["POS"].astype(int) != int(starts[0])]
+    assert set(first_window["OBS_CT"].astype(int)) == {len(sample_ids) - 1}
+    assert set(later_windows["OBS_CT"].astype(int)) == {len(sample_ids)}
+
+    keep = np.arange(1, len(sample_ids))
+    reference_obj = LocalAncestryObject(
+        haplotypes=[haplotypes[2 * i + phase] for i in keep for phase in (0, 1)],
+        lai=lai[:, 2:],
+        samples=list(np.asarray(sample_ids)[keep]),
+        ancestry_map=None,
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+    reference = run_admixture_mapping(
+        phe_path=PhenotypeObject(
+            list(np.asarray(sample_ids)[keep]),
+            y[keep],
+            phenotype_name="PHENO",
+        ),
+        lai_source=reference_obj,
+        results_path=tmp_path / "reference",
+        batch_size=4,
+        keep_hla=True,
+    )
+    reference_first = reference[reference["POS"].astype(int) == int(starts[0])].copy()
+
+    first_window = first_window.sort_values("ANCESTRY").reset_index(drop=True)
+    reference_first = reference_first.sort_values("ANCESTRY").reset_index(drop=True)
+    assert first_window["ANCESTRY"].tolist() == reference_first["ANCESTRY"].tolist()
+    assert first_window["TEST"].tolist() == reference_first["TEST"].tolist()
+    assert first_window["ERRCODE"].tolist() == reference_first["ERRCODE"].tolist()
+    numeric = ["BETA", "OR", "LOG(OR)_SE", "Z_STAT", "P"]
+    np.testing.assert_allclose(
+        first_window[numeric].astype(float).to_numpy(),
+        reference_first[numeric].astype(float).to_numpy(),
+        rtol=1e-10,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+def test_compute_dosage_from_lai_uses_signed_missing_sentinel():
+    haplotype_0 = np.array([[0, 1, -1]], dtype=np.int8)
+    haplotype_1 = np.array([[0, 0, 1]], dtype=np.int8)
+    called_samples = np.array([[True, False, True]])
+
+    observed = _compute_dosage_from_lai(
+        haplotype_0,
+        haplotype_1,
+        ancestry_code=0,
+        called_samples=called_samples,
+    )
+
+    assert observed.dtype == np.int8
+    np.testing.assert_array_equal(observed, np.array([[2, -1, 0]], dtype=np.int8))
+
+
+def test_missing_lai_uses_complete_cases_with_quantitative_covariates(tmp_path: Path):
+    (
+        sample_ids,
+        _y_binary,
+        y,
+        lai,
+        chromosomes,
+        starts,
+        ends,
+        ancestry_map,
+        covar_names,
+        covar_matrix,
+        _keep,
+        _remove,
+    ) = make_synthetic_dataset_with_covariates(
+        n_samples=90,
+        n_windows=4,
+        n_covariates=2,
+        seed=920,
+    )
+    lai_missing = lai.astype(np.int8)
+    lai_missing[0, 0] = -1
+    haplotypes = [f"{sid}.{phase}" for sid in sample_ids for phase in (0, 1)]
+    ancestry_map_str = {str(code): label for code, label in ancestry_map.items()}
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai_missing,
+        samples=list(sample_ids),
+        ancestry_map=ancestry_map_str,
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+    phenotype = PhenotypeObject(sample_ids, y, phenotype_name="PHENO", quantitative=True)
+    covariates = CovariateObject(sample_ids, covar_matrix, covariate_names=covar_names)
+
+    observed = run_admixture_mapping(
+        phe_path=phenotype,
+        lai_source=laiobj,
+        results_path=tmp_path / "missing_quant",
+        batch_size=4,
+        keep_hla=True,
+        covar=covariates,
+        ci=0.95,
+    )
+
+    keep = np.arange(1, len(sample_ids))
+    reference_obj = LocalAncestryObject(
+        haplotypes=[haplotypes[2 * i + phase] for i in keep for phase in (0, 1)],
+        lai=lai[:, 2:],
+        samples=list(np.asarray(sample_ids)[keep]),
+        ancestry_map=ancestry_map_str,
+        chromosomes=chromosomes,
+        physical_pos=np.column_stack([starts, ends]),
+    )
+    reference = run_admixture_mapping(
+        phe_path=PhenotypeObject(
+            list(np.asarray(sample_ids)[keep]),
+            y[keep],
+            phenotype_name="PHENO",
+            quantitative=True,
+        ),
+        lai_source=reference_obj,
+        results_path=tmp_path / "reference_quant",
+        batch_size=4,
+        keep_hla=True,
+        covar=CovariateObject(
+            list(np.asarray(sample_ids)[keep]),
+            covar_matrix[keep],
+            covariate_names=covar_names,
+        ),
+        ci=0.95,
+    )
+
+    observed_first = observed[observed["POS"].astype(int) == int(starts[0])].sort_values("ANCESTRY").reset_index(drop=True)
+    reference_first = reference[reference["POS"].astype(int) == int(starts[0])].sort_values("ANCESTRY").reset_index(drop=True)
+    assert set(observed_first["OBS_CT"].astype(int)) == {len(sample_ids) - 1}
+    assert observed_first["ERRCODE"].tolist() == reference_first["ERRCODE"].tolist()
+    numeric = ["BETA", "SE", "T_STAT", "P", "L95", "U95"]
+    np.testing.assert_allclose(
+        observed_first[numeric].astype(float).to_numpy(),
+        reference_first[numeric].astype(float).to_numpy(),
         rtol=1e-10,
         atol=1e-12,
         equal_nan=True,

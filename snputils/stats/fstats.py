@@ -281,6 +281,7 @@ def _aggregate_to_pop_allele_freq(
     afs, counts, pops = aggregate_pop_allele_freq(
         genotypes=genotypes,
         sample_labels=sample_labels,
+        alternate_alleles=None if snpobj is None else snpobj.variants_alt,
         ancestry=ancestry,
         calldata_lai=calldata_lai,
         pseudohaploid=pseudohaploid,
@@ -347,6 +348,95 @@ def _prepare_inputs(
     raise ValueError(
         "data must be either a SNPObject or a tuple (afs, counts, pops) where afs/counts have shape (n_snps, n_pops)"
     )
+
+
+def _prepare_weir_cockerham_inputs(
+    data: Any,
+    sample_labels: Optional[Sequence[str]],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+    """Aggregate diploid hard calls without discarding observed heterozygosity."""
+    try:
+        from snputils.snp.genobj.snpobj import SNPObject  # type: ignore
+    except Exception:
+        SNPObject = ()  # type: ignore
+
+    if not isinstance(data, SNPObject):
+        raise ValueError(
+            "method='weir_cockerham' requires diploid hard-call genotypes in an SNPObject; "
+            "allele-frequency summaries do not contain observed heterozygosity."
+        )
+    if data.genotypes is None:
+        raise ValueError("method='weir_cockerham' requires hard-call genotype data in `genotypes`.")
+
+    if data.variants_alt is not None:
+        alts = np.asarray(data.variants_alt, dtype=object).ravel()
+        if any("," in str(alt) for alt in alts if alt is not None):
+            raise ValueError("method='weir_cockerham' currently supports only biallelic variants.")
+
+    genotypes = np.asarray(data.genotypes)
+    if genotypes.ndim not in (2, 3):
+        raise ValueError("method='weir_cockerham' requires a 2D or 3D genotype array.")
+    if genotypes.ndim == 3 and genotypes.shape[2] != 2:
+        raise ValueError("method='weir_cockerham' requires diploid genotypes.")
+
+    if not np.issubdtype(genotypes.dtype, np.number):
+        try:
+            genotypes = genotypes.astype(float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("method='weir_cockerham' requires numeric hard-call genotypes.") from exc
+    if np.issubdtype(genotypes.dtype, np.complexfloating):
+        raise ValueError("method='weir_cockerham' requires real-valued hard-call genotypes.")
+
+    if np.any(np.isinf(genotypes)):
+        raise ValueError("method='weir_cockerham' does not support infinite genotype values.")
+
+    missing = np.isnan(genotypes) | (genotypes < 0)
+    present_values = genotypes[~missing]
+    if genotypes.ndim == 3:
+        if present_values.size and not np.all(np.isin(present_values, (0, 1))):
+            raise ValueError(
+                "method='weir_cockerham' requires biallelic hard calls encoded as 0/1 alleles."
+            )
+        called = ~np.any(missing, axis=2)
+        dosages = np.where(called, np.where(missing, 0.0, genotypes).sum(axis=2), np.nan)
+    else:
+        if present_values.size and not np.all(np.isin(present_values, (0, 1, 2))):
+            raise ValueError(
+                "method='weir_cockerham' requires hard-call dosages encoded as 0, 1, or 2."
+            )
+        called = ~missing
+        dosages = np.where(called, np.rint(genotypes), np.nan)
+
+    if sample_labels is None:
+        sample_labels = _default_sample_labels_from_snpobj(data)
+    labels = np.asarray(sample_labels)
+    if labels.ndim != 1:
+        labels = labels.ravel()
+    if labels.shape[0] != genotypes.shape[1]:
+        raise ValueError("'sample_labels' must have length equal to the number of samples in `genotypes`.")
+
+    populations, population_indices = np.unique(labels, return_inverse=True)
+    n_snps = genotypes.shape[0]
+    allele_frequencies = np.full((n_snps, populations.size), np.nan, dtype=float)
+    sample_counts = np.zeros((n_snps, populations.size), dtype=np.int64)
+    observed_heterozygosity = np.full((n_snps, populations.size), np.nan, dtype=float)
+
+    for population_index in range(populations.size):
+        columns = population_indices == population_index
+        population_called = called[:, columns]
+        counts = population_called.sum(axis=1)
+        sample_counts[:, population_index] = counts
+        nonempty = counts > 0
+        allele_frequencies[nonempty, population_index] = (
+            np.where(population_called, dosages[:, columns], 0.0).sum(axis=1)[nonempty]
+            / (2.0 * counts[nonempty])
+        )
+        observed_heterozygosity[nonempty, population_index] = (
+            (population_called & (dosages[:, columns] == 1)).sum(axis=1)[nonempty]
+            / counts[nonempty]
+        )
+
+    return allele_frequencies, sample_counts, observed_heterozygosity, populations.tolist()
 
 
 def _build_blocks(
@@ -559,6 +649,21 @@ def _tsallis_entropy_bernoulli(p: np.ndarray, q: float) -> np.ndarray:
         return out
 
     return (1.0 - (np.power(p, q) + np.power(1.0 - p, q))) / (q - 1.0)
+
+
+def _f4_overlap_weights(a: int, b: int, c: int, d: int) -> Dict[int, int]:
+    first: Dict[int, int] = {}
+    second: Dict[int, int] = {}
+    first[a] = first.get(a, 0) + 1
+    first[b] = first.get(b, 0) - 1
+    second[c] = second.get(c, 0) + 1
+    second[d] = second.get(d, 0) - 1
+    return {
+        population: first[population] * second[population]
+        for population in first.keys() & second.keys()
+        if first[population] * second[population] != 0
+    }
+
 
 def f2(
     data: Union[Any, Tuple[np.ndarray, np.ndarray, List[str]]],
@@ -855,6 +960,7 @@ def f4(
 
     - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
     - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+    - When a population appears in both allele-frequency contrasts, its finite-sample covariance is corrected automatically.
     - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
@@ -873,28 +979,37 @@ def f4(
 
     name_to_idx = {p: i for i, p in enumerate(pops)}
     rows: List[Dict[str, Union[str, float, int]]] = []
+    indexed_quads = [
+        (pa, pb, pc, dpop, name_to_idx[pa], name_to_idx[pb], name_to_idx[pc], name_to_idx[dpop])
+        for pa, pb, pc, dpop in quads
+    ]
+    needs_correction = any(
+        _f4_overlap_weights(ia, ib, ic, id_)
+        for _, _, _, _, ia, ib, ic, id_ in indexed_quads
+    )
 
     fast = _complete_block_product_sums(
         afs,
         counts,
         block_ids,
         block_lengths,
-        require_counts_gt=0,
-        need_correction=False,
+        require_counts_gt=1 if needs_correction else 0,
+        need_correction=needs_correction,
     )
     if fast is not None:
-        pair_sums, _, den_block_sums = fast
-        for pa, pb, pc, dpop in quads:
-            ia = name_to_idx[pa]
-            ib = name_to_idx[pb]
-            ic = name_to_idx[pc]
-            id_ = name_to_idx[dpop]
+        pair_sums, corr_sums, den_block_sums = fast
+        for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
             num_block_sums = (
                 pair_sums[:, ia, ic]
                 - pair_sums[:, ia, id_]
                 - pair_sums[:, ib, ic]
                 + pair_sums[:, ib, id_]
             )
+            overlap_weights = _f4_overlap_weights(ia, ib, ic, id_)
+            if overlap_weights:
+                assert corr_sums is not None
+                for population, weight in overlap_weights.items():
+                    num_block_sums = num_block_sums - weight * corr_sums[:, population]
             res = _jackknife_ratio_from_block_sums(num_block_sums, den_block_sums)
             rows.append(
                 {
@@ -914,11 +1029,7 @@ def f4(
 
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
 
-    for pa, pb, pc, dpop in quads:
-        ia = name_to_idx[pa]
-        ib = name_to_idx[pb]
-        ic = name_to_idx[pc]
-        id_ = name_to_idx[dpop]
+    for pa, pb, pc, dpop, ia, ib, ic, id_ in indexed_quads:
 
         A = afs[:, ia]
         B = afs[:, ib]
@@ -929,8 +1040,18 @@ def f4(
         nc = counts[:, ic].astype(float)
         nd = counts[:, id_].astype(float)
 
-        with np.errstate(invalid="ignore"):
+        overlap_weights = _f4_overlap_weights(ia, ib, ic, id_)
+        with np.errstate(invalid="ignore", divide="ignore"):
             num = (A - B) * (C - D)
+            for population, weight in overlap_weights.items():
+                population_af = afs[:, population]
+                population_count = counts[:, population].astype(float)
+                correction = np.where(
+                    population_count > 1,
+                    population_af * (1.0 - population_af) / (population_count - 1.0),
+                    np.nan,
+                )
+                num = num - weight * correction
         snp_mask = np.isfinite(num) & (na > 0) & (nb > 0) & (nc > 0) & (nd > 0)
 
         num_block_sums = np.full(n_blocks, np.nan, dtype=float)
@@ -1119,6 +1240,7 @@ def f4_ratio(
     Notes:
         - `block_size` is the number of SNPs per jackknife block (default 5000 SNPs). Ignored if `blocks` is provided.
         - If `ancestry` is provided, genotypes will be masked to the specified ancestry using LAI before aggregation.
+        - Repeated population roles use the same finite-sample correction as `f4`.
         - `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
     """
     if len(num) != len(den):
@@ -1131,19 +1253,32 @@ def f4_ratio(
     name_to_idx = {p: i for i, p in enumerate(pops)}
 
     rows: List[Dict[str, Union[str, float, int]]] = []
+    indexed_pairs = [
+        (
+            (na, nb, nc, nd),
+            (da, db, dc, dd),
+            (name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]),
+            (name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]),
+        )
+        for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den)
+    ]
+    needs_correction = any(
+        _f4_overlap_weights(*num_indexes) or _f4_overlap_weights(*den_indexes)
+        for _, _, num_indexes, den_indexes in indexed_pairs
+    )
     fast = _complete_block_product_sums(
         afs,
         counts,
         block_ids,
         block_lengths,
-        require_counts_gt=0,
-        need_correction=False,
+        require_counts_gt=1 if needs_correction else 0,
+        need_correction=needs_correction,
     )
     if fast is not None:
-        pair_sums, _, _ = fast
-        for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
-            ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
-            ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
+        pair_sums, corr_sums, _ = fast
+        for (na, nb, nc, nd), (da, db, dc, dd), num_indexes, den_indexes in indexed_pairs:
+            ia, ib, ic, id_ = num_indexes
+            ja, jb, jc, jd = den_indexes
 
             num_block_sums = (
                 pair_sums[:, ia, ic]
@@ -1157,6 +1292,15 @@ def f4_ratio(
                 - pair_sums[:, jb, jc]
                 + pair_sums[:, jb, jd]
             )
+            for block_sums, indexes in (
+                (num_block_sums, num_indexes),
+                (den_block_sums, den_indexes),
+            ):
+                overlap_weights = _f4_overlap_weights(*indexes)
+                if overlap_weights:
+                    assert corr_sums is not None
+                    for population, weight in overlap_weights.items():
+                        block_sums -= weight * corr_sums[:, population]
             res = _weighted_jackknife_ratio_from_block_sums(
                 num_block_sums,
                 den_block_sums,
@@ -1177,18 +1321,28 @@ def f4_ratio(
         return pd.DataFrame(rows)
 
     block_bins = [np.where(block_ids == b)[0] for b in range(n_blocks)]
-    for (na, nb, nc, nd), (da, db, dc, dd) in zip(num, den):
-        ia, ib, ic, id_ = name_to_idx[na], name_to_idx[nb], name_to_idx[nc], name_to_idx[nd]
-        ja, jb, jc, jd = name_to_idx[da], name_to_idx[db], name_to_idx[dc], name_to_idx[dd]
+    for (na, nb, nc, nd), (da, db, dc, dd), num_indexes, den_indexes in indexed_pairs:
+        ia, ib, ic, id_ = num_indexes
+        ja, jb, jc, jd = den_indexes
 
         A, B, C, D = afs[:, ia], afs[:, ib], afs[:, ic], afs[:, id_]
         E, F, G, H = afs[:, ja], afs[:, jb], afs[:, jc], afs[:, jd]
         nA, nB, nC, nD = counts[:, ia], counts[:, ib], counts[:, ic], counts[:, id_]
         nE, nF, nG, nH = counts[:, ja], counts[:, jb], counts[:, jc], counts[:, jd]
 
-        with np.errstate(invalid="ignore"):
+        with np.errstate(invalid="ignore", divide="ignore"):
             num_snp = (A - B) * (C - D)
             den_snp = (E - F) * (G - H)
+            for values, indexes in ((num_snp, num_indexes), (den_snp, den_indexes)):
+                for population, weight in _f4_overlap_weights(*indexes).items():
+                    population_af = afs[:, population]
+                    population_count = counts[:, population].astype(float)
+                    correction = np.where(
+                        population_count > 1,
+                        population_af * (1.0 - population_af) / (population_count - 1.0),
+                        np.nan,
+                    )
+                    values -= weight * correction
         mask_num = np.isfinite(num_snp) & (nA > 0) & (nB > 0) & (nC > 0) & (nD > 0)
         mask_den = np.isfinite(den_snp) & (nE > 0) & (nF > 0) & (nG > 0) & (nH > 0)
         mask_both = mask_num & mask_den
@@ -1248,14 +1402,18 @@ def fst(
 
     Methods:
         - ``hudson``:
-            Ratio-of-averages following Hudson 1992 / Bhatia 2013. Uses
+            Weighted block estimate using the Hudson 1992 / Bhatia 2013
+            per-SNP components. Uses
             ``num = d_xy - 0.5*(pi_x + pi_y)`` and ``den = d_xy``, where
             ``d_xy = p_x*(1-p_y) + p_y*(1-p_x)`` and
-            ``pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)``.
+            ``pi_x = 2*p_x*(1-p_x)*n_x/(n_x-1)``. The reported estimate is
+            the SNP-count-weighted mean of block-level ``sum(num)/sum(den)``
+            ratios, followed by the weighted delete-one-block jackknife.
         - ``weir_cockerham``:
             Weir and Cockerham's theta for two populations. Computes per-SNP
             variance components ``a``, ``b``, and ``c``, then uses a ratio-of-sums
-            jackknife with ``num = a`` and ``den = a + b + c``.
+            jackknife with ``num = a`` and ``den = a + b + c``. This method
+            requires diploid hard-call genotypes in a ``SNPObject``.
         - ``tsallis``:
             Tsallis q-entropy F-statistic. For two populations, computes
             per-SNP total entropy S_q(Bern(p_bar)) and within entropy
@@ -1275,16 +1433,33 @@ def fst(
             ``tsallis_weights="sample_size"`` uses per-SNP haplotype count weights.
 
     Notes:
-      * Inputs are the same as f2/f3/f4: either SNPObject or (afs, counts, pops).
-      * For WC we use expected heterozygosity h_i = 2 p_i (1 - p_i) from allele freqs.
-      * SNPs with n<=1 in either pop or with invalid denominators are ignored.
-      * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. If False, treats all as diploid.
+      * Hudson and Tsallis accept either SNPObject or (afs, counts, pops).
+      * Weir-Cockerham uses observed heterozygosity from diploid biallelic hard calls.
+      * SNPs with at most one called individual in either population or with invalid denominators are ignored.
+      * `pseudohaploid`: If True, detects and treats pseudo-haploid samples as haploid. If int `n`, checks first `n` SNPs. Weir-Cockerham does not support this option.
     """
     method = str(method).strip().lower().replace("-", "_")
     if method not in {"hudson", "weir_cockerham", "tsallis"}:
         raise ValueError("method must be 'hudson', 'weir_cockerham', or 'tsallis'")
 
-    afs, counts, pops = _prepare_inputs(data, sample_labels, ancestry=ancestry, laiobj=laiobj, pseudohaploid=pseudohaploid)
+    observed_heterozygosity = None
+    if method == "weir_cockerham":
+        if ancestry is not None:
+            raise ValueError("method='weir_cockerham' does not support ancestry-specific calls.")
+        if pseudohaploid is not False:
+            raise ValueError("method='weir_cockerham' requires diploid genotypes and does not support pseudohaploid calls.")
+        afs, counts, observed_heterozygosity, pops = _prepare_weir_cockerham_inputs(
+            data,
+            sample_labels,
+        )
+    else:
+        afs, counts, pops = _prepare_inputs(
+            data,
+            sample_labels,
+            ancestry=ancestry,
+            laiobj=laiobj,
+            pseudohaploid=pseudohaploid,
+        )
     n_snps, n_pops = afs.shape
     block_ids, block_lengths = _build_blocks(n_snps, blocks, block_size)
     n_blocks = block_lengths.size
@@ -1367,9 +1542,9 @@ def fst(
                 n_bar = n / 2.0
                 p_bar = np.where(n > 0, (n1 * p1 + n2 * p2) / n, np.nan)
                 s2 = (n1 * (p1 - p_bar) ** 2 + n2 * (p2 - p_bar) ** 2) / n_bar
-                h1 = 2.0 * p1 * (1.0 - p1)
-                h2 = 2.0 * p2 * (1.0 - p2)
-                h_bar = 0.5 * (h1 + h2)
+                h1 = observed_heterozygosity[:, i]
+                h2 = observed_heterozygosity[:, j]
+                h_bar = (n1 * h1 + n2 * h2) / n
                 n_c = n - (n1 * n1 + n2 * n2) / np.where(n > 0, n, np.nan)  # == 2*n1*n2/n
                 # components
                 a = (n_bar / n_c) * (s2 - (p_bar * (1.0 - p_bar) - 0.5 * s2 - 0.25 * h_bar) / (n_bar - 1.0))
@@ -1377,8 +1552,15 @@ def fst(
                 c = 0.5 * h_bar
                 num_snp = a
                 den_snp = a + b + c
-            # Need at least 2 haplotypes per pop and well-defined denominators
-            snp_mask = valid & (n1 > 1) & (n2 > 1) & np.isfinite(num_snp) & np.isfinite(den_snp)
+            snp_mask = (
+                valid
+                & np.isfinite(h1)
+                & np.isfinite(h2)
+                & (n1 > 1)
+                & (n2 > 1)
+                & np.isfinite(num_snp)
+                & np.isfinite(den_snp)
+            )
         elif method == "tsallis":
             # Tsallis q-entropy F-statistic.
             #

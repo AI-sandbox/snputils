@@ -52,8 +52,8 @@ class PhenotypeObject:
             if float(np.var(values_f64)) <= 0.0:
                 raise ValueError("Quantitative phenotype has zero variance.")
             normalized_values = values_f64
-            cases: List[str] = []
-            controls: List[str] = sample_ids.copy()
+            cases: Optional[List[str]] = None
+            controls: Optional[List[str]] = None
         else:
             normalized_values = self._normalize_binary(values_f64)
             case_mask = normalized_values == 1
@@ -75,12 +75,14 @@ class PhenotypeObject:
         self._all_haplotypes = [f"{sample}.0" for sample in sample_ids] + [
             f"{sample}.1" for sample in sample_ids
         ]
-        self._cases_haplotypes = [f"{sample}.0" for sample in cases] + [
-            f"{sample}.1" for sample in cases
-        ]
-        self._controls_haplotypes = [f"{sample}.0" for sample in controls] + [
-            f"{sample}.1" for sample in controls
-        ]
+        self._cases_haplotypes = None if cases is None else (
+            [f"{sample}.0" for sample in cases]
+            + [f"{sample}.1" for sample in cases]
+        )
+        self._controls_haplotypes = None if controls is None else (
+            [f"{sample}.0" for sample in controls]
+            + [f"{sample}.1" for sample in controls]
+        )
 
     @staticmethod
     def _matches_binary_encoding(values_f64: np.ndarray, encoding: Sequence[float]) -> bool:
@@ -170,31 +172,31 @@ class PhenotypeObject:
         return self._is_quantitative
 
     @property
-    def cases(self) -> List[str]:
+    def cases(self) -> Optional[List[str]]:
         return self._cases
 
     @property
-    def n_cases(self) -> int:
-        return len(self._cases)
+    def n_cases(self) -> Optional[int]:
+        return None if self._cases is None else len(self._cases)
 
     @property
-    def controls(self) -> List[str]:
+    def controls(self) -> Optional[List[str]]:
         return self._controls
 
     @property
-    def n_controls(self) -> int:
-        return len(self._controls)
+    def n_controls(self) -> Optional[int]:
+        return None if self._controls is None else len(self._controls)
 
     @property
     def all_haplotypes(self) -> List[str]:
         return self._all_haplotypes
 
     @property
-    def cases_haplotypes(self) -> List[str]:
+    def cases_haplotypes(self) -> Optional[List[str]]:
         return self._cases_haplotypes
 
     @property
-    def controls_haplotypes(self) -> List[str]:
+    def controls_haplotypes(self) -> Optional[List[str]]:
         return self._controls_haplotypes
 
     def copy(self):

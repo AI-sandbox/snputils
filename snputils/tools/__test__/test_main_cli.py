@@ -48,7 +48,7 @@ def _write_gwas_vcf(path: Path, sample_ids) -> None:
 
 def _write_binary_phe(path: Path, sample_ids, y_binary: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("#FID IID PHENO\n")
+        handle.write("#FID IID toy\n")
         for sid, yi in zip(sample_ids, y_binary):
             status = 2 if int(yi) == 1 else 1
             handle.write(f"{sid} {sid} {status}\n")

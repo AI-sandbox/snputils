@@ -1,11 +1,12 @@
 import numpy as np
+import pytest
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
 from snputils.ancestry.io.local.read import MSPReader
 from snputils.ancestry.io.local.read.__test__.fixtures import write_msp
 from snputils.ancestry.io.local.write import FLAREWriter
 from snputils.snp.genobj.snpobj import SNPObject
-from snputils.stats import allele_freq_stream
+from snputils.stats import allele_freq_stream, f2
 
 
 def test_snpobject_allele_freq_default_cohort_from_3d_genotypes():
@@ -104,6 +105,41 @@ def test_snpobject_allele_freq_treats_2d_calls_as_diploid_dosages_without_hom_al
     freq, counts = snp.allele_freq(return_counts=True)
     np.testing.assert_allclose(freq, np.array([1.0 / 3.0, 0.25]))
     np.testing.assert_array_equal(counts, np.array([6, 4]))
+
+
+@pytest.mark.parametrize("method", ["allele_freq", "allele_counts", "maf", "mac"])
+def test_allele_statistics_reject_multiallelic_allele_indexes(method):
+    snp = SNPObject(genotypes=np.array([[[2, 2]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="only biallelic"):
+        getattr(snp, method)()
+
+
+def test_allele_statistics_reject_multiallelic_metadata_without_observed_alt2():
+    snp = SNPObject(
+        genotypes=np.array([[[0, 1]]], dtype=np.int8),
+        variants_alt=np.array(["C,G"], dtype=object),
+    )
+
+    with pytest.raises(ValueError, match="only biallelic"):
+        snp.allele_freq()
+
+
+def test_genotype_derived_fstats_reject_multiallelic_calls():
+    snp = SNPObject(genotypes=np.array([[[0, 2], [0, 1]]], dtype=np.int8))
+
+    with pytest.raises(ValueError, match="only biallelic"):
+        f2(snp, pop1=["A"], pop2=["B"], sample_labels=["A", "B"])
+
+
+def test_allele_freq_stream_rejects_multiallelic_metadata():
+    snp = SNPObject(
+        genotypes=np.array([[[0, 1], [1, 1]]], dtype=np.int8),
+        variants_alt=np.array(["C,G"], dtype=object),
+    )
+
+    with pytest.raises(ValueError, match="only biallelic"):
+        allele_freq_stream(snp, chunk_size=1)
 
 
 def test_allele_freq_stream_matches_eager_for_grouped_2d_calls():

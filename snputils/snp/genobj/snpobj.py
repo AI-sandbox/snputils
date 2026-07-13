@@ -10,6 +10,7 @@ from typing import Any, Union, Tuple, List, Sequence, Dict, Optional, TYPE_CHECK
 from scipy.stats import chi2, fisher_exact, mode
 
 from snputils._utils.allele_freq import aggregate_pop_allele_freq
+from snputils._utils.ancestry import known_lai_values
 from snputils._utils.genotypes import sum_diploid_genotypes, validate_biallelic_hard_calls
 from snputils._utils.printing import array_shape, format_repr
 
@@ -18,6 +19,222 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+
+def _is_missing_variant_id(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bytes):
+        value = value.decode()
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return True
+    return str(value).strip() in {"", "."}
+
+
+def _paired_common_indices(
+    query_identifiers: Sequence[Any],
+    reference_identifiers: Sequence[Any],
+) -> Tuple[List[Any], np.ndarray, np.ndarray]:
+    query_positions: Dict[Any, List[int]] = {}
+    reference_positions: Dict[Any, List[int]] = {}
+    for index, identifier in enumerate(query_identifiers):
+        if identifier is None:
+            continue
+        query_positions.setdefault(identifier, []).append(index)
+    for index, identifier in enumerate(reference_identifiers):
+        if identifier is None:
+            continue
+        reference_positions.setdefault(identifier, []).append(index)
+
+    common_ids = [identifier for identifier in query_positions if identifier in reference_positions]
+    duplicates = [
+        identifier
+        for identifier in common_ids
+        if len(query_positions[identifier]) != 1 or len(reference_positions[identifier]) != 1
+    ]
+    if duplicates:
+        preview = ", ".join(map(str, duplicates[:5]))
+        raise ValueError(
+            "Cannot match variants with duplicated shared identifiers: " + preview
+        )
+
+    query_idx = np.asarray([query_positions[identifier][0] for identifier in common_ids], dtype=int)
+    reference_idx = np.asarray(
+        [reference_positions[identifier][0] for identifier in common_ids], dtype=int
+    )
+    return common_ids, query_idx, reference_idx
+
+
+def _concatenate_optional_arrays(
+    left: Optional[np.ndarray],
+    right: Optional[np.ndarray],
+    *,
+    axis: int,
+    left_missing_shape: Tuple[int, ...],
+    right_missing_shape: Tuple[int, ...],
+    missing_value: Union[int, float],
+    name: str,
+) -> Optional[np.ndarray]:
+    if left is None and right is None:
+        return None
+
+    left_array = None if left is None else np.asarray(left)
+    right_array = None if right is None else np.asarray(right)
+    template = left_array if left_array is not None else right_array
+
+    if np.isnan(missing_value):
+        dtype = np.result_type(template.dtype, np.float32)
+    elif template.dtype.kind in "ub":
+        dtype = np.result_type(template.dtype, np.int8)
+    else:
+        dtype = template.dtype
+
+    if left_array is None:
+        left_array = np.full(left_missing_shape, missing_value, dtype=dtype)
+        right_array = right_array.astype(dtype, copy=False)
+    elif right_array is None:
+        left_array = left_array.astype(dtype, copy=False)
+        right_array = np.full(right_missing_shape, missing_value, dtype=dtype)
+
+    if left_array.ndim != right_array.ndim:
+        raise ValueError(f"Cannot concatenate SNPObjects: `{name}` dimensions differ.")
+    for dimension in range(left_array.ndim):
+        if dimension != axis and left_array.shape[dimension] != right_array.shape[dimension]:
+            raise ValueError(f"Cannot concatenate SNPObjects: incompatible `{name}` shapes.")
+    return np.concatenate([left_array, right_array], axis=axis)
+
+
+def _validate_variant_alignment_for_merge(left: Any, right: Any) -> None:
+    left_n = left._n_snps_or_none()
+    right_n = right._n_snps_or_none()
+    if left_n is not None and right_n is not None and left_n != right_n:
+        raise ValueError(
+            "Cannot merge SNPObjects: the number of variants differs "
+            f"({left_n} != {right_n})."
+        )
+
+    n_variants = left_n if left_n is not None else right_n
+    fields = ("variants_chrom", "variants_pos", "variants_ref", "variants_alt")
+    for field in fields:
+        left_values = getattr(left, field)
+        right_values = getattr(right, field)
+        for owner, values in (("self", left_values), ("snpobj", right_values)):
+            if values is not None and n_variants is not None and len(values) != n_variants:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: `{owner}.{field}` has {len(values)} entries, "
+                    f"expected {n_variants}."
+                )
+        if left_values is None or right_values is None:
+            continue
+        left_array = np.asarray(left_values)
+        right_array = np.asarray(right_values)
+        if left_array.shape != right_array.shape:
+            raise ValueError(
+                f"Cannot merge SNPObjects: `{field}` shapes differ "
+                f"({left_array.shape} != {right_array.shape})."
+            )
+        equal = left_array == right_array
+        if not np.all(equal):
+            mismatch = int(np.flatnonzero(~np.asarray(equal).ravel())[0])
+            raise ValueError(
+                f"Cannot merge SNPObjects: `{field}` differs at variant index {mismatch} "
+                f"({left_array[mismatch]!r} != {right_array[mismatch]!r})."
+            )
+
+    left_ids = left.variants_id
+    right_ids = right.variants_id
+    if left_ids is None or right_ids is None:
+        return
+    if n_variants is not None:
+        for owner, values in (("self", left_ids), ("snpobj", right_ids)):
+            if len(values) != n_variants:
+                raise ValueError(
+                    f"Cannot merge SNPObjects: `{owner}.variants_id` has {len(values)} entries, "
+                    f"expected {n_variants}."
+                )
+    for index, (left_id, right_id) in enumerate(zip(left_ids, right_ids)):
+        if _is_missing_variant_id(left_id) or _is_missing_variant_id(right_id):
+            continue
+        left_text = left_id.decode() if isinstance(left_id, bytes) else str(left_id)
+        right_text = right_id.decode() if isinstance(right_id, bytes) else str(right_id)
+        if left_text != right_text:
+            raise ValueError(
+                "Cannot merge SNPObjects: `variants_id` differs at variant index "
+                f"{index} ({left_id!r} != {right_id!r})."
+            )
+
+
+def _merge_ancestry_maps(
+    left: Optional[Mapping[Any, Any]],
+    right: Optional[Mapping[Any, Any]],
+) -> Optional[Dict[str, str]]:
+    if left is None and right is None:
+        return None
+
+    merged: Dict[str, str] = {}
+    for ancestry_map in (left, right):
+        if ancestry_map is None:
+            continue
+        for code, label in ancestry_map.items():
+            code_str = str(code)
+            label_str = str(label)
+            existing = merged.get(code_str)
+            if existing is not None and existing != label_str:
+                raise ValueError(
+                    "Cannot merge SNPObjects: ancestry code "
+                    f"{code_str!r} maps to both {existing!r} and {label_str!r}."
+                )
+            merged[code_str] = label_str
+    return merged
+
+
+def _sample_count_for_concat(snpobj: Any, owner: str) -> Optional[int]:
+    sample_counts: Dict[str, int] = {}
+
+    if snpobj.samples is not None:
+        sample_counts["samples"] = len(snpobj.samples)
+    if snpobj.sample_fid is not None:
+        sample_counts["sample_fid"] = len(snpobj.sample_fid)
+    if snpobj.sample_sex is not None:
+        sample_counts["sample_sex"] = len(snpobj.sample_sex)
+    if snpobj.genotypes is not None:
+        genotypes = np.asarray(snpobj.genotypes)
+        if genotypes.ndim not in (2, 3):
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.genotypes` must be 2D or 3D."
+            )
+        sample_counts["genotypes"] = genotypes.shape[1]
+    if snpobj.calldata_gp is not None:
+        calldata_gp = np.asarray(snpobj.calldata_gp)
+        if calldata_gp.ndim < 2:
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.calldata_gp` must have a sample axis."
+            )
+        sample_counts["calldata_gp"] = calldata_gp.shape[1]
+    if snpobj.calldata_lai is not None:
+        calldata_lai = np.asarray(snpobj.calldata_lai)
+        if calldata_lai.ndim == 2:
+            if calldata_lai.shape[1] % 2:
+                raise ValueError(
+                    f"Cannot concatenate SNPObjects: `{owner}.calldata_lai` must contain "
+                    "two haplotypes per sample."
+                )
+            sample_counts["calldata_lai"] = calldata_lai.shape[1] // 2
+        elif calldata_lai.ndim == 3:
+            sample_counts["calldata_lai"] = calldata_lai.shape[1]
+        else:
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.calldata_lai` must be 2D or 3D."
+            )
+
+    unique_counts = set(sample_counts.values())
+    if len(unique_counts) > 1:
+        details = ", ".join(f"{name}={count}" for name, count in sample_counts.items())
+        raise ValueError(
+            f"Cannot concatenate SNPObjects: `{owner}` has inconsistent sample dimensions "
+            f"({details})."
+        )
+    return next(iter(unique_counts), None)
 
 
 class SNPObject:
@@ -574,7 +791,7 @@ class SNPObject:
             int: The total number of unique ancestries.
         """
         if self.__calldata_lai is not None:
-            return len(np.unique(self.__calldata_lai))
+            return len(np.unique(known_lai_values(self.__calldata_lai)))
         else:
             raise ValueError("Unable to determine the total number of ancestries: no relevant data is available.")
 
@@ -894,6 +1111,7 @@ class SNPObject:
         afs, counts, pops = aggregate_pop_allele_freq(
             genotypes=gt,
             sample_labels=labels,
+            alternate_alleles=self.variants_alt,
             ancestry=ancestry,
             calldata_lai=calldata_lai,
             pseudohaploid=pseudohaploid,
@@ -3573,24 +3791,27 @@ class SNPObject:
 
         This filters on genotype variability, not allele polymorphism. For example,
         a site where every called sample is heterozygous has one observed genotype
-        value and is therefore removed.
+        value and is therefore removed. Phase order is ignored when comparing
+        phased allele calls.
         """
         if self.genotypes is None:
             raise ValueError("Genotype data `genotypes` is None.")
         gt = np.asarray(self.genotypes)
         if gt.ndim == 3:
             called = np.all(gt >= 0, axis=2)
-            dosages = gt.sum(axis=2, dtype=np.int16)
         elif gt.ndim == 2:
             called = gt >= 0
-            dosages = gt
         else:
             raise ValueError("'genotypes' must be a 2D or 3D array.")
 
         mask = np.zeros(gt.shape[0], dtype=bool)
         for i in range(gt.shape[0]):
-            observed = dosages[i, called[i]]
-            mask[i] = np.unique(observed).size >= 2
+            observed = gt[i, called[i]]
+            if gt.ndim == 3:
+                observed = np.sort(observed, axis=1)
+                mask[i] = np.unique(observed, axis=0).shape[0] >= 2
+            else:
+                mask[i] = np.unique(observed).size >= 2
         return self.filter_variants(mask=mask, include=True, inplace=inplace)
 
     def filter_variants_by_call_rate(
@@ -4460,26 +4681,31 @@ class SNPObject:
             query_identifiers = [f"{chrom}-{pos}" for chrom, pos in zip(self['variants_chrom'], self['variants_pos'])]
             reference_identifiers = [f"{chrom}-{pos}" for chrom, pos in zip(snpobj['variants_chrom'], snpobj['variants_pos'])]
         elif index_by == 'id':
-            query_identifiers = self['variants_id'].tolist()
-            reference_identifiers = snpobj['variants_id'].tolist()
-        elif index_by == 'pos+id':
             query_identifiers = [
-                f"{chrom}-{pos}-{ids}" for chrom, pos, ids in zip(self['variants_chrom'], self['variants_pos'], self['variants_id'])
+                None if _is_missing_variant_id(identifier) else identifier
+                for identifier in self['variants_id'].tolist()
             ]
             reference_identifiers = [
-                f"{chrom}-{pos}-{ids}" for chrom, pos, ids in zip(snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_id'])
+                None if _is_missing_variant_id(identifier) else identifier
+                for identifier in snpobj['variants_id'].tolist()
+            ]
+        elif index_by == 'pos+id':
+            query_identifiers = [
+                None if _is_missing_variant_id(identifier) else f"{chrom}-{pos}-{identifier}"
+                for chrom, pos, identifier in zip(
+                    self['variants_chrom'], self['variants_pos'], self['variants_id']
+                )
+            ]
+            reference_identifiers = [
+                None if _is_missing_variant_id(identifier) else f"{chrom}-{pos}-{identifier}"
+                for chrom, pos, identifier in zip(
+                    snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_id']
+                )
             ]
         else:
             raise ValueError("`index_by` must be one of 'pos', 'id', or 'pos+id'.")
 
-        # Convert to sets for intersection
-        common_ids = set(query_identifiers).intersection(reference_identifiers)
-
-        # Collect indices for common identifiers
-        query_idx = [i for i, id in enumerate(query_identifiers) if id in common_ids]
-        reference_idx = [i for i, id in enumerate(reference_identifiers) if id in common_ids]
-
-        return list(common_ids), np.array(query_idx), np.array(reference_idx)
+        return _paired_common_indices(query_identifiers, reference_identifiers)
 
     def get_common_markers_intersection(
         self,
@@ -4512,14 +4738,7 @@ class SNPObject:
             zip(snpobj['variants_chrom'], snpobj['variants_pos'], snpobj['variants_ref'], snpobj['variants_alt'])
         ]
 
-        # Convert to sets for intersection
-        common_ids = set(query_identifiers).intersection(reference_identifiers)
-
-        # Collect indices for common identifiers in both SNPObjects
-        query_idx = [i for i, id in enumerate(query_identifiers) if id in common_ids]
-        reference_idx = [i for i, id in enumerate(reference_identifiers) if id in common_ids]
-
-        return list(common_ids), np.array(query_idx), np.array(reference_idx)
+        return _paired_common_indices(query_identifiers, reference_identifiers)
 
     def subset_to_common_variants(
         self,
@@ -4629,6 +4848,9 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the merged sample data.
         """
+        _validate_variant_alignment_for_merge(self, snpobj)
+        ancestry_map = _merge_ancestry_maps(self.ancestry_map, snpobj.ancestry_map)
+
         # Merge genotypes if present and compatible
         if self.genotypes is not None and snpobj.genotypes is not None:
             if self.genotypes.shape[0] != snpobj.genotypes.shape[0]:
@@ -4647,9 +4869,20 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
                     "Ensure both objects have the same genotype representation before merging."
                 )
-            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=1)
-        else:
-            genotypes = None
+        genotype_template = self.genotypes if self.genotypes is not None else snpobj.genotypes
+        if genotype_template is not None and genotype_template.ndim not in (2, 3):
+            raise ValueError("Cannot merge SNPObjects: `genotypes` must be 2D or 3D.")
+        genotype_tail = () if genotype_template is None else genotype_template.shape[2:]
+        n_genotype_variants = 0 if genotype_template is None else genotype_template.shape[0]
+        genotypes = _concatenate_optional_arrays(
+            self.genotypes,
+            snpobj.genotypes,
+            axis=1,
+            left_missing_shape=(n_genotype_variants, self.n_samples) + genotype_tail,
+            right_missing_shape=(n_genotype_variants, snpobj.n_samples) + genotype_tail,
+            missing_value=-1,
+            name="genotypes",
+        )
 
         # Merge samples if present and compatible, handling duplicates if `force_samples=True`
         merged_fid: Optional[np.ndarray] = None
@@ -4701,9 +4934,30 @@ class SNPObject:
                     f"`self.calldata_lai` has {self.calldata_lai.shape[0]} SNPs, "
                     f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[0]} SNPs."
                 )
-            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=1)
+        lai_template = self.calldata_lai if self.calldata_lai is not None else snpobj.calldata_lai
+        if lai_template is None:
+            left_lai_shape = right_lai_shape = (0, 0)
+        elif lai_template.ndim == 2:
+            template_samples = self.n_samples if self.calldata_lai is not None else snpobj.n_samples
+            if template_samples == 0 or lai_template.shape[1] % template_samples:
+                raise ValueError("Cannot merge SNPObjects: invalid 2D `calldata_lai` shape.")
+            haplotypes_per_sample = lai_template.shape[1] // template_samples
+            left_lai_shape = (lai_template.shape[0], haplotypes_per_sample * self.n_samples)
+            right_lai_shape = (lai_template.shape[0], haplotypes_per_sample * snpobj.n_samples)
+        elif lai_template.ndim == 3:
+            left_lai_shape = (lai_template.shape[0], self.n_samples) + lai_template.shape[2:]
+            right_lai_shape = (lai_template.shape[0], snpobj.n_samples) + lai_template.shape[2:]
         else:
-            calldata_lai = None
+            raise ValueError("Cannot merge SNPObjects: `calldata_lai` must be 2D or 3D.")
+        calldata_lai = _concatenate_optional_arrays(
+            self.calldata_lai,
+            snpobj.calldata_lai,
+            axis=1,
+            left_missing_shape=left_lai_shape,
+            right_missing_shape=right_lai_shape,
+            missing_value=-1,
+            name="calldata_lai",
+        )
 
         if self.calldata_gp is not None and snpobj.calldata_gp is not None:
             if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
@@ -4722,9 +4976,18 @@ class SNPObject:
                 raise ValueError(
                     "Cannot merge SNPObjects: genotype probability columns differ."
                 )
-            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=1)
-        else:
-            calldata_gp = None
+        gp_template = self.calldata_gp if self.calldata_gp is not None else snpobj.calldata_gp
+        gp_tail = () if gp_template is None else gp_template.shape[2:]
+        n_gp_variants = 0 if gp_template is None else gp_template.shape[0]
+        calldata_gp = _concatenate_optional_arrays(
+            self.calldata_gp,
+            snpobj.calldata_gp,
+            axis=1,
+            left_missing_shape=(n_gp_variants, self.n_samples) + gp_tail,
+            right_missing_shape=(n_gp_variants, snpobj.n_samples) + gp_tail,
+            missing_value=np.nan,
+            name="calldata_gp",
+        )
 
         if inplace:
             self.genotypes = genotypes
@@ -4735,6 +4998,7 @@ class SNPObject:
             self.samples = samples
             self.sample_fid = merged_fid
             self.sample_sex = merged_sex
+            self.ancestry_map = ancestry_map
             return self
 
         # Create and return a new SNPObject containing the merged samples
@@ -4754,7 +5018,7 @@ class SNPObject:
             variants_info=self.variants_info,
             calldata_lai=calldata_lai,
             calldata_gp=calldata_gp,
-            ancestry_map=self.ancestry_map
+            ancestry_map=ancestry_map
         )
 
     def concat(
@@ -4779,6 +5043,19 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the concatenated SNP data.
         """
+        self_n_samples = _sample_count_for_concat(self, "self")
+        snpobj_n_samples = _sample_count_for_concat(snpobj, "snpobj")
+        if (
+            self_n_samples is not None
+            and snpobj_n_samples is not None
+            and self_n_samples != snpobj_n_samples
+        ):
+            raise ValueError(
+                "Cannot concatenate SNPObjects: sample count differs "
+                f"({self_n_samples} != {snpobj_n_samples})."
+            )
+        ancestry_map = _merge_ancestry_maps(self.ancestry_map, snpobj.ancestry_map)
+
         # Merge genotypes if present and compatible
         if self.genotypes is not None and snpobj.genotypes is not None:
             if self.genotypes.shape[1] != snpobj.genotypes.shape[1]:
@@ -4797,9 +5074,19 @@ class SNPObject:
                     "Cannot merge SNPObjects: `snpobj` stores dosages, but `self` stores phased calls.\n"
                     "Ensure both objects have the same genotype representation before merging."
                 )
-            genotypes = np.concatenate([self.genotypes, snpobj.genotypes], axis=0)
-        else:
-            genotypes = None
+        genotype_template = self.genotypes if self.genotypes is not None else snpobj.genotypes
+        if genotype_template is not None and genotype_template.ndim not in (2, 3):
+            raise ValueError("Cannot concatenate SNPObjects: `genotypes` must be 2D or 3D.")
+        genotype_tail = () if genotype_template is None else genotype_template.shape[1:]
+        genotypes = _concatenate_optional_arrays(
+            self.genotypes,
+            snpobj.genotypes,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + genotype_tail,
+            right_missing_shape=(snpobj.n_snps,) + genotype_tail,
+            missing_value=-1,
+            name="genotypes",
+        )
 
         if self.samples is not None and snpobj.samples is not None:
             if not np.array_equal(self.samples, snpobj.samples):
@@ -4849,9 +5136,17 @@ class SNPObject:
                     f"`self.calldata_lai` has {self.calldata_lai.shape[1]} samples, "
                     f"while `snpobj.calldata_lai` has {snpobj.calldata_lai.shape[1]} samples."
                 )
-            calldata_lai = np.concatenate([self.calldata_lai, snpobj.calldata_lai], axis=0)
-        else:
-            calldata_lai = None
+        lai_template = self.calldata_lai if self.calldata_lai is not None else snpobj.calldata_lai
+        lai_tail = () if lai_template is None else lai_template.shape[1:]
+        calldata_lai = _concatenate_optional_arrays(
+            self.calldata_lai,
+            snpobj.calldata_lai,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + lai_tail,
+            right_missing_shape=(snpobj.n_snps,) + lai_tail,
+            missing_value=-1,
+            name="calldata_lai",
+        )
 
         if self.calldata_gp is not None and snpobj.calldata_gp is not None:
             if self.calldata_gp.ndim != snpobj.calldata_gp.ndim:
@@ -4864,15 +5159,24 @@ class SNPObject:
                 raise ValueError(
                     "Cannot concatenate SNPObjects: genotype probability sample/probability dimensions differ."
                 )
-            calldata_gp = np.concatenate([self.calldata_gp, snpobj.calldata_gp], axis=0)
-        else:
-            calldata_gp = None
+        gp_template = self.calldata_gp if self.calldata_gp is not None else snpobj.calldata_gp
+        gp_tail = () if gp_template is None else gp_template.shape[1:]
+        calldata_gp = _concatenate_optional_arrays(
+            self.calldata_gp,
+            snpobj.calldata_gp,
+            axis=0,
+            left_missing_shape=(self.n_snps,) + gp_tail,
+            right_missing_shape=(snpobj.n_snps,) + gp_tail,
+            missing_value=np.nan,
+            name="calldata_gp",
+        )
 
         if inplace:
             self.genotypes = genotypes
             self.calldata_lai = calldata_lai
             self.calldata_gp = calldata_gp
             self.sample_sex = merged_sample_sex
+            self.ancestry_map = ancestry_map
             for attr in attributes:
                 self[attr] = merged_attrs[attr]
             return self
@@ -4894,7 +5198,7 @@ class SNPObject:
             variants_qual=merged_attrs['variants_qual'],
             variants_info=merged_attrs['variants_info'],
             variants_filter_pass=merged_attrs['variants_filter_pass'],
-            ancestry_map=self.ancestry_map
+            ancestry_map=ancestry_map
         )
 
     @classmethod
@@ -4971,17 +5275,16 @@ class SNPObject:
         - If `check_complement=False`, only direct allele swaps are considered:
             1. Direct Swap: `self.variants_ref == snpobj.variants_alt` and `self.variants_alt == snpobj.variants_ref`.
 
-        - If `check_complement=True`, both direct and complementary swaps are considered, with four possible cases:
-            1. Direct Swap: `self.variants_ref == snpobj.variants_alt` and `self.variants_alt == snpobj.variants_ref`.
-            2. Complement Swap of Ref: `complement(self.variants_ref) == snpobj.variants_alt` and `self.variants_alt == snpobj.variants_ref`.
-            3. Complement Swap of Alt: `self.variants_ref == snpobj.variants_alt` and `complement(self.variants_alt) == snpobj.variants_ref`.
-            4. Complement Swap of both Ref and Alt: `complement(self.variants_ref) == snpobj.variants_alt` and `complement(self.variants_alt) == snpobj.variants_ref`.
+        - If `check_complement=True`, a swap is accepted when either both original
+          alleles or both complemented alleles match the swapped reference pair.
+          Partial complements and strand-ambiguous orientations are not changed.
 
         Note: Variants where `self.variants_ref == self.variants_alt` are ignored as they are ambiguous.
 
         Correction Process:
         - Swaps `variants_ref` and `variants_alt` alleles in `self` to align with `snpobj`.
-        - Flips `genotypes` values (0 becomes 1, and 1 becomes 0) to match the updated allele configuration.
+        - Flips called 2D diploid dosages as `2 - dosage` and called 3D allele indexes as
+          `1 - allele`, while preserving missing values.
 
         Args:
             snpobj (SNPObject):
@@ -5030,47 +5333,65 @@ class SNPObject:
             log.info(f"Matching reference alleles (ref=ref'): {matching_ref}, Matching alternate alleles (alt=alt'): {matching_alt}.")
             log.info(f"Number of ambiguous alleles (ref=alt): {ambiguous}.")
 
-        # Identify indices where `ref` and `alt` alleles are swapped
-        if not check_complement:
-            # Simple exact match for swapped alleles
-            swapped_ref = (self['variants_ref'][query_idx] == snpobj['variants_alt'][reference_idx])
-            swapped_alt = (self['variants_alt'][query_idx] == snpobj['variants_ref'][reference_idx])
-        else:
-            # Check for swapped or complementary-swapped alleles
-            swapped_ref = (
-                (self['variants_ref'][query_idx] == snpobj['variants_alt'][reference_idx]) |
-                (np.vectorize(get_complement)(self['variants_ref'][query_idx]) == snpobj['variants_alt'][reference_idx])
+        query_ref = self['variants_ref'][query_idx]
+        query_alt = self['variants_alt'][query_idx]
+        reference_ref = snpobj['variants_ref'][reference_idx]
+        reference_alt = snpobj['variants_alt'][reference_idx]
+
+        same_orientation = (query_ref == reference_ref) & (query_alt == reference_alt)
+        swapped_orientation = (query_ref == reference_alt) & (query_alt == reference_ref)
+        if check_complement:
+            complement = np.vectorize(get_complement, otypes=[object])
+            complemented_ref = complement(query_ref)
+            complemented_alt = complement(query_alt)
+            same_orientation |= (
+                (complemented_ref == reference_ref) & (complemented_alt == reference_alt)
             )
-            swapped_alt = (
-                (self['variants_alt'][query_idx] == snpobj['variants_ref'][reference_idx]) |
-                (np.vectorize(get_complement)(self['variants_alt'][query_idx]) == snpobj['variants_ref'][reference_idx])
+            swapped_orientation |= (
+                (complemented_ref == reference_alt) & (complemented_alt == reference_ref)
             )
 
         # Filter out ambiguous variants where `ref` and `alt` alleles match (ref=alt)
-        not_ambiguous = (self['variants_ref'][query_idx] != self['variants_alt'][query_idx])
+        not_ambiguous = query_ref != query_alt
 
-        # Indices in `self` of flipped variants
-        flip_idx_query = query_idx[swapped_ref & swapped_alt & not_ambiguous]
+        flip_mask = swapped_orientation & ~same_orientation & not_ambiguous
+        flip_idx_query = query_idx[flip_mask]
+        flip_idx_reference = reference_idx[flip_mask]
 
         # Correct the identified variant flips
         if len(flip_idx_query) > 0:
             log.info(f'Correcting {len(flip_idx_query)} variant flips...')
 
-            temp_alts = self['variants_alt'][flip_idx_query]
-            temp_refs = self['variants_ref'][flip_idx_query]
+            corrected_refs = np.asarray(snpobj['variants_ref'])[flip_idx_reference].copy()
+            corrected_alts = np.asarray(snpobj['variants_alt'])[flip_idx_reference].copy()
+
+            def flip_genotypes(target: 'SNPObject') -> None:
+                if target.genotypes is None:
+                    return
+                genotypes = np.asarray(target.genotypes)
+                selected = genotypes[flip_idx_query]
+                called = np.isfinite(selected) & (selected >= 0)
+                corrected = selected.copy()
+                if genotypes.ndim == 2:
+                    corrected[called] = 2 - selected[called]
+                elif genotypes.ndim == 3:
+                    corrected[called] = 1 - selected[called]
+                else:
+                    raise ValueError("`genotypes` must be a 2D dosage or 3D allele-call array.")
+                target.genotypes[flip_idx_query] = corrected
 
             # Correct the variant flips based on whether the operation is in-place or not
             if inplace:
-                self['variants_alt'][flip_idx_query] = temp_refs
-                self['variants_ref'][flip_idx_query] = temp_alts
-                self['genotypes'][flip_idx_query] = 1 - self['genotypes'][flip_idx_query]
+                self['variants_ref'][flip_idx_query] = corrected_refs
+                self['variants_alt'][flip_idx_query] = corrected_alts
+                flip_genotypes(self)
                 return None
             else:
-                snpobj = self.copy()
-                snpobj['variants_alt'][flip_idx_query] = temp_refs
-                snpobj['variants_ref'][flip_idx_query] = temp_alts
-                snpobj['genotypes'][flip_idx_query] = 1 - snpobj['genotypes'][flip_idx_query]
-                return snpobj
+                corrected = self.copy()
+                corrected['variants_ref'][flip_idx_query] = corrected_refs
+                corrected['variants_alt'][flip_idx_query] = corrected_alts
+                flip_genotypes(corrected)
+                return corrected
         else:
             log.info('No variant flips found to correct.')
             return self if not inplace else None
@@ -5564,7 +5885,7 @@ class SNPObject:
         in the ancestry map if it is provided.
         """
         if self.__calldata_lai is not None and self.__ancestry_map is not None:
-            unique_ancestries = np.unique(self.__calldata_lai)
+            unique_ancestries = np.unique(known_lai_values(self.__calldata_lai))
             missing_ancestries = [anc for anc in unique_ancestries if str(anc) not in self.__ancestry_map]
             if missing_ancestries:
                 warnings.warn(f"Missing ancestries in ancestry_map: {missing_ancestries}")

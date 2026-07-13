@@ -119,15 +119,19 @@ class PhenotypeReader(PhenotypeBaseReader):
             raise ValueError("Phenotype IID values must be unique.")
 
         if phenotype_col is not None:
-            resolved = self._resolve_column(columns, normalized_columns, phenotype_col)
-            if resolved is None and len(phenotype_candidates) == 1:
-                target_col = phenotype_candidates[0]
-            elif resolved is None:
+            candidate_columns = [str(col) for col in phenotype_candidates]
+            candidate_normalized = [col.lstrip("#").upper() for col in candidate_columns]
+            resolved = self._resolve_column(
+                candidate_columns,
+                candidate_normalized,
+                phenotype_col,
+            )
+            if resolved is None:
                 raise ValueError(
-                    f"Phenotype column '{phenotype_col}' not found in header: {columns}"
+                    f"Phenotype column '{phenotype_col}' not found in phenotype columns: "
+                    f"{phenotype_candidates}"
                 )
-            else:
-                target_col = resolved
+            target_col = resolved
         else:
             if len(phenotype_candidates) != 1:
                 raise ValueError(

@@ -69,6 +69,47 @@ def build_lai_object(
     )
 
 
+def _simulate_lai_markov(
+    rng: np.random.Generator,
+    sample_props: np.ndarray,
+    chromosomes: np.ndarray,
+    *,
+    switch_prob: float,
+    chunk_haplotypes: int = 256,
+) -> np.ndarray:
+    """Simulate haplotype LAI paths with chromosome resets and sparse switches."""
+    n_samples, n_ancestries = sample_props.shape
+    n_windows = int(chromosomes.shape[0])
+    n_haplotypes = 2 * n_samples
+    lai = np.empty((n_windows, n_haplotypes), dtype=np.uint8)
+    if n_windows == 0:
+        return lai
+
+    chrom_reset = np.empty(n_windows, dtype=bool)
+    chrom_reset[0] = True
+    chrom_reset[1:] = chromosomes[1:] != chromosomes[:-1]
+    row_index = np.arange(n_windows, dtype=np.int64)[:, None]
+
+    for start in range(0, n_haplotypes, chunk_haplotypes):
+        stop = min(start + chunk_haplotypes, n_haplotypes)
+        hap_indices = np.arange(start, stop, dtype=np.int64)
+        hap_sample_indices = hap_indices // 2
+        cumulative_props = np.cumsum(sample_props[hap_sample_indices], axis=1)
+
+        switch = rng.random((n_windows, stop - start)) < switch_prob
+        switch[chrom_reset, :] = True
+
+        uniform_draws = rng.random((n_windows, stop - start))
+        states = np.zeros((n_windows, stop - start), dtype=np.uint8)
+        for ancestry_index in range(n_ancestries - 1):
+            states += (uniform_draws >= cumulative_props[None, :, ancestry_index]).astype(np.uint8)
+
+        last_switch = np.maximum.accumulate(np.where(switch, row_index, 0), axis=0)
+        lai[:, start:stop] = np.take_along_axis(states, last_switch, axis=0)
+
+    return lai
+
+
 def covariate_coefficients(n_covariates: int) -> np.ndarray:
     base = np.array([0.60, -0.35, 0.25, -0.15, 0.10], dtype=np.float64)
     if n_covariates <= len(base):
@@ -102,20 +143,15 @@ def build_synthetic_admixture_dataset(
     chromosomes, starts, ends = build_feature_layout(n_windows, spacing_bp=25_000, span_bp=4_999)
 
     n_ancestries = len(ancestry_map)
-    lai = np.empty((n_windows, n_samples * 2), dtype=np.uint8)
     sample_props = rng.dirichlet(np.array([5.0, 3.5, 2.5], dtype=np.float64), size=n_samples)
-    switch_prob = 0.035
-    for sample_idx in range(n_samples):
-        props = sample_props[sample_idx]
-        for phase in range(2):
-            hap_idx = 2 * sample_idx + phase
-            state = int(rng.choice(n_ancestries, p=props))
-            prev_chrom = -1
-            for w, chrom in enumerate(chromosomes.tolist()):
-                if chrom != prev_chrom or rng.random() < switch_prob:
-                    state = int(rng.choice(n_ancestries, p=props))
-                    prev_chrom = chrom
-                lai[w, hap_idx] = np.uint8(state)
+    if sample_props.shape[1] != n_ancestries:
+        raise ValueError("The default synthetic admixture prior expects three ancestry states.")
+    lai = _simulate_lai_markov(
+        rng,
+        sample_props,
+        chromosomes,
+        switch_prob=0.035,
+    )
 
     n_effects = min(3, n_windows)
     effect_windows = np.unique(

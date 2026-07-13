@@ -757,11 +757,11 @@ class maasMDS:
         haplotypes_list = []
         groups = []
         weights = []
-        variants_ref_map = {}
+        variants_allele_map = {}
 
         for array_index, current_snpobj in enumerate(snpobjs):
             current_laiobj = laiobjs[array_index] if array_index < len(laiobjs) else None
-            mask, variants_id, haplotypes, variants_ref_map = process_genotypes(
+            mask, variants_id, haplotypes, variants_allele_map = process_genotypes(
                 current_snpobj,
                 current_laiobj,
                 ancestry,
@@ -769,7 +769,7 @@ class maasMDS:
                 self.require_complete_haplotype_pair,
                 self.is_masked,
                 self.rsid_or_chrompos,
-                variants_ref_map=variants_ref_map,
+                variants_allele_map=variants_allele_map,
             )
             mask, haplotypes, current_groups, current_weights = process_labels_weights(
                 labels_file,

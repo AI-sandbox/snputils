@@ -388,3 +388,59 @@ def test_restrict_to_ancestry_method_validation():
     # Invalid method should raise ValueError
     with pytest.raises(ValueError, match="Method must be 'strict' or 'clip', got 'invalid'"):
         ibd.restrict_to_ancestry(laiobj=laiobj, ancestry=1, method='invalid')
+
+
+def test_restrict_to_ancestry_preserves_one_known_haplotype_constraint():
+    physical_pos, chromosomes, centimorgan_pos, haplotypes, lai = _make_lai_object()
+    lai[0, :] = [1, 0, 1, 0]
+    lai[1, :] = [0, 1, 1, 0]
+    laiobj = LocalAncestryObject(
+        haplotypes=haplotypes,
+        lai=lai,
+        samples=["A", "B"],
+        chromosomes=chromosomes,
+        physical_pos=physical_pos,
+        centimorgan_pos=centimorgan_pos,
+    )
+    ibd = IBDObject(
+        sample_id_1=np.array(["A"]),
+        haplotype_id_1=np.array([1]),
+        sample_id_2=np.array(["B"]),
+        haplotype_id_2=np.array([-1]),
+        chrom=np.array(["1"]),
+        start=np.array([500]),
+        end=np.array([2500]),
+        length_cm=np.array([1.0]),
+    )
+
+    restricted = ibd.restrict_to_ancestry(laiobj=laiobj, ancestry=1)
+
+    assert restricted.n_segments == 1
+    assert restricted.start.tolist() == [500]
+    assert restricted.end.tolist() == [1500]
+
+
+def test_restrict_to_ancestry_splits_physically_separated_lai_windows():
+    laiobj = LocalAncestryObject(
+        haplotypes=["A.0", "A.1", "B.0", "B.1"],
+        lai=np.ones((2, 4), dtype=int),
+        samples=["A", "B"],
+        chromosomes=np.array(["1", "1"]),
+        physical_pos=np.array([[1, 10], [21, 30]]),
+    )
+    ibd = IBDObject(
+        sample_id_1=np.array(["A"]),
+        haplotype_id_1=np.array([1]),
+        sample_id_2=np.array(["B"]),
+        haplotype_id_2=np.array([1]),
+        chrom=np.array(["1"]),
+        start=np.array([1]),
+        end=np.array([30]),
+        length_cm=np.array([3.0]),
+    )
+
+    restricted = ibd.restrict_to_ancestry(laiobj=laiobj, ancestry=1)
+
+    assert restricted.n_segments == 2
+    assert restricted.start.tolist() == [1, 21]
+    assert restricted.end.tolist() == [10, 30]

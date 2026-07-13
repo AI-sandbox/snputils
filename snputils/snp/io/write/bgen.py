@@ -12,6 +12,7 @@ import numpy as np
 import zstandard as zstd
 
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.write._genotype_encoding import validate_hardcall_values
 
 log = logging.getLogger(__name__)
 
@@ -262,6 +263,10 @@ class BGENWriter:
 
     @staticmethod
     def _hardcalls_to_probabilities(genotypes: np.ndarray, phased: Optional[bool]) -> np.ndarray:
+        validate_hardcall_values(
+            genotypes,
+            allowed_values=(0, 1) if genotypes.ndim == 3 else (0, 1, 2),
+        )
         if genotypes.ndim == 3 and phased:
             n_variants, n_samples, n_alleles = genotypes.shape
             if n_alleles != 2:

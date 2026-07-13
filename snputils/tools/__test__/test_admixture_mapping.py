@@ -23,7 +23,7 @@ from snputils.tools.admixture_mapping import run_admixture_mapping
 
 def _write_phe(path: Path, sample_ids: Sequence[str], y_binary: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("#FID IID PHENO\n")
+        handle.write("#FID IID toy\n")
         for sid, yi in zip(sample_ids, y_binary):
             status = 2 if int(yi) == 1 else 1
             handle.write(f"{sid} {sid} {status}\n")
@@ -421,14 +421,14 @@ def test_flare_input_matches_msp_input(tmp_path: Path):
         phe_path=phe_path,
         lai_source=lai_path,
         results_path=out_msp,
-        phe_id="PHENO",
+        phe_id="toy",
         batch_size=7,
     )
     flare_results = run_admixture_mapping(
         phe_path=phe_path,
         lai_source=flare_path,
         results_path=out_flare,
-        phe_id="PHENO",
+        phe_id="toy",
         batch_size=7,
     )
 
@@ -501,7 +501,7 @@ def test_internal_total_memory_cap_enforced(tmp_path: Path):
 
 def _write_phe_quantitative(path: Path, sample_ids: Sequence[str], y: np.ndarray) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("#FID IID PHENO\n")
+        handle.write("#FID IID toy\n")
         for sid, yi in zip(sample_ids, y):
             handle.write(f"{sid} {sid} {yi}\n")
 

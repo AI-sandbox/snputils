@@ -167,7 +167,12 @@ def data_path():
         fmt_path = data_path / fmt
         os.makedirs(fmt_path, exist_ok=True)
         fmt_file = fmt_path / "subset"
-        if not fmt_file.exists():
+        required_suffixes = {
+            "bed": (".bed", ".bim", ".fam"),
+            "pgen": (".pgen", ".pvar", ".psam"),
+            "pgen_zst": (".pgen", ".pvar.zst", ".psam"),
+        }[fmt]
+        if not all(fmt_file.with_suffix(suffix).exists() for suffix in required_suffixes):
             print(f"Generating {fmt} format...")
             make_fmt = "--make-pgen vzs" if fmt == "pgen_zst" else f"--make-{fmt}"
             subprocess.run(

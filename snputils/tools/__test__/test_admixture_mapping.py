@@ -18,7 +18,7 @@ from snputils.ancestry.io.local.read.__test__.fixtures import (
 from snputils.ancestry.io.local.write import FLAREWriter
 from snputils.phenotype.genobj import CovariateObject, PhenotypeObject
 from snputils.snp.genobj.snpobj import SNPObject
-from snputils.tools.admixture_mapping import run_admixture_mapping
+from snputils.tools.admixture_mapping import _compute_dosage_from_lai, run_admixture_mapping
 
 
 def _write_phe(path: Path, sample_ids: Sequence[str], y_binary: np.ndarray) -> None:
@@ -1307,6 +1307,22 @@ def test_missing_lai_is_excluded_per_window_and_not_reported_as_ancestry(tmp_pat
         atol=1e-12,
         equal_nan=True,
     )
+
+
+def test_compute_dosage_from_lai_uses_signed_missing_sentinel():
+    haplotype_0 = np.array([[0, 1, -1]], dtype=np.int8)
+    haplotype_1 = np.array([[0, 0, 1]], dtype=np.int8)
+    called_samples = np.array([[True, False, True]])
+
+    observed = _compute_dosage_from_lai(
+        haplotype_0,
+        haplotype_1,
+        ancestry_code=0,
+        called_samples=called_samples,
+    )
+
+    assert observed.dtype == np.int8
+    np.testing.assert_array_equal(observed, np.array([[2, -1, 0]], dtype=np.int8))
 
 
 def test_missing_lai_uses_complete_cases_with_quantitative_covariates(tmp_path: Path):

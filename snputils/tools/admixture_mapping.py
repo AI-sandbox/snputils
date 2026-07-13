@@ -447,7 +447,8 @@ def _compute_dosage_from_lai(
     )
     if called_samples is None:
         return dosage
-    return np.where(called_samples, dosage, -1).astype(np.int8, copy=False)
+    signed_dosage = dosage.astype(np.int8, copy=False)
+    return np.where(called_samples, signed_dosage, np.int8(-1))
 
 
 def _compute_linear_stats_from_lai(

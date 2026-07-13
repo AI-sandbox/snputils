@@ -1654,6 +1654,65 @@ def test_concat_fills_missing_call_arrays_instead_of_discarding_data():
     np.testing.assert_allclose(concatenated.calldata_gp[1], right_gp[0])
 
 
+def test_concat_rejects_cross_representation_sample_count_mismatch_without_ids():
+    left = SNPObject(genotypes=np.zeros((1, 2), dtype=np.int8))
+    right = SNPObject(calldata_gp=np.zeros((1, 3, 3), dtype=np.float32))
+
+    with pytest.raises(ValueError, match=r"sample count differs \(2 != 3\)"):
+        left.concat(right)
+
+
+def test_concat_rejects_internally_inconsistent_sample_dimensions():
+    left = SNPObject(
+        genotypes=np.zeros((1, 2), dtype=np.int8),
+        calldata_gp=np.zeros((1, 3, 3), dtype=np.float32),
+    )
+    right = SNPObject(genotypes=np.zeros((1, 2), dtype=np.int8))
+
+    with pytest.raises(ValueError, match=r"`self` has inconsistent sample dimensions"):
+        left.concat(right)
+
+
+def test_concat_preserves_right_only_ancestry_map_with_right_only_lai():
+    left = SNPObject(genotypes=np.array([[0, 2]], dtype=np.int8))
+    right = SNPObject(
+        calldata_lai=np.array([[[0, 1], [1, 2]]], dtype=np.int8),
+        ancestry_map={"0": "AFR", "1": "EUR", "2": "AMR"},
+    )
+
+    concatenated = left.concat(right)
+
+    assert concatenated.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+    np.testing.assert_array_equal(
+        concatenated.calldata_lai[0],
+        np.full_like(right.calldata_lai[0], -1),
+    )
+    np.testing.assert_array_equal(concatenated.calldata_lai[1], right.calldata_lai[0])
+
+
+def test_concat_merges_ancestry_maps_inplace_and_rejects_conflicts():
+    left = SNPObject(
+        calldata_lai=np.array([[[0, 1]]], dtype=np.int8),
+        ancestry_map={"0": "AFR", "1": "EUR"},
+    )
+    compatible = SNPObject(
+        calldata_lai=np.array([[[1, 2]]], dtype=np.int8),
+        ancestry_map={"1": "EUR", "2": "AMR"},
+    )
+
+    result = left.concat(compatible, inplace=True)
+
+    assert result is left
+    assert left.ancestry_map == {"0": "AFR", "1": "EUR", "2": "AMR"}
+
+    conflicting = SNPObject(
+        calldata_lai=np.array([[[1, 2]]], dtype=np.int8),
+        ancestry_map={"1": "EAS", "2": "AMR"},
+    )
+    with pytest.raises(ValueError, match=r"ancestry code.*maps to both"):
+        left.concat(conflicting)
+
+
 def test_correct_flipped_variants_inverts_dosages_and_preserves_missing_values():
     query = SNPObject(
         genotypes=np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),

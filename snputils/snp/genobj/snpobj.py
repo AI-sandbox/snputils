@@ -188,6 +188,55 @@ def _merge_ancestry_maps(
     return merged
 
 
+def _sample_count_for_concat(snpobj: Any, owner: str) -> Optional[int]:
+    sample_counts: Dict[str, int] = {}
+
+    if snpobj.samples is not None:
+        sample_counts["samples"] = len(snpobj.samples)
+    if snpobj.sample_fid is not None:
+        sample_counts["sample_fid"] = len(snpobj.sample_fid)
+    if snpobj.sample_sex is not None:
+        sample_counts["sample_sex"] = len(snpobj.sample_sex)
+    if snpobj.genotypes is not None:
+        genotypes = np.asarray(snpobj.genotypes)
+        if genotypes.ndim not in (2, 3):
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.genotypes` must be 2D or 3D."
+            )
+        sample_counts["genotypes"] = genotypes.shape[1]
+    if snpobj.calldata_gp is not None:
+        calldata_gp = np.asarray(snpobj.calldata_gp)
+        if calldata_gp.ndim < 2:
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.calldata_gp` must have a sample axis."
+            )
+        sample_counts["calldata_gp"] = calldata_gp.shape[1]
+    if snpobj.calldata_lai is not None:
+        calldata_lai = np.asarray(snpobj.calldata_lai)
+        if calldata_lai.ndim == 2:
+            if calldata_lai.shape[1] % 2:
+                raise ValueError(
+                    f"Cannot concatenate SNPObjects: `{owner}.calldata_lai` must contain "
+                    "two haplotypes per sample."
+                )
+            sample_counts["calldata_lai"] = calldata_lai.shape[1] // 2
+        elif calldata_lai.ndim == 3:
+            sample_counts["calldata_lai"] = calldata_lai.shape[1]
+        else:
+            raise ValueError(
+                f"Cannot concatenate SNPObjects: `{owner}.calldata_lai` must be 2D or 3D."
+            )
+
+    unique_counts = set(sample_counts.values())
+    if len(unique_counts) > 1:
+        details = ", ".join(f"{name}={count}" for name, count in sample_counts.items())
+        raise ValueError(
+            f"Cannot concatenate SNPObjects: `{owner}` has inconsistent sample dimensions "
+            f"({details})."
+        )
+    return next(iter(unique_counts), None)
+
+
 class SNPObject:
     """
     A class for Single Nucleotide Polymorphism (SNP) data, with optional support for
@@ -4994,6 +5043,19 @@ class SNPObject:
         Returns:
             Optional[SNPObject]: A new SNPObject containing the concatenated SNP data.
         """
+        self_n_samples = _sample_count_for_concat(self, "self")
+        snpobj_n_samples = _sample_count_for_concat(snpobj, "snpobj")
+        if (
+            self_n_samples is not None
+            and snpobj_n_samples is not None
+            and self_n_samples != snpobj_n_samples
+        ):
+            raise ValueError(
+                "Cannot concatenate SNPObjects: sample count differs "
+                f"({self_n_samples} != {snpobj_n_samples})."
+            )
+        ancestry_map = _merge_ancestry_maps(self.ancestry_map, snpobj.ancestry_map)
+
         # Merge genotypes if present and compatible
         if self.genotypes is not None and snpobj.genotypes is not None:
             if self.genotypes.shape[1] != snpobj.genotypes.shape[1]:
@@ -5114,6 +5176,7 @@ class SNPObject:
             self.calldata_lai = calldata_lai
             self.calldata_gp = calldata_gp
             self.sample_sex = merged_sample_sex
+            self.ancestry_map = ancestry_map
             for attr in attributes:
                 self[attr] = merged_attrs[attr]
             return self
@@ -5135,7 +5198,7 @@ class SNPObject:
             variants_qual=merged_attrs['variants_qual'],
             variants_info=merged_attrs['variants_info'],
             variants_filter_pass=merged_attrs['variants_filter_pass'],
-            ancestry_map=self.ancestry_map
+            ancestry_map=ancestry_map
         )
 
     @classmethod
@@ -5822,7 +5885,7 @@ class SNPObject:
         in the ancestry map if it is provided.
         """
         if self.__calldata_lai is not None and self.__ancestry_map is not None:
-            unique_ancestries = np.unique(self.__calldata_lai)
+            unique_ancestries = np.unique(known_lai_values(self.__calldata_lai))
             missing_ancestries = [anc for anc in unique_ancestries if str(anc) not in self.__ancestry_map]
             if missing_ancestries:
                 warnings.warn(f"Missing ancestries in ancestry_map: {missing_ancestries}")

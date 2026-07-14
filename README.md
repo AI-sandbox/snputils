@@ -182,7 +182,7 @@ The Python API remains the full surface for low-level readers/writers, object ma
 ## Documentation and Examples
 
 - **Documentation**: [docs.snputils.org](https://docs.snputils.org)
-- **Quickstart**: [Quickstart guide](https://docs.snputils.org/en/latest/quickstart.html)
+- **Quickstart**: [Quickstart guide](https://docs.snputils.org/quickstart.html)
 - **Tutorials**: PCA, mdPCA, maasMDS, SNP objects, allele frequency, local ancestry visualization, admixture mapping, and GRG workflows
 - **API Reference**: Readers, writers, data objects, processing classes, statistics, datasets, and visualization helpers
 - **Issues and feature requests**: [GitHub Issues](https://github.com/AI-sandbox/snputils/issues)

@@ -3,10 +3,11 @@
 # 1. For Pull Requests:
 #    - Runs all tests
 #    - Verifies documentation builds
+#    - Builds and smoke-tests wheels on every supported platform
 # 2. For Pre-releases:
 #    - Runs all tests
 #    - Builds documentation
-#    - Publishes package to PyPI
+#    - Publishes the tested wheels and source distribution to PyPI
 #    - Updates the release to a full release (removes pre-release status) and marks latest
 #    - Deploys documentation to GitHub Pages (at the end; non-blocking)
 
@@ -116,12 +117,51 @@ jobs:
         with:
           path: docs/_build/html
 
+  build-wheels:
+    needs: test
+    if: github.event_name == 'pull_request' || (github.event_name == 'release' && github.event.release.prerelease == true)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            artifact: wheels-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            artifact: wheels-linux-aarch64
+          - runner: macos-14
+            arch: arm64
+            artifact: wheels-macos-arm64
+          - runner: macos-15-intel
+            arch: x86_64
+            artifact: wheels-macos-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build and smoke-test wheels
+        uses: pypa/cibuildwheel@v4.1.0
+        with:
+          output-dir: wheelhouse
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
   publish:
-    needs: [test, build-docs]
-    if: needs.build-docs.result == 'success' && github.event_name == 'release' && github.event.release.prerelease == true
+    needs: [test, build-docs, build-wheels]
+    if: needs.build-docs.result == 'success' && needs.build-wheels.result == 'success' && github.event_name == 'release' && github.event.release.prerelease == true
     runs-on: ubuntu-latest
     steps:
-      # Build and publish to PyPI
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
@@ -139,23 +179,20 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build
+          python -m pip install build twine
+
+      - name: Download tested wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
 
       - name: Build sdist
-        run: |
-          rm -rf dist wheelhouse
-          python -m build --sdist
+        run: python -m build --sdist --outdir dist
 
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v4.1.0
-        with:
-          output-dir: wheelhouse
-        env:
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
-          CIBW_SKIP: "*-musllinux_*"
-
-      - name: Move wheels into dist
-        run: cp wheelhouse/*.whl dist/
+      - name: Verify distributions
+        run: python -m twine check dist/*
 
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

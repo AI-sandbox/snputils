@@ -89,6 +89,11 @@ libraries = ["z"]
 
 [tool.setuptools_scm]
 
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_* *-win*"
+test-command = "python {project}/.github/scripts/wheel_smoke_test.py"
+
 [tool.mypy]
 python_version = "3.9"
 ignore_missing_imports = true

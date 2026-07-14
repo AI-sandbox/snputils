@@ -104,7 +104,10 @@ jobs:
 
       # Build documentation and verify it builds correctly
       - name: Build documentation
-        run: sphinx-build -b html docs docs/_build/html
+        run: sphinx-build -W --keep-going -b html docs docs/_build/html
+
+      - name: Check documentation links
+        run: sphinx-build -b linkcheck docs docs/_build/linkcheck
 
       # Upload Pages artifact if this is a release
       - name: Upload Pages artifact

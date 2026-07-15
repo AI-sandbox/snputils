@@ -27,6 +27,29 @@ Developed in collaboration between Stanford University's Department of Biomedica
 
 ## Quickstart
 
+Start with a fully self-contained synthetic dataset—no external files or downloads required:
+
+```python
+import snputils as su
+
+snp = su.build_synthetic_snp_dataset(
+    n_samples=30,
+    n_snps=100,
+    seed=42,
+)
+
+af = snp.allele_freq()
+pcs = su.PCA(n_components=2).fit_transform(snp)
+
+print(snp.n_samples, snp.n_snps)
+print(af[:5])
+print(pcs.shape)
+```
+
+### Working with your own files
+
+For file-backed workflows, `read_snp` detects the genotype format from its extension and the other readers load ancestry, phenotype, and IBD data:
+
 ```python
 import snputils as su
 

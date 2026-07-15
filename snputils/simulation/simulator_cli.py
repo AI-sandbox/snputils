@@ -7,17 +7,18 @@ import pandas as pd
 
 from snputils.snp.io.read import SNPReader
 from snputils.simulation._validation import validate_phased_simulation_input
-from snputils.simulation.simulator import OnlineSimulator
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s │ %(levelname)-8s │ %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 log = logging.getLogger("simulator_cli")
 
+_OUTPUT_FORMAT_CHOICES = ("same", "npz", "pkl", "pgen", "vcf", "vcf.gz", "bcf", "bgen")
+
 
 def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--snp", required=True,
-                   help="Path to phased SNP input (VCF, PGEN, or BGEN fileset). PLINK1 BED is not supported because it cannot store phase.")
+                   help="Path to phased SNP input (VCF, BCF, PGEN, or BGEN fileset). PLINK1 BED is not supported because it cannot store phase.")
     p.add_argument("--metadata", required=True,
                    help="TSV/CSV file with at least Sample/IID and Population columns.")
     p.add_argument("--output-dir", required=True,
@@ -25,8 +26,8 @@ def add_simulator_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--output-prefix", default=None,
                    help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
     p.add_argument("--output-format", default="same",
-                   choices=("same", "pgen", "vcf", "vcf.gz", "bgen"),
-                   help="Genotype output format for --n-individuals cohort output.")
+                   choices=_OUTPUT_FORMAT_CHOICES,
+                   help="Output format. 'same' preserves the cohort input format and keeps NPZ as the batch-mode default.")
     p.add_argument("--genetic-map", default=None,
                    help="Genetic map table with columns: chrom, pos, cM.")
     p.add_argument("--chromosome", type=int, default=None,
@@ -132,6 +133,8 @@ def _infer_output_format(input_path: str, requested_format: str) -> str:
         return "vcf"
     if suffix == ".bgen":
         return "bgen"
+    if suffix == ".bcf":
+        return "bcf"
     raise ValueError(f"Cannot infer cohort output format from input path: {input_path}")
 
 
@@ -144,6 +147,12 @@ def _output_genotype_path(output_prefix: Path, output_format: str) -> Path:
         return output_prefix.with_suffix(".vcf.gz")
     if output_format == "bgen":
         return output_prefix.with_suffix(".bgen")
+    if output_format == "bcf":
+        return output_prefix.with_suffix(".bcf")
+    if output_format == "pkl":
+        return output_prefix.with_suffix(".pkl")
+    if output_format == "npz":
+        return output_prefix.with_suffix(".npz")
     raise ValueError(f"Unsupported output format: {output_format}")
 
 
@@ -191,6 +200,32 @@ def _write_genotypes_like_input(
         from snputils.snp.io.write.bgen import BGENWriter
 
         BGENWriter(snpobj=snpobj, filename=output_path).write(phased=True)
+    elif output_format == "bcf":
+        from snputils.snp.io.write.bcf import BCFWriter
+
+        BCFWriter(snpobj=snpobj, filename=output_path, phased=True).write()
+    elif output_format == "pkl":
+        snpobj.save_pickle(output_path)
+    elif output_format == "npz":
+        payload = {
+            "genotypes": np.asarray(snpobj.genotypes),
+            "samples": np.asarray(snpobj.samples),
+        }
+        for attr in (
+            "variants_ref",
+            "variants_alt",
+            "variants_chrom",
+            "variants_cm",
+            "variants_filter_pass",
+            "variants_id",
+            "variants_pos",
+            "variants_qual",
+            "variants_info",
+        ):
+            value = getattr(snpobj, attr, None)
+            if value is not None:
+                payload[attr] = np.asarray(value)
+        np.savez_compressed(output_path, **payload)
     else:
         raise ValueError(f"Unsupported output format: {output_format}")
 
@@ -291,6 +326,50 @@ def _run_cohort_output(args, simulator, snp_data, out_dir: Path) -> int:
     return 0
 
 
+def _to_numpy(value):
+    if value is None:
+        return None
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value)
+
+
+def _batch_genotypes_to_snp_layout(snps) -> np.ndarray:
+    values = _to_numpy(snps)
+    if values.ndim != 3 or values.shape[1] != 2:
+        raise ValueError(
+            "Diploid batch output must have shape (n_samples, 2, n_variants)."
+        )
+    return np.transpose(values, (2, 0, 1)).astype(np.int8, copy=False)
+
+
+def _write_batch_truth(
+    path: Path,
+    *,
+    labels_d,
+    labels_c,
+    cp,
+    population_names,
+    output_ploidy: int,
+) -> None:
+    np.savez_compressed(
+        path,
+        labels_d=(_to_numpy(labels_d) if labels_d is not None else np.empty(0)),
+        labels_c=(_to_numpy(labels_c) if labels_c is not None else np.empty(0)),
+        cp=(_to_numpy(cp) if cp is not None else np.empty(0)),
+        population_names=(
+            np.asarray(population_names, dtype=str)
+            if population_names is not None
+            else np.empty(0, dtype=str)
+        ),
+        output_ploidy=np.asarray(output_ploidy, dtype=np.int8),
+    )
+
+
 def run_simulator_command(args: argparse.Namespace) -> int:
     if getattr(args, "verbose", False):
         log.setLevel(logging.DEBUG)
@@ -329,6 +408,8 @@ def run_simulator_command(args: argparse.Namespace) -> int:
     ancestry_proportions = _parse_ancestry_proportions(args.ancestry_proportions)
 
     log.info("Initialising OnlineSimulator...")
+    from snputils.simulation.simulator import OnlineSimulator
+
     simulator = OnlineSimulator(
         snp_data             = snp_data,
         meta                 = meta,
@@ -364,20 +445,49 @@ def run_simulator_command(args: argparse.Namespace) -> int:
             if cp is not None:
                 cp = cp.reshape(args.batch_size, output_ploidy, cp.shape[-1])
 
-        out_path = out_dir / f"batch_{b:04d}.npz"
-        np.savez_compressed(
-            out_path,
-            snps     = snps.cpu().numpy(),
-            labels_d = (labels_d.cpu().numpy()
-                        if labels_d is not None else np.empty(0)),
-            labels_c = (labels_c.cpu().numpy()
-                        if labels_c is not None else np.empty(0)),
-            cp       = (cp.cpu().numpy()
-                        if cp is not None else np.empty(0)),
-            population_names = (np.asarray(simulator.population_names, dtype=str)
-                                if simulator.population_names is not None else np.empty(0, dtype=str)),
-            output_ploidy = np.asarray(output_ploidy, dtype=np.int8),
-        )
+        output_format = "npz" if args.output_format == "same" else args.output_format
+        output_prefix = out_dir / f"batch_{b:04d}"
+        if output_format == "npz":
+            out_path = output_prefix.with_suffix(".npz")
+            np.savez_compressed(
+                out_path,
+                snps=_to_numpy(snps),
+                labels_d=(_to_numpy(labels_d) if labels_d is not None else np.empty(0)),
+                labels_c=(_to_numpy(labels_c) if labels_c is not None else np.empty(0)),
+                cp=(_to_numpy(cp) if cp is not None else np.empty(0)),
+                population_names=(
+                    np.asarray(simulator.population_names, dtype=str)
+                    if simulator.population_names is not None
+                    else np.empty(0, dtype=str)
+                ),
+                output_ploidy=np.asarray(output_ploidy, dtype=np.int8),
+            )
+        else:
+            if not args.diploid_output:
+                raise ValueError(
+                    "Batch genotype, BCF, BGEN, and SNPObject outputs require --diploid-output; "
+                    "use NPZ for haplotype batches."
+                )
+            batch_genotypes = _batch_genotypes_to_snp_layout(snps)
+            batch_samples = np.asarray(
+                [f"{args.sample_prefix}B{b:04d}_{i + 1:06d}" for i in range(batch_genotypes.shape[1])],
+                dtype=str,
+            )
+            out_path = _write_genotypes_like_input(
+                snp_data,
+                batch_genotypes,
+                batch_samples,
+                output_prefix,
+                output_format,
+            )
+            _write_batch_truth(
+                output_prefix.with_suffix(".labels.npz"),
+                labels_d=labels_d,
+                labels_c=labels_c,
+                cp=cp,
+                population_names=simulator.population_names,
+                output_ploidy=output_ploidy,
+            )
         log.info("Saved %s", out_path.name)
 
     log.info("[✓] All done. %d files written to %s", args.n_batches, out_dir)

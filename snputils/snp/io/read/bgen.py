@@ -68,6 +68,7 @@ class _BGENRecord:
     pos: int
     alleles: tuple[str, ...]
     probabilities: Optional[np.ndarray]
+    phased: Optional[bool]
 
 
 def _as_field_list(fields: Optional[Union[str, Sequence[str]]]) -> Optional[List[str]]:
@@ -222,8 +223,9 @@ class _DirectBGENFile:
         block = _read_exact(self.handle, block_len, "genotype block")
 
         probabilities = None
+        phased = None
         if read_probabilities:
-            probabilities = self._decode_probabilities(block, n_alleles)
+            probabilities, phased = self._decode_probabilities(block, n_alleles)
         return _BGENRecord(
             index=index,
             varid=varid,
@@ -232,9 +234,10 @@ class _DirectBGENFile:
             pos=pos,
             alleles=alleles,
             probabilities=probabilities,
+            phased=phased,
         )
 
-    def _decode_probabilities(self, block: bytes, n_alleles: int) -> np.ndarray:
+    def _decode_probabilities(self, block: bytes, n_alleles: int) -> tuple[np.ndarray, bool]:
         assert self.header is not None
         if _native_bgen is None:
             raise ImportError("Native BGEN support requires the compiled snputils.snp.io._bgen extension.")
@@ -252,12 +255,13 @@ class _DirectBGENFile:
             if len(payload) != expected_len:
                 raise ValueError("BGEN genotype block decompressed to the wrong size.")
 
-        buffer, n_samples, width, _phased, _bit_depth = _native_bgen.decode_layout2(
+        buffer, n_samples, width, phased, _bit_depth = _native_bgen.decode_layout2(
             payload,
             self.header.n_samples,
             n_alleles,
         )
-        return np.frombuffer(buffer, dtype=np.float32).reshape(n_samples, width)
+        probabilities = np.frombuffer(buffer, dtype=np.float32).reshape(n_samples, width)
+        return probabilities, bool(phased)
 
 
 @SNPBaseReader.register
@@ -271,16 +275,21 @@ class BGENReader(SNPBaseReader):
         sample_idxs: Optional[Sequence[int]] = None,
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
+        genotype_mode: Optional[str] = None,
     ) -> SNPObject:
         """
         Read a BGEN file into a SNPObject.
 
         Args:
-            fields: Fields to include. Available fields are ``GP``, ``IID``, ``REF``,
-                ``ALT``, ``#CHROM``, ``ID``, and ``POS``. ``GT`` is intentionally
-                unsupported because this reader preserves BGEN genotype probabilities
-                instead of converting them to hard calls.
+            fields: Fields to include. Available fields are ``GP``, ``GT``, ``IID``,
+                ``REF``, ``ALT``, ``#CHROM``, ``ID``, and ``POS``. ``GT`` requires
+                ``genotype_mode="phased"``.
             exclude_fields: Fields to exclude from the returned SNPObject.
+            genotype_mode: By default, preserve BGEN genotype probabilities in
+                ``calldata_gp``. ``"phased"`` hard-calls each haplotype from phased
+                genotype probabilities and returns a diploid allele array with shape
+                ``(n_variants, n_samples, 2)``. Unphased or non-diploid records are
+                rejected in this mode.
             sample_path: Optional Oxford ``.sample`` file for BGEN files without
                 embedded sample identifiers.
             sample_ids: Sample IDs to read. If None and sample_idxs is None, all samples are read.
@@ -289,9 +298,15 @@ class BGENReader(SNPBaseReader):
             variant_idxs: Variant indices to read. If None and variant_ids is None, all variants are read.
 
         Returns:
-            SNPObject: A SNPObject with genotype probabilities in ``calldata_gp``.
-            Mixed probability widths are padded with NaN columns.
+            SNPObject: A SNPObject with genotype probabilities in ``calldata_gp`` by
+            default, or phased hard calls in ``genotypes`` when requested. Mixed
+            probability widths are padded with NaN columns in probability mode.
         """
+        if genotype_mode is not None:
+            genotype_mode = str(genotype_mode).strip().lower()
+            if genotype_mode != "phased":
+                raise ValueError("BGENReader genotype_mode must be 'phased' when provided.")
+
         if sample_idxs is not None and sample_ids is not None:
             raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
         if variant_idxs is not None and variant_ids is not None:
@@ -301,12 +316,16 @@ class BGENReader(SNPBaseReader):
         exclude = set(_as_field_list(exclude_fields) or [])
         fields_set = {field for field in fields_list if field not in exclude}
 
-        if "GT" in fields_set:
+        if "GT" in fields_set and genotype_mode != "phased":
             raise NotImplementedError(
-                "BGENReader preserves genotype probabilities in `calldata_gp` and does not hard-call GT."
+                "BGENReader does not hard-call GT by default; request "
+                "genotype_mode='phased' to hard-call phased probabilities."
             )
+        if genotype_mode == "phased":
+            fields_set.discard("GT")
+            fields_set.add("GP")
 
-        if self._can_use_native_bulk_gp(
+        if genotype_mode is None and self._can_use_native_bulk_gp(
             fields_set=fields_set,
             sample_path=sample_path,
             sample_ids=sample_ids,
@@ -345,8 +364,12 @@ class BGENReader(SNPBaseReader):
             samples = bfile.samples[sample_indices] if "IID" in fields_set else None
 
         metadata, calldata_gp = self._records_to_arrays(records, sample_indices, fields_set)
+        genotypes = None
+        if genotype_mode == "phased":
+            genotypes = self._records_to_phased_hardcalls(records, len(sample_indices))
+            calldata_gp = None
         return SNPObject(
-            genotypes=None,
+            genotypes=genotypes,
             calldata_gp=calldata_gp,
             samples=samples,
             variants_ref=metadata["variants_ref"],
@@ -489,6 +512,7 @@ class BGENReader(SNPBaseReader):
                         pos=record.pos,
                         alleles=record.alleles,
                         probabilities=record.probabilities[sample_indices, :],
+                        phased=record.phased,
                     )
                 if requested_idx_set is not None:
                     by_index[record.index] = record
@@ -509,6 +533,58 @@ class BGENReader(SNPBaseReader):
             if missing:
                 raise ValueError(f"The following specified variants were not found: {missing}")
         return selected
+
+    @staticmethod
+    def _records_to_phased_hardcalls(
+        records: Sequence[_BGENRecord],
+        n_samples: int,
+    ) -> np.ndarray:
+        genotypes = np.empty((len(records), n_samples, 2), dtype=np.int8)
+
+        for variant_index, record in enumerate(records):
+            variant_id = _variant_identifier(record.varid, record.rsid) or f"index {record.index}"
+            if record.phased is not True:
+                raise ValueError(
+                    "BGEN genotype_mode='phased' requires phased probabilities; "
+                    f"variant {variant_id!r} is unphased."
+                )
+            if record.probabilities is None:
+                raise ValueError(f"BGEN probabilities were not loaded for variant {variant_id!r}.")
+
+            n_alleles = len(record.alleles)
+            if n_alleles < 2 or n_alleles > np.iinfo(np.int8).max:
+                raise ValueError(
+                    f"Variant {variant_id!r} has unsupported allele count {n_alleles}."
+                )
+
+            probabilities = np.asarray(record.probabilities, dtype=np.float32)
+            expected_width = 2 * n_alleles
+            if probabilities.shape != (n_samples, expected_width):
+                raise ValueError(
+                    "BGEN genotype_mode='phased' requires diploid phased probabilities; "
+                    f"variant {variant_id!r} has probability width {probabilities.shape[1]}, "
+                    f"expected {expected_width}."
+                )
+
+            haplotype_probabilities = probabilities.reshape(n_samples, 2, n_alleles)
+            called = np.all(np.isfinite(haplotype_probabilities), axis=2)
+            partial_ploidy = np.sum(called, axis=1) == 1
+            if np.any(partial_ploidy):
+                sample_index = int(np.flatnonzero(partial_ploidy)[0])
+                raise ValueError(
+                    "BGEN genotype_mode='phased' requires diploid phased probabilities; "
+                    f"variant {variant_id!r} has a non-diploid call for sample index {sample_index}."
+                )
+            safe_probabilities = np.where(
+                np.isfinite(haplotype_probabilities),
+                haplotype_probabilities,
+                -np.inf,
+            )
+            variant_genotypes = np.argmax(safe_probabilities, axis=2).astype(np.int8)
+            variant_genotypes[~called] = -1
+            genotypes[variant_index] = variant_genotypes
+
+        return genotypes
 
     @classmethod
     def _records_to_arrays(

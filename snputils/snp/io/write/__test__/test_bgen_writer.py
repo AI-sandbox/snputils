@@ -188,3 +188,58 @@ def test_bgen_writer_roundtrips_variable_ploidy_phased(tmp_path):
     observed = BGENReader(path).read()
 
     np.testing.assert_allclose(observed.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
+    with pytest.raises(ValueError, match="non-diploid call"):
+        BGENReader(path).read(genotype_mode="phased")
+
+
+def test_bgen_reader_hardcalls_phased_probabilities(tmp_path):
+    path = tmp_path / "phased_probabilities.bgen"
+    gp = np.array(
+        [
+            [[0.9, 0.1, 0.2, 0.8], [0.1, 0.9, 0.8, 0.2], [np.nan] * 4],
+            [[0.4, 0.6, 0.7, 0.3], [0.8, 0.2, 0.1, 0.9], [0.2, 0.8, 0.3, 0.7]],
+        ],
+        dtype=np.float32,
+    )
+    snpobj = SNPObject(
+        calldata_gp=gp,
+        samples=np.array(["s1", "s2", "missing"], dtype=object),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2"], dtype=object),
+        variants_pos=np.array([10, 20]),
+    )
+
+    BGENWriter(snpobj, path).write(phased=True)
+    observed = BGENReader(path).read(genotype_mode="phased")
+
+    expected = np.array(
+        [
+            [[0, 1], [1, 0], [-1, -1]],
+            [[1, 0], [0, 1], [1, 1]],
+        ],
+        dtype=np.int8,
+    )
+    np.testing.assert_array_equal(observed.genotypes, expected)
+    np.testing.assert_array_equal(observed.samples, snpobj.samples)
+    np.testing.assert_array_equal(observed.variants_id, snpobj.variants_id)
+    assert observed.calldata_gp is None
+
+
+def test_bgen_reader_rejects_unphased_probabilities_in_phased_mode(tmp_path):
+    path = tmp_path / "unphased_probabilities.bgen"
+    snpobj = SNPObject(
+        calldata_gp=np.array([[[0.2, 0.3, 0.5]]], dtype=np.float32),
+        samples=np.array(["s1"], dtype=object),
+        variants_ref=np.array(["A"], dtype=object),
+        variants_alt=np.array(["G"], dtype=object),
+        variants_chrom=np.array(["1"], dtype=object),
+        variants_id=np.array(["rs1"], dtype=object),
+        variants_pos=np.array([10]),
+    )
+
+    BGENWriter(snpobj, path).write(phased=False)
+
+    with pytest.raises(ValueError, match="requires phased probabilities"):
+        BGENReader(path).read(genotype_mode="phased")

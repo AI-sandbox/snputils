@@ -37,6 +37,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
     "sphinx_design",
+    "sphinx_sitemap",
 ]
 
 source_suffix = {
@@ -108,12 +109,21 @@ intersphinx_mapping = {
 templates_path = ["_templates"]
 html_theme = "furo"
 html_title = "snputils"
+html_baseurl = "https://docs.snputils.org/"
 html_logo = "../assets/logo.png"
 html_favicon = "https://snputils.org/su_favicon.png"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_extra_path = ["_extra"]
 html_show_sourcelink = True
+sitemap_url_scheme = "{link}"
+sitemap_excludes = [
+    "search.html",
+    "genindex.html",
+    "py-modindex.html",
+    "_modules/*",
+]
+sitemap_indent = 2
 html_theme_options = {
     "source_repository": "https://github.com/AI-sandbox/snputils/",
     "source_branch": "main",

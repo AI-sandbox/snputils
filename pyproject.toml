@@ -5,15 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "snputils"
 dynamic = ["version"]  # Version is set by setuptools_scm and determined by the latest git tag
-description = "Process genomes with ease"
+description = "Python toolkit for fast genotype I/O, ancestry analysis, population-genetics statistics, genotype QC, GWAS, and visualization"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "BSD 3-Clause License"}
+keywords = ["bioinformatics", "genomics", "population genetics", "genotype", "ancestry", "VCF", "BCF", "BGEN", "PLINK", "PGEN", "GWAS"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -61,6 +63,9 @@ grg = ["pygrgl>=2.9"]
 [project.urls]
 "Homepage" = "https://snputils.org"
 "Documentation" = "https://docs.snputils.org"
+"Tutorials" = "https://docs.snputils.org/tutorials/index.html"
+"Changelog" = "https://docs.snputils.org/changelog.html"
+"Paper" = "https://doi.org/10.64898/2026.02.28.708618"
 "Source Code" = "https://github.com/AI-sandbox/snputils"
 "Issue Tracker" = "https://github.com/AI-sandbox/snputils/issues"
 

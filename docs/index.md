@@ -1,6 +1,12 @@
-# snputils
+---
+myst:
+  html_meta:
+    description: snputils is a Python toolkit for reading, processing, analyzing, and visualizing genotype, ancestry, phenotype, and population-genetics data.
+---
 
-**snputils** is a Python library for processing genetic variation, ancestry, phenotype, and relatedness data. It focuses on fast file I/O, ergonomic data containers, population-genetic statistics, dimensionality reduction, and visualization workflows for genomic analyses.
+# snputils: Python toolkit for genotype, ancestry, and population-genetics workflows
+
+**snputils** is a Python toolkit for reading, processing, analyzing, and visualizing genotype, ancestry, phenotype, and relatedness data. It focuses on fast file I/O, ergonomic data containers, population-genetic statistics, dimensionality reduction, and visualization workflows for genomic analyses.
 
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and collaborators worldwide.
 

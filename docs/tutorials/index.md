@@ -72,13 +72,13 @@ Work with genotype representation graph data.
 :maxdepth: 1
 
 snp-object
-pca
+PCA <pca>
 snp-allele-frequency
-f-statistics
-local-ancestry-visualization
+F-statistics <f-statistics>
+Local ancestry visualization <local-ancestry-visualization>
 mdpca
 maasmds
-admixture-mapping
+Admixture mapping <admixture-mapping>
 phenotype-object
 grg
 ```

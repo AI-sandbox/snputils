@@ -1,6 +1,12 @@
-# File I/O
+---
+myst:
+  html_meta:
+    description: Read and write VCF, BCF, BGEN, PLINK BED, and PLINK PGEN genomic files in Python with snputils.
+---
 
-High-level readers dispatch to the right implementation based on file extension.
+# Read and write VCF, BCF, BGEN, BED, and PGEN files in Python
+
+Use the high-level snputils readers and writers to work with common genomic file formats in Python. Readers dispatch to the right implementation based on file extension.
 
 ```python
 import snputils as su

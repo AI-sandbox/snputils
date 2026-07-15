@@ -17,7 +17,7 @@ The reader benchmark measures wall-clock read time and peak memory on chromosome
 Each reader is run in an Slurm allocation with 8 AMD EPYC 9684X CPU cores and 200 GB of RAM and a Python 3.12 environment.
 Python 3.12 is used because some libraries are not yet compatible with Python 3.13 or 3.14.
 
-For BGEN, the phased condition uses a BGEN file containing phased diploid probabilities and materializes an `int8` allele-code array with shape `(variants, samples, 2)`. Readers that expose only unphased BGEN probabilities are omitted from that condition. Every completed reader is checked against the corresponding `snputils` dosage or phased-call array outside the timed and memory-profiled region.
+For BGEN, the dosage condition materializes expected alternate-allele counts from biallelic probabilities. The phased condition uses a BGEN file containing phased diploid probabilities and materializes an `int8` allele-code array with shape `(variants, samples, 2)`. Readers that expose only unphased BGEN probabilities are omitted from that condition. Every completed BGEN reader is checked against the corresponding output from the independent `bgen` package outside the timed and memory-profiled region.
 
 After running the benchmark, the plotting utility `benchmark/plot_time_memory.py` writes both `benchmark/readers_benchmark.png` and `benchmark/readers_benchmark.pdf` from existing benchmark JSON files.
 

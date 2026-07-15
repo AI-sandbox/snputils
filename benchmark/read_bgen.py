@@ -104,7 +104,7 @@ def read_bgen_snputils(path, genotype_mode="dosage"):
     reader = BGENReader(path)
     if genotype_mode == "dosage":
         return reader.read_dosage()
-    return reader.read(genotype_mode="phased").genotypes
+    return reader.read(fields=["GT"], genotype_mode="phased").genotypes
 
 
 def read_bgen_bgen(path, genotype_mode="dosage"):
@@ -112,15 +112,19 @@ def read_bgen_bgen(path, genotype_mode="dosage"):
     from bgen import BgenReader
     sample_path = str(Path(path).with_suffix(".sample")) if Path(path).with_suffix(".sample").exists() else ""
     with BgenReader(str(path), sample_path, delay_parsing=True) as bfile:
-        first_probabilities = np.asarray(bfile[0].probabilities, dtype=np.float32)
         n_variants = len(bfile)
+        variants = iter(bfile)
+        first_variant = next(variants)
+        first_probabilities = np.asarray(first_variant.probabilities, dtype=np.float32)
         n_samples = first_probabilities.shape[0]
         if genotype_mode == "dosage":
             out = np.empty((n_variants, n_samples), dtype=np.float32)
+            out[0] = _probabilities_to_dosage(first_probabilities)
         else:
             out = np.empty((n_variants, n_samples, 2), dtype=np.int8)
+            out[0] = _probabilities_to_phased_calls(first_probabilities)
 
-        for i, variant in enumerate(bfile):
+        for i, variant in enumerate(variants, start=1):
             probabilities = np.asarray(variant.probabilities, dtype=np.float32)
             if genotype_mode == "dosage":
                 out[i] = _probabilities_to_dosage(probabilities)
@@ -222,9 +226,8 @@ def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name
         ref_array,
         memory_profile,
         genotype_mode=genotype_mode,
-        ref_reader_func=read_bgen_snputils,
+        ref_reader_func=read_bgen_bgen,
         assert_allclose=genotype_mode == "dosage",
         atol=(1 / 255 + 1e-6) if genotype_mode == "dosage" else 0.0,
         equal_nan=genotype_mode == "dosage",
-        verify=not (name == "snputils" and not memory_profile),
     )

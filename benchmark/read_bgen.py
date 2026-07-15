@@ -50,6 +50,53 @@ def _probabilities_to_dosage(probabilities):
     return dosage
 
 
+def _probabilities_to_phased_calls(probabilities):
+    """Hard-call diploid haplotypes from phased BGEN probabilities."""
+    probabilities = np.asarray(probabilities, dtype=np.float32)
+    if probabilities.ndim not in (2, 3):
+        raise ValueError("Phased BGEN probabilities must be a 2D or 3D array.")
+
+    width = probabilities.shape[-1]
+    if width < 4 or width % 2 != 0:
+        raise ValueError(
+            "Phased diploid BGEN probabilities must contain two equally sized "
+            "haplotype probability vectors."
+        )
+
+    n_alleles = width // 2
+    haplotype_probabilities = probabilities.reshape(
+        probabilities.shape[:-1] + (2, n_alleles)
+    )
+    finite = np.isfinite(haplotype_probabilities)
+    any_finite = np.any(finite, axis=-1)
+    fully_finite = np.all(finite, axis=-1)
+    if np.any(any_finite & ~fully_finite):
+        raise ValueError("Each phased haplotype probability vector must be complete or missing.")
+    if np.any(np.sum(fully_finite, axis=-1) == 1):
+        raise ValueError("The phased-call benchmark requires diploid BGEN records.")
+
+    probability_sums = np.sum(
+        np.where(finite, haplotype_probabilities, 0.0),
+        axis=-1,
+        dtype=np.float32,
+    )
+    if np.any(fully_finite & ~np.isclose(probability_sums, 1.0, atol=1e-4, rtol=0)):
+        raise ValueError("The probability vectors do not look like phased BGEN probabilities.")
+
+    safe_probabilities = np.where(finite, haplotype_probabilities, -np.inf)
+    calls = np.argmax(safe_probabilities, axis=-1).astype(np.int8)
+    calls[~fully_finite] = -1
+    return calls
+
+
+def _phased_calls_or_skip(probabilities, reader_name):
+    """Return phased calls, omitting readers that do not preserve BGEN phase."""
+    try:
+        return _probabilities_to_phased_calls(probabilities)
+    except ValueError as exc:
+        pytest.skip(f"{reader_name} does not expose phased BGEN probabilities: {exc}")
+
+
 def read_bgen_snputils(path, genotype_mode="dosage"):
     """Read BGEN file using snputils"""
     from snputils.snp.io.read.bgen import BGENReader
@@ -57,8 +104,7 @@ def read_bgen_snputils(path, genotype_mode="dosage"):
     reader = BGENReader(path)
     if genotype_mode == "dosage":
         return reader.read_dosage()
-    snpobj = reader.read(fields=["GP"])
-    return snpobj.calldata_gp.astype(np.float32, copy=False)
+    return reader.read(genotype_mode="phased").genotypes
 
 
 def read_bgen_bgen(path, genotype_mode="dosage"):
@@ -68,23 +114,18 @@ def read_bgen_bgen(path, genotype_mode="dosage"):
     with BgenReader(str(path), sample_path, delay_parsing=True) as bfile:
         first_probabilities = np.asarray(bfile[0].probabilities, dtype=np.float32)
         n_variants = len(bfile)
-        n_samples, width = first_probabilities.shape
+        n_samples = first_probabilities.shape[0]
         if genotype_mode == "dosage":
             out = np.empty((n_variants, n_samples), dtype=np.float32)
         else:
-            out = np.empty((n_variants, n_samples, width), dtype=np.float32)
+            out = np.empty((n_variants, n_samples, 2), dtype=np.int8)
 
         for i, variant in enumerate(bfile):
             probabilities = np.asarray(variant.probabilities, dtype=np.float32)
             if genotype_mode == "dosage":
                 out[i] = _probabilities_to_dosage(probabilities)
             else:
-                if probabilities.shape[1] > out.shape[2]:
-                    expanded = np.full((n_variants, n_samples, probabilities.shape[1]), np.nan, dtype=np.float32)
-                    expanded[:, :, : out.shape[2]] = out
-                    out = expanded
-                out[i].fill(np.nan)
-                out[i, :, : probabilities.shape[1]] = probabilities
+                out[i] = _probabilities_to_phased_calls(probabilities)
     return out
 
 
@@ -93,8 +134,8 @@ def read_bgen_pysnptools(path, genotype_mode="dosage"):
     from pysnptools.distreader import Bgen
     probabilities = Bgen(str(path)).read(order="C", dtype=np.float32).val.transpose(1, 0, 2)
     if genotype_mode == "dosage":
-        return probabilities @ np.array([0.0, 1.0, 2.0], dtype=np.float32)
-    return probabilities
+        return _probabilities_to_dosage(probabilities)
+    return _phased_calls_or_skip(probabilities, "pysnptools")
 
 
 def read_bgen_sgkit(path, genotype_mode="dosage"):
@@ -112,11 +153,14 @@ def read_bgen_sgkit(path, genotype_mode="dosage"):
     probabilities = ds["call_genotype_probability"]
     if "call_genotype_probability_mask" in ds:
         probabilities = probabilities.where(~ds["call_genotype_probability_mask"])
-    return probabilities.compute().values.astype(np.float32, copy=False)
+    probabilities = probabilities.compute().values.astype(np.float32, copy=False)
+    return _phased_calls_or_skip(probabilities, "sgkit")
 
 
 def read_bgen_hail(path, genotype_mode="dosage"):
     """Read BGEN file using hail"""
+    if genotype_mode == "phased":
+        pytest.skip("Hail does not preserve phase when importing BGEN files.")
     import os
     import hail as hl
     spark_memory = os.environ.get("HAIL_SPARK_MEMORY", "192g")
@@ -135,20 +179,17 @@ def read_bgen_hail(path, genotype_mode="dosage"):
             hl.index_bgen(str(path), reference_genome="GRCh37")
         sample_path = path.with_suffix(".sample")
         sample_file = str(sample_path) if sample_path.exists() else None
-        entry_fields = ["dosage"] if genotype_mode == "dosage" else ["GP"]
         mt = hl.import_bgen(
             str(path),
-            entry_fields=entry_fields,
+            entry_fields=["dosage"],
             sample_file=sample_file,
             n_partitions=cpus,
         )
         n_samples = mt.count_cols()
-        if genotype_mode == "dosage":
-            return np.array(hl.or_else(mt.dosage, float("nan")).collect(), dtype=np.float32).reshape((-1, n_samples))
         return np.array(
-            hl.or_else(mt.GP, hl.array([float("nan"), float("nan"), float("nan")])).collect(),
+            hl.or_else(mt.dosage, float("nan")).collect(),
             dtype=np.float32,
-        ).reshape((-1, n_samples, 3))
+        ).reshape((-1, n_samples))
     finally:
         hl.stop()
 
@@ -182,8 +223,8 @@ def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name
         memory_profile,
         genotype_mode=genotype_mode,
         ref_reader_func=read_bgen_snputils,
-        assert_allclose=True,
-        atol=1 / 255 + 1e-6,
-        equal_nan=True,
+        assert_allclose=genotype_mode == "dosage",
+        atol=(1 / 255 + 1e-6) if genotype_mode == "dosage" else 0.0,
+        equal_nan=genotype_mode == "dosage",
         verify=not (name == "snputils" and not memory_profile),
     )

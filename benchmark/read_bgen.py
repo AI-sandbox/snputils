@@ -104,7 +104,11 @@ def read_bgen_snputils(path, genotype_mode="dosage"):
     reader = BGENReader(path)
     if genotype_mode == "dosage":
         return reader.read_dosage()
-    return reader.read(fields=["GT"], genotype_mode="phased").genotypes
+    if genotype_mode == "probabilities":
+        return reader.read(fields=["GP"]).calldata_gp.astype(np.float32, copy=False)
+    if genotype_mode == "phased":
+        return reader.read(fields=["GT"], genotype_mode="phased").genotypes
+    raise ValueError(f"Unsupported BGEN benchmark genotype mode: {genotype_mode}")
 
 
 def read_bgen_bgen(path, genotype_mode="dosage"):
@@ -120,14 +124,33 @@ def read_bgen_bgen(path, genotype_mode="dosage"):
         if genotype_mode == "dosage":
             out = np.empty((n_variants, n_samples), dtype=np.float32)
             out[0] = _probabilities_to_dosage(first_probabilities)
-        else:
+        elif genotype_mode == "probabilities":
+            out = np.empty(
+                (n_variants, n_samples, first_probabilities.shape[1]),
+                dtype=np.float32,
+            )
+            out[0] = first_probabilities
+        elif genotype_mode == "phased":
             out = np.empty((n_variants, n_samples, 2), dtype=np.int8)
             out[0] = _probabilities_to_phased_calls(first_probabilities)
+        else:
+            raise ValueError(f"Unsupported BGEN benchmark genotype mode: {genotype_mode}")
 
         for i, variant in enumerate(variants, start=1):
             probabilities = np.asarray(variant.probabilities, dtype=np.float32)
             if genotype_mode == "dosage":
                 out[i] = _probabilities_to_dosage(probabilities)
+            elif genotype_mode == "probabilities":
+                if probabilities.shape[1] > out.shape[2]:
+                    expanded = np.full(
+                        (n_variants, n_samples, probabilities.shape[1]),
+                        np.nan,
+                        dtype=np.float32,
+                    )
+                    expanded[:, :, : out.shape[2]] = out
+                    out = expanded
+                out[i].fill(np.nan)
+                out[i, :, : probabilities.shape[1]] = probabilities
             else:
                 out[i] = _probabilities_to_phased_calls(probabilities)
     return out
@@ -139,7 +162,11 @@ def read_bgen_pysnptools(path, genotype_mode="dosage"):
     probabilities = Bgen(str(path)).read(order="C", dtype=np.float32).val.transpose(1, 0, 2)
     if genotype_mode == "dosage":
         return _probabilities_to_dosage(probabilities)
-    return _phased_calls_or_skip(probabilities, "pysnptools")
+    if genotype_mode == "probabilities":
+        return probabilities
+    if genotype_mode == "phased":
+        return _phased_calls_or_skip(probabilities, "pysnptools")
+    raise ValueError(f"Unsupported BGEN benchmark genotype mode: {genotype_mode}")
 
 
 def read_bgen_sgkit(path, genotype_mode="dosage"):
@@ -158,7 +185,11 @@ def read_bgen_sgkit(path, genotype_mode="dosage"):
     if "call_genotype_probability_mask" in ds:
         probabilities = probabilities.where(~ds["call_genotype_probability_mask"])
     probabilities = probabilities.compute().values.astype(np.float32, copy=False)
-    return _phased_calls_or_skip(probabilities, "sgkit")
+    if genotype_mode == "probabilities":
+        return probabilities
+    if genotype_mode == "phased":
+        return _phased_calls_or_skip(probabilities, "sgkit")
+    raise ValueError(f"Unsupported BGEN benchmark genotype mode: {genotype_mode}")
 
 
 def read_bgen_hail(path, genotype_mode="dosage"):
@@ -183,17 +214,28 @@ def read_bgen_hail(path, genotype_mode="dosage"):
             hl.index_bgen(str(path), reference_genome="GRCh37")
         sample_path = path.with_suffix(".sample")
         sample_file = str(sample_path) if sample_path.exists() else None
+        entry_fields = ["dosage"] if genotype_mode == "dosage" else ["GP"]
         mt = hl.import_bgen(
             str(path),
-            entry_fields=["dosage"],
+            entry_fields=entry_fields,
             sample_file=sample_file,
             n_partitions=cpus,
         )
         n_samples = mt.count_cols()
-        return np.array(
-            hl.or_else(mt.dosage, float("nan")).collect(),
-            dtype=np.float32,
-        ).reshape((-1, n_samples))
+        if genotype_mode == "dosage":
+            return np.array(
+                hl.or_else(mt.dosage, float("nan")).collect(),
+                dtype=np.float32,
+            ).reshape((-1, n_samples))
+        if genotype_mode == "probabilities":
+            return np.array(
+                hl.or_else(
+                    mt.GP,
+                    hl.array([float("nan"), float("nan"), float("nan")]),
+                ).collect(),
+                dtype=np.float32,
+            ).reshape((-1, n_samples, 3))
+        raise ValueError(f"Unsupported BGEN benchmark genotype mode: {genotype_mode}")
     finally:
         hl.stop()
 
@@ -227,7 +269,8 @@ def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name
         memory_profile,
         genotype_mode=genotype_mode,
         ref_reader_func=read_bgen_bgen,
-        assert_allclose=genotype_mode == "dosage",
-        atol=(1 / 255 + 1e-6) if genotype_mode == "dosage" else 0.0,
-        equal_nan=genotype_mode == "dosage",
+        assert_allclose=genotype_mode in {"dosage", "probabilities"},
+        atol=(1 / 255 + 1e-6) if genotype_mode in {"dosage", "probabilities"} else 0.0,
+        equal_nan=genotype_mode in {"dosage", "probabilities"},
+        comparison_chunk_size=(1024 if genotype_mode in {"dosage", "probabilities"} else None),
     )

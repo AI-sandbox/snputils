@@ -110,6 +110,11 @@ def test_bgen_package_reference_matches_snputils(tmp_path):
         read_bgen_bgen(path, genotype_mode="dosage"),
         atol=1 / 65535 + 1e-6,
     )
+    np.testing.assert_allclose(
+        read_bgen_snputils(path, genotype_mode="probabilities"),
+        read_bgen_bgen(path, genotype_mode="probabilities"),
+        atol=1 / 65535 + 1e-6,
+    )
     np.testing.assert_array_equal(
         read_bgen_snputils(path, genotype_mode="phased"),
         read_bgen_bgen(path, genotype_mode="phased"),

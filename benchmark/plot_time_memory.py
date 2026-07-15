@@ -129,6 +129,7 @@ def _draw_grouped_bars(
     y_cap: float | None = None,
     axis_top: float | None = None,
     show_phased: bool = True,
+    secondary_label: str = 'genotype_mode="phased"',
 ) -> None:
     x = np.arange(len(names))
     width = 0.36 if show_phased else 0.42
@@ -170,7 +171,7 @@ def _draw_grouped_bars(
 
     series = (
         (-width / 2, dosage_values, 'genotype_mode="dosage"', colors["dosage"]),
-        (width / 2, phased_values, 'genotype_mode="phased"', colors["phased"]),
+        (width / 2, phased_values, secondary_label, colors["phased"]),
     ) if show_phased else (
         (0.0, dosage_values, 'genotype_mode="dosage"', colors["dosage"]),
     )
@@ -278,9 +279,14 @@ def plot_time_memory(
             time_dosage,
             time_phased,
             "time",
-            f"{title} time",
+            f"{title} time" + (" (orange: GP)" if fmt == "bgen" else ""),
             axis_top=600 if fmt == "vcf" else None,
             show_phased=fmt != "bed",
+            secondary_label=(
+                'genotype_mode="probabilities"'
+                if fmt == "bgen"
+                else 'genotype_mode="phased"'
+            ),
         )
         _draw_grouped_bars(
             axs[row, 1],
@@ -288,9 +294,14 @@ def plot_time_memory(
             memory_dosage,
             memory_phased,
             "memory",
-            f"{title} peak memory",
+            f"{title} peak memory" + (" (orange: GP)" if fmt == "bgen" else ""),
             y_cap=memory_y_cap,
             show_phased=fmt != "bed",
+            secondary_label=(
+                'genotype_mode="probabilities"'
+                if fmt == "bgen"
+                else 'genotype_mode="phased"'
+            ),
         )
         axs[row, 0].set_ylabel("Time (seconds)")
         axs[row, 1].set_ylabel("Peak memory (GiB)")

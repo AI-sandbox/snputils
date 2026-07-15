@@ -27,8 +27,11 @@ def pytest_addoption(parser):
         "--genotype-mode",
         action="store",
         default="dosage",
-        choices=("dosage", "phased"),
-        help="Whether readers should return genotype dosages or phased allele calls."
+        choices=("dosage", "probabilities", "phased"),
+        help=(
+            "Whether readers should return genotype dosages, genotype probabilities, "
+            "or phased allele calls. Probability output is currently benchmarked for BGEN."
+        ),
     )
 
 
@@ -55,5 +58,8 @@ def reader_name(request):
 
 @pytest.fixture
 def genotype_mode(request):
-    """Fixture selecting dosage or phased genotype output."""
-    return request.config.getoption("--genotype-mode")
+    """Fixture selecting the materialized genotype representation."""
+    mode = request.config.getoption("--genotype-mode")
+    if mode == "probabilities" and request.node.path.name != "read_bgen.py":
+        pytest.skip('genotype_mode="probabilities" is only supported by the BGEN benchmark.')
+    return mode

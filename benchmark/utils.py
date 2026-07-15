@@ -16,6 +16,7 @@ def create_benchmark_test(
     atol=0.0,
     equal_nan=False,
     verify=True,
+    comparison_chunk_size=None,
 ):
     timed_reader = functools.partial(reader_func, file_path, genotype_mode=genotype_mode)
 
@@ -68,13 +69,29 @@ def create_benchmark_test(
                 raise ValueError("ref_reader_func is required when ref_array is None.")
             ref_array = ref_reader_func(file_path, genotype_mode=genotype_mode)
         if assert_allclose:
-            np.testing.assert_allclose(
-                result,
-                ref_array,
-                rtol=rtol,
-                atol=atol,
-                equal_nan=equal_nan,
-                err_msg=f"Output does not match reference for {name}",
-            )
+            if comparison_chunk_size is None:
+                chunks = ((result, ref_array),)
+            else:
+                if result.shape != ref_array.shape:
+                    raise AssertionError(
+                        f"Output shape {result.shape} does not match reference shape "
+                        f"{ref_array.shape} for {name}"
+                    )
+                chunks = (
+                    (
+                        result[start : start + comparison_chunk_size],
+                        ref_array[start : start + comparison_chunk_size],
+                    )
+                    for start in range(0, result.shape[0], comparison_chunk_size)
+                )
+            for result_chunk, reference_chunk in chunks:
+                np.testing.assert_allclose(
+                    result_chunk,
+                    reference_chunk,
+                    rtol=rtol,
+                    atol=atol,
+                    equal_nan=equal_nan,
+                    err_msg=f"Output does not match reference for {name}",
+                )
         else:
             assert np.array_equal(result, ref_array), f"Output does not match reference for {name}"

@@ -67,6 +67,36 @@ def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path):
     np.testing.assert_allclose(fast_dosage, general_dosage, atol=1 / 65535, equal_nan=True)
 
 
+def test_bgen_reader_dosage_mode_returns_metadata_complete_snpobject(tmp_path):
+    path = tmp_path / "dosage_mode.bgen"
+    gp = np.array(
+        [
+            [[1.0, 0.0, 0.0], [0.2, 0.3, 0.5], [0.0, 1.0, 0.0]],
+            [[0.0, 0.0, 1.0], [0.25, 0.5, 0.25], [1.0, 0.0, 0.0]],
+        ],
+        dtype=np.float32,
+    )
+    snpobj = SNPObject(
+        calldata_gp=gp,
+        samples=np.array(["s1", "s2", "s3"], dtype=object),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2"], dtype=object),
+        variants_pos=np.array([10, 20]),
+    )
+
+    BGENWriter(snpobj, path).write(phased=False, bit_depth=16)
+    observed = BGENReader(path).read(genotype_mode="dosage")
+
+    expected = gp[:, :, 1] + 2 * gp[:, :, 2]
+    np.testing.assert_allclose(observed.genotypes, expected, atol=1 / 65535)
+    np.testing.assert_array_equal(observed.samples, snpobj.samples)
+    np.testing.assert_array_equal(observed.variants_id, snpobj.variants_id)
+    np.testing.assert_array_equal(observed.variants_pos, snpobj.variants_pos)
+    assert observed.calldata_gp is None
+
+
 def test_bgen_writer_rejects_incompatible_phased_width(tmp_path):
     snpobj = SNPObject(
         calldata_gp=np.array([[[1.0, 0.0, 0.0]]], dtype=np.float32),

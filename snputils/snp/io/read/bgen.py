@@ -286,10 +286,11 @@ class BGENReader(SNPBaseReader):
                 ``genotype_mode="phased"``.
             exclude_fields: Fields to exclude from the returned SNPObject.
             genotype_mode: By default, preserve BGEN genotype probabilities in
-                ``calldata_gp``. ``"phased"`` hard-calls each haplotype from phased
-                genotype probabilities and returns a diploid allele array with shape
-                ``(n_variants, n_samples, 2)``. Unphased or non-diploid records are
-                rejected in this mode.
+                ``calldata_gp``. ``"dosage"`` returns expected biallelic alternate-
+                allele counts with shape ``(n_variants, n_samples)``. ``"phased"``
+                hard-calls each haplotype from phased genotype probabilities and
+                returns a diploid allele array with shape ``(n_variants, n_samples, 2)``.
+                Unphased or non-diploid records are rejected in phased mode.
             sample_path: Optional Oxford ``.sample`` file for BGEN files without
                 embedded sample identifiers.
             sample_ids: Sample IDs to read. If None and sample_idxs is None, all samples are read.
@@ -299,13 +300,13 @@ class BGENReader(SNPBaseReader):
 
         Returns:
             SNPObject: A SNPObject with genotype probabilities in ``calldata_gp`` by
-            default, or phased hard calls in ``genotypes`` when requested. Mixed
-            probability widths are padded with NaN columns in probability mode.
+            default, or dosages/phased hard calls in ``genotypes`` when requested.
+            Mixed probability widths are padded with NaN columns in probability mode.
         """
         if genotype_mode is not None:
             genotype_mode = str(genotype_mode).strip().lower()
-            if genotype_mode != "phased":
-                raise ValueError("BGENReader genotype_mode must be 'phased' when provided.")
+            if genotype_mode not in {"dosage", "phased"}:
+                raise ValueError("BGENReader genotype_mode must be 'dosage' or 'phased' when provided.")
 
         if sample_idxs is not None and sample_ids is not None:
             raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
@@ -324,6 +325,8 @@ class BGENReader(SNPBaseReader):
         if genotype_mode == "phased":
             fields_set.discard("GT")
             fields_set.add("GP")
+        elif genotype_mode == "dosage":
+            fields_set.discard("GP")
 
         if genotype_mode is None and self._can_use_native_bulk_gp(
             fields_set=fields_set,
@@ -368,6 +371,14 @@ class BGENReader(SNPBaseReader):
         if genotype_mode == "phased":
             genotypes = self._records_to_phased_hardcalls(records, len(sample_indices))
             calldata_gp = None
+        elif genotype_mode == "dosage":
+            genotypes = self.read_dosage(
+                sample_path=sample_path,
+                sample_ids=sample_ids,
+                sample_idxs=sample_idxs,
+                variant_ids=variant_ids,
+                variant_idxs=variant_idxs,
+            )
         return SNPObject(
             genotypes=genotypes,
             calldata_gp=calldata_gp,

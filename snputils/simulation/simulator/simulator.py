@@ -524,7 +524,7 @@ class OnlineSimulator:
             if batch_labels_continuous is not None:
                 batch_labels_continuous = batch_labels_continuous.to(device)
 
-        B, D = batch_snps.shape 
+        B, D = batch_snps.shape
         split_points = self._draw_split_points(D, num_generation_max, num_generations)
 
         for sp in split_points:
@@ -552,7 +552,7 @@ class OnlineSimulator:
             return np.empty(0, dtype=np.int64)
 
         if self.rate_per_snp is not None:
-            switch = np.random.binomial(G, self.rate_per_snp) % 2
+            switch = np.random.poisson(G * self.rate_per_snp) % 2
             split_points = np.flatnonzero(switch)
         else:
             if n_snps <= 1:

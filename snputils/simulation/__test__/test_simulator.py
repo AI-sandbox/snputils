@@ -10,12 +10,12 @@ from snputils.simulation.simulator import OnlineSimulator
 
 def test_map_breakpoints_use_poisson_crossover_counts(monkeypatch):
     simulator = OnlineSimulator.__new__(OnlineSimulator)
-    simulator.rate_per_snp = np.array([0.001, 0.002, 0.003, 0.004])
+    simulator.rate_per_snp = np.array([0.001, 0.002, 0.003])
     observed = {}
 
     def poisson(lam):
         observed["lam"] = lam
-        return np.array([0, 1, 2, 3])
+        return np.array([1, 2, 3])
 
     monkeypatch.setattr(np.random, "poisson", poisson)
 

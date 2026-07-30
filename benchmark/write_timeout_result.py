@@ -72,7 +72,11 @@ def main() -> None:
     parser.add_argument("--format", dest="benchmark_format", required=True)
     parser.add_argument("--reader", required=True)
     parser.add_argument("--path", required=True)
-    parser.add_argument("--genotype-mode", default="dosage", choices=("dosage", "phased"))
+    parser.add_argument(
+        "--genotype-mode",
+        default="dosage",
+        choices=("dosage", "probabilities", "phased"),
+    )
     parser.add_argument("--timeout-seconds", type=float, required=True)
     args = parser.parse_args()
 

@@ -5270,21 +5270,18 @@ class SNPObject:
         Correct flipped variants between between `self` and a reference `snpobj`, where reference (`variants_ref`)
         and alternate (`variants_alt`) alleles are swapped.
 
-        Flip Detection Based on `check_complement`:
+        If `check_complement=False`, only direct allele swaps are considered:
+        `self.variants_ref == snpobj.variants_alt` and
+        `self.variants_alt == snpobj.variants_ref`.
 
-        - If `check_complement=False`, only direct allele swaps are considered:
-            1. Direct Swap: `self.variants_ref == snpobj.variants_alt` and `self.variants_alt == snpobj.variants_ref`.
+        If `check_complement=True`, a swap is accepted when either both original
+        alleles or both complemented alleles match the swapped reference pair.
+        Partial complements, strand-ambiguous orientations, and variants where
+        `self.variants_ref == self.variants_alt` are not changed.
 
-        - If `check_complement=True`, a swap is accepted when either both original
-          alleles or both complemented alleles match the swapped reference pair.
-          Partial complements and strand-ambiguous orientations are not changed.
-
-        Note: Variants where `self.variants_ref == self.variants_alt` are ignored as they are ambiguous.
-
-        Correction Process:
-        - Swaps `variants_ref` and `variants_alt` alleles in `self` to align with `snpobj`.
-        - Flips called 2D diploid dosages as `2 - dosage` and called 3D allele indexes as
-          `1 - allele`, while preserving missing values.
+        The correction swaps `variants_ref` and `variants_alt` to align with
+        `snpobj`. It flips called 2D diploid dosages as `2 - dosage` and called 3D
+        allele indexes as `1 - allele`, while preserving missing values.
 
         Args:
             snpobj (SNPObject):

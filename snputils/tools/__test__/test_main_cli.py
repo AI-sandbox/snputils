@@ -9,6 +9,8 @@ import pytest
 
 from snputils.ancestry.io.local.read.__test__.fixtures import make_synthetic_dataset, write_msp
 from snputils.simulation._validation import validate_phased_simulation_input
+from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.write.bgen import BGENWriter
 from snputils.tools.cli import main
 
 
@@ -22,6 +24,30 @@ def _write_tiny_vcf(path: Path) -> None:
         "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t0|0\t0|1\n",
         encoding="utf-8",
     )
+
+
+def _write_tiny_bgen(path: Path) -> None:
+    dosages = np.array(
+        [
+            [0, 1, 2, 1],
+            [2, 1, 0, 1],
+            [0, 0, 1, 2],
+        ],
+        dtype=np.int8,
+    )
+    gp = np.eye(3, dtype=np.float32)[dosages]
+    BGENWriter(
+        SNPObject(
+            calldata_gp=gp,
+            samples=np.array(["s0", "s1", "s2", "s3"], dtype=object),
+            variants_ref=np.array(["A", "C", "G"], dtype=object),
+            variants_alt=np.array(["G", "T", "A"], dtype=object),
+            variants_chrom=np.array(["1", "1", "1"], dtype=object),
+            variants_id=np.array(["rs1", "rs2", "rs3"], dtype=object),
+            variants_pos=np.array([100, 200, 300]),
+        ),
+        path,
+    ).write(phased=False)
 
 
 def _write_gwas_vcf(path: Path, sample_ids) -> None:
@@ -177,6 +203,40 @@ def test_main_pca_sklearn_smoke_with_pgen_auto_reader(
     components = np.load(npy_path)
     assert components.ndim == 2
     assert components.shape[1] == 2
+
+
+def test_main_pca_sklearn_smoke_with_bgen_default_dosage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    matplotlib.use("Agg", force=True)
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+
+    bgen_path = tmp_path / "tiny.bgen"
+    fig_path = tmp_path / "pca_bgen.png"
+    npy_path = tmp_path / "components_bgen.npy"
+    _write_tiny_bgen(bgen_path)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "snputils",
+            "pca",
+            "--snp-path",
+            str(bgen_path),
+            "--plot",
+            str(fig_path),
+            "--components",
+            str(npy_path),
+            "--backend",
+            "sklearn",
+        ],
+    )
+
+    assert main() == 0
+    assert fig_path.exists()
+    assert npy_path.exists()
+    assert np.load(npy_path).shape == (4, 2)
 
 
 def test_main_admixture_map_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

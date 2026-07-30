@@ -1,6 +1,8 @@
 # Datasets
 
-Helpers for discovering bundled example datasets and generating synthetic data for tests, tutorials, and quick experiments. Synthetic builders return fully populated objects matching the shapes described in {doc}`../user_guide/data-model`.
+Helpers for discovering registered downloadable datasets and generating synthetic data for tests, tutorials, and quick experiments. Synthetic builders return fully populated objects matching the shapes described in {doc}`../user_guide/data-model`.
+
+{func}`snputils.load_dataset` downloads and caches the selected remote resources on demand.
 
 ## Example Datasets
 
@@ -11,6 +13,10 @@ Byrska-Bishop et al., *Cell* 2022, "High-coverage whole-genome sequencing of the
 expanded 1000 Genomes Project cohort including 602 trios". Because these VCFs are
 large, `load_dataset("1kgp", resource="high_coverage_2022")` defaults to chromosome 1;
 pass `chromosomes=` explicitly to load additional chromosomes.
+
+All 1KGP resources are chromosome-scale downloads. Always choose `resource=` and
+`chromosomes=` deliberately. A bare `load_dataset("1kgp")` uses the default resource
+and its full default chromosome set, which can download a very large amount of data.
 
 ```{eval-rst}
 .. autofunction:: snputils.available_datasets_list

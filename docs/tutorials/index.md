@@ -1,6 +1,6 @@
 # Tutorials
 
-End-to-end notebooks for data objects, population structure, ancestry visualization, association testing, and GRG workflows. Examples use synthetic or bundled datasets unless a notebook states otherwise.
+End-to-end notebooks for data objects, population structure, ancestry visualization, association testing, and GRG workflows. Examples use synthetic or registered downloadable datasets unless a notebook states otherwise.
 
 ::::{grid} 1 1 2 2
 :gutter: 2
@@ -72,13 +72,13 @@ Work with genotype representation graph data.
 :maxdepth: 1
 
 snp-object
-pca
+PCA <pca>
 snp-allele-frequency
-f-statistics
-local-ancestry-visualization
+F-statistics <f-statistics>
+Local ancestry visualization <local-ancestry-visualization>
 mdpca
 maasmds
-admixture-mapping
+Admixture mapping <admixture-mapping>
 phenotype-object
 grg
 ```

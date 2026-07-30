@@ -5,8 +5,8 @@ The user guide groups the library by workflow rather than by module path. Each p
 ## Recommended reading order
 
 1. **{doc}`data-model`** — Object shapes, attributes, and filtering before you load real data.
-2. **{doc}`file-io`** — Format dispatch, reader/writer options, and synthetic datasets for experiments.
-3. **{doc}`analysis`** — Dimensionality reduction, allele frequencies, *f*-statistics, GWAS, admixture mapping, simulation, and the CLI.
+2. **{doc}`File I/O <file-io>`** — Format dispatch, reader/writer options, and synthetic datasets for experiments.
+3. **{doc}`Analysis <analysis>`** — Dimensionality reduction, allele frequencies, *f*-statistics, GWAS, admixture mapping, simulation, and the CLI.
 4. **{doc}`visualization`** — Scatter, local ancestry, admixture, Manhattan, and Q–Q plots.
 
 After the quickstart, open the {doc}`../tutorials/index` notebooks for end-to-end examples with saved outputs.
@@ -44,7 +44,7 @@ Embedding scatter plots, chromosome painting, admixture bars, Manhattan, and Q�
 :maxdepth: 1
 
 data-model
-file-io
-analysis
+File I/O <file-io>
+Analysis <analysis>
 visualization
 ```

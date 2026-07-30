@@ -8,6 +8,7 @@ __pycache__/
 *$py.class
 *.lock
 *.txt
+!docs/_extra/robots.txt
 
 # C extensions
 *.so

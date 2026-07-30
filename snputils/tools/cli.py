@@ -610,14 +610,19 @@ def _add_simulate_arguments(parser: argparse.ArgumentParser) -> None:
         "--snp",
         required=True,
         help=(
-            "Path to phased SNP input (VCF, PGEN, or BGEN fileset). "
+            "Path to phased SNP input (VCF, BCF, PGEN, or BGEN fileset). "
             "PLINK1 BED is not supported because it cannot store phase."
         ),
     )
     parser.add_argument("--metadata", required=True, help="TSV/CSV file with at least Sample/IID and Population columns.")
     parser.add_argument("--output-dir", required=True, help="Directory in which to save the simulated batches.")
     parser.add_argument("--output-prefix", default=None, help="Output prefix for cohort mode. Defaults to <output-dir>/simulated when --n-individuals is used.")
-    parser.add_argument("--output-format", default="same", choices=("same", "pgen", "vcf", "vcf.gz", "bgen"), help="Genotype output format for --n-individuals cohort output.")
+    parser.add_argument(
+        "--output-format",
+        default="same",
+        choices=("same", "npz", "pkl", "pgen", "vcf", "vcf.gz", "bcf", "bgen"),
+        help="Output format. 'same' preserves the cohort input format and keeps NPZ as the batch-mode default.",
+    )
     parser.add_argument("--genetic-map", default=None, help="Genetic map table with columns: chrom, pos, cM.")
     parser.add_argument("--chromosome", type=int, default=None, help="If provided, restrict genetic map rows to this chromosome id.")
     parser.add_argument("--window-size", type=int, default=1000, help="#SNPs per window.")

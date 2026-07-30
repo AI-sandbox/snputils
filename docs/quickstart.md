@@ -1,6 +1,27 @@
 # Quickstart
 
-The top-level package exposes the most common readers, data containers, and analysis helpers. A typical workflow loads genotypes, optional ancestry and phenotypes, runs analyses, and plots results:
+Start with a fully self-contained synthetic dataset—no external files or downloads required:
+
+```python
+import snputils as su
+
+snp = su.build_synthetic_snp_dataset(
+    n_samples=30,
+    n_snps=100,
+    seed=42,
+)
+
+af = snp.allele_freq()
+pcs = su.PCA(n_components=2).fit_transform(snp)
+
+print(snp.n_samples, snp.n_snps)
+print(af[:5])
+print(pcs.shape)
+```
+
+## Working with your own files
+
+The top-level package exposes the most common readers, data containers, and analysis helpers. A typical file-backed workflow loads genotypes, optional ancestry and phenotypes, runs analyses, and plots results:
 
 ```python
 import snputils as su

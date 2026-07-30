@@ -27,7 +27,8 @@ The CI workflow runs the test suite on supported Python versions before releases
 ## Building documentation
 
 ```bash
-sphinx-build -b html docs docs/_build/html
+sphinx-build -W --keep-going -b html docs docs/_build/html
+sphinx-build -b linkcheck docs docs/_build/linkcheck
 ```
 
 See {doc}`installation` for details. User-facing docs live in `docs/`; API pages use Sphinx autodoc against the Python sources.

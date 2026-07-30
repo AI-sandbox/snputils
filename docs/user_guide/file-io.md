@@ -1,6 +1,12 @@
-# File I/O
+---
+myst:
+  html_meta:
+    description: Read and write VCF, BCF, BGEN, PLINK BED, and PLINK PGEN genomic files in Python with snputils.
+---
 
-High-level readers dispatch to the right implementation based on file extension.
+# Read and write VCF, BCF, BGEN, BED, and PGEN files in Python
+
+Use the high-level snputils readers and writers to work with common genomic file formats in Python. Readers dispatch to the right implementation based on file extension.
 
 ```python
 import snputils as su
@@ -180,14 +186,11 @@ sample2 sample2 49 2
 
 In Python you can pass the same data as a {class}`~snputils.CovariateObject` instead of a path.
 
-## Datasets
+## Dataset registry and synthetic data
 
-Built-in datasets and synthetic data builders for quick experimentation:
+Synthetic data builders provide fully populated objects for quick experimentation without external files or downloads:
 
 ```python
-su.available_datasets_list()                    # list bundled datasets
-ds = su.load_dataset("1kgp")                    # returns a SNPObject
-
 snpobj   = su.build_synthetic_snp_dataset()
 laiobj   = su.build_synthetic_chromosome_painting_dataset()
 admobj   = su.build_synthetic_admixture_dataset()
@@ -196,3 +199,5 @@ grg      = su.build_synthetic_grg()
 mdpca_ds = su.build_synthetic_mdpca_dataset()
 maas_ds  = su.build_synthetic_maasmds_dataset()
 ```
+
+`su.available_datasets_list()` lists registered downloadable datasets. Their files are fetched from remote sources and cached on demand; they are not included in the `snputils` package. The registered 1KGP resources are large, so choose `resource=` and `chromosomes=` explicitly when calling `su.load_dataset("1kgp", ...)`. See {doc}`../api/datasets` for details.

@@ -1,4 +1,12 @@
-# Analysis
+---
+myst:
+  html_meta:
+    description: Run PCA, calculate allele frequencies and f-statistics, perform GWAS and admixture mapping, and simulate genomic data in Python with snputils.
+---
+
+# Population-genetics analysis in Python
+
+Use snputils for population-genetics workflows including dimensionality reduction, allele frequencies, f-statistics, association analysis, simulation, and command-line execution.
 
 ## Dimensionality Reduction
 

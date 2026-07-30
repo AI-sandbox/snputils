@@ -169,7 +169,8 @@ def load_dataset(
         maf: Optional minor allele frequency threshold. In streaming reads, this is applied before
             ``max_variants`` truncation.
         require_biallelic: When ``max_variants`` is set and source files are streamed, keep only variants with
-            exactly one REF allele and one ALT allele.
+            exactly one REF allele and one ALT allele. With the streaming default ``genotype_mode="dosage"``,
+            multiallelic sites are filtered before dosage conversion.
         require_complete: When ``max_variants`` is set and source files are streamed, keep only variants with no
             missing genotype calls across the selected samples.
         require_variable_genotypes: When ``max_variants`` is set and source files are streamed, keep only variants that
@@ -369,7 +370,12 @@ def _read_snp_subset(
     chunks: list[SNPObject] = []
     n_variants = 0
     reader = SNPReader(source)
-    iter_kwargs = {"genotype_mode": genotype_mode, "chunk_size": 50_000}
+    stream_mode = genotype_mode
+    convert_to_dosage = False
+    if genotype_mode == "dosage" and (require_biallelic or snv_only):
+        stream_mode = "phased"
+        convert_to_dosage = True
+    iter_kwargs = {"genotype_mode": stream_mode, "chunk_size": 50_000}
     if selected is not None:
         iter_kwargs["sample_ids"] = np.asarray(selected, dtype=object)
     if selected_variants is not None:
@@ -387,6 +393,8 @@ def _read_snp_subset(
             chunk = chunk.filter_maf(maf=maf)
         if chunk.n_snps == 0:
             continue
+        if convert_to_dosage:
+            chunk = chunk.to_dosage()
         remaining = max_variants - n_variants
         if chunk.n_snps > remaining:
             chunk = chunk.filter_variants(indexes=np.arange(remaining), include=True)

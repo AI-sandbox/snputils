@@ -28,7 +28,7 @@ def add_pca_arguments(parser: argparse.ArgumentParser) -> None:
         dest="snp_path",
         required=True,
         type=str,
-        help="Path to genotype input (VCF, BED, or PGEN fileset).",
+        help="Path to genotype input (VCF, BCF, BGEN, BED, or PGEN fileset).",
     )
     parser.add_argument(
         "--plot",

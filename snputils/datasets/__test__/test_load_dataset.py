@@ -54,6 +54,51 @@ def _maf_chunk() -> SNPObject:
     )
 
 
+def test_load_dataset_streaming_dosage_with_require_biallelic_skips_multiallelic(tmp_path):
+    """Dosage parsing rejects multiallelic sites; require_biallelic must filter first."""
+    load_dataset_module = importlib.import_module("snputils.datasets.load_dataset")
+    vcf_path = tmp_path / "mixed.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "1\t100\trs_multi\tA\tG,T\t.\tPASS\t.\tGT\t0|1\t1|2\n"
+        "1\t200\trs_bi\tC\tT\t.\tPASS\t.\tGT\t0|1\t1|1\n"
+        "1\t300\trs_indel\tA\tAT\t.\tPASS\t.\tGT\t0|0\t0|1\n"
+    )
+
+    snpobj = load_dataset_module.load_dataset(
+        "1kgp",
+        genotype_sources=[vcf_path],
+        download_genotypes=False,
+        max_variants=2,
+        require_biallelic=True,
+        verbose=False,
+    )
+
+    assert snpobj.variants_id.tolist() == ["rs_bi", "rs_indel"]
+    assert snpobj.is_dosage is True
+    np.testing.assert_array_equal(snpobj.genotypes, np.array([[1, 2], [0, 1]], dtype=np.int8))
+
+
+def test_load_dataset_streaming_dosage_without_biallelic_filter_still_rejects_multiallelic(tmp_path):
+    load_dataset_module = importlib.import_module("snputils.datasets.load_dataset")
+    vcf_path = tmp_path / "multi.vcf"
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+        "1\t100\trs_multi\tA\tG,T\t.\tPASS\t.\tGT\t0|1\n"
+    )
+
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        load_dataset_module.load_dataset(
+            "1kgp",
+            genotype_sources=[vcf_path],
+            download_genotypes=False,
+            max_variants=1,
+            verbose=False,
+        )
+
+
 def test_load_dataset_streaming_honors_variant_ids_with_max_variants(tmp_path, monkeypatch):
     load_dataset_module = importlib.import_module("snputils.datasets.load_dataset")
 

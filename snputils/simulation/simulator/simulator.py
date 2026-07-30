@@ -388,7 +388,7 @@ class OnlineSimulator:
         if self.genetic_map is not None:
             cm_interp = np.interp(self.snp_data.variants_pos, self.genetic_map['pos'], self.genetic_map['cM'])
             self.cm_per_snp = cm_interp
-            self.rate_per_snp = np.gradient(cm_interp/100.0)
+            self.rate_per_snp = np.diff(cm_interp/100.0)
             log.info(f"rate/snp shape = {self.rate_per_snp.shape}")
         else:
             self.cm_per_snp = getattr(self.snp_data, "variants_cm", None)
@@ -524,7 +524,7 @@ class OnlineSimulator:
             if batch_labels_continuous is not None:
                 batch_labels_continuous = batch_labels_continuous.to(device)
 
-        B, D = batch_snps.shape 
+        B, D = batch_snps.shape
         split_points = self._draw_split_points(D, num_generation_max, num_generations)
 
         for sp in split_points:
@@ -552,8 +552,8 @@ class OnlineSimulator:
             return np.empty(0, dtype=np.int64)
 
         if self.rate_per_snp is not None:
-            switch = np.random.binomial(G, self.rate_per_snp) % 2
-            split_points = np.flatnonzero(switch)
+            switch = np.random.poisson(G * self.rate_per_snp) % 2
+            split_points = np.flatnonzero(switch) + 1
         else:
             if n_snps <= 1:
                 return np.empty(0, dtype=np.int64)

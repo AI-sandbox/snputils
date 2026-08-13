@@ -80,6 +80,16 @@ Basic installation using pip:
 pip install snputils
 ```
 
+### Bioconda
+
+```bash
+conda install -c conda-forge -c bioconda snputils
+
+# or
+
+pixi add bioconda::snputils
+```
+
 Optionally, for PyTorch-backed features, install with the `[torch]` extra:
 ```bash
 pip install 'snputils[torch]'

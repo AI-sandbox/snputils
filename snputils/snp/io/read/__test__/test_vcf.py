@@ -202,6 +202,46 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
     np.testing.assert_array_equal(snpobj.genotypes, expected)
     np.testing.assert_array_equal(snpobj.samples, np.array(["HG00096", "HG00097"]))
 
+    serial_dosage = VCFReader(vcf_path).read(
+        fields=[],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+    )
+    parallel_dosage = VCFReader(vcf_path).read(
+        fields=["POS"],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_dosage.genotypes, serial_dosage.genotypes)
+    np.testing.assert_array_equal(parallel_dosage.variants_pos, np.array([100, 200], dtype=np.int32))
+    np.testing.assert_array_equal(
+        parallel_dosage.genotypes,
+        np.array([[1, 1], [2, 0]], dtype=np.int8),
+    )
+
+    parallel_phased = VCFReader(vcf_path).read(
+        fields=[],
+        genotype_mode="phased",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_phased.genotypes, snpobj.genotypes)
+
+    unphased_path = tmp_path / "gt_only_unphased.vcf.gz"
+    with gzip.open(unphased_path, "wt") as file:
+        file.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tHG00096\n"
+            "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0/1\n"
+        )
+    with np.testing.assert_raises_regex(ValueError, "unphased VCF genotypes"):
+        VCFReader(unphased_path).read(fields=[], genotype_mode="phased", threads=2)
+
+    with np.testing.assert_raises_regex(ValueError, "at least 1"):
+        VCFReader(vcf_path).read(fields=[], genotype_mode="dosage", threads=0)
+    with np.testing.assert_raises_regex(ValueError, "at most POS metadata"):
+        VCFReader(vcf_path).read(genotype_mode="dosage", threads=2)
+
 
 def test_read_snp_dispatches_zstandard_vcf(tmp_path: Path):
     import zstandard as zstd

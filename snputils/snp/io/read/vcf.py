@@ -4,6 +4,7 @@ from pathlib import Path
 import gzip
 import csv
 import mmap
+import operator
 
 import numpy as np
 import polars as pl
@@ -138,6 +139,19 @@ def _vcf_header_columns(vcf_path: Union[str, pathlib.Path]) -> list[str]:
             stripped = line.rstrip(b"\r\n")
             if stripped.startswith(b"#CHROM") or stripped.startswith(b"CHROM"):
                 return [value.decode("utf-8") for value in stripped.split(b"\t")]
+    raise ValueError("Could not find VCF header line. Expected a line starting with 'CHROM' or '#CHROM'.")
+
+
+def _vcf_body_offset(data: Union[bytes, bytearray]) -> int:
+    offset = 0
+    while offset < len(data):
+        line_end = data.find(b"\n", offset)
+        if line_end < 0:
+            line_end = len(data)
+        content_end = line_end - 1 if line_end > offset and data[line_end - 1] == ord("\r") else line_end
+        if data[offset:content_end].startswith((b"#CHROM", b"CHROM")):
+            return min(len(data), line_end + 1)
+        offset = line_end + 1
     raise ValueError("Could not find VCF header line. Expected a line starting with 'CHROM' or '#CHROM'.")
 
 
@@ -813,6 +827,52 @@ class VCFReader(SNPBaseReader):
             variants_pos=arrays.get("POS", np.array([])),
             variants_qual=variants_qual,
             variants_info=arrays.get("INFO", np.array([])),
+        )
+
+    def _read_parallel_gt_only(
+        self,
+        *,
+        names: list[str],
+        field_columns: list[str],
+        sample_columns: list[str],
+        sample_idxs: np.ndarray,
+        return_dosage: bool,
+        threads: int,
+    ) -> SNPObject:
+        from snputils.snp.io.read import _vcf
+        from snputils.snp.io.read.bcf import _read_bgzf_parallel
+
+        n_samples_total = len(names) - 9
+        if n_samples_total < 1:
+            raise ValueError("Multithreaded VCF decoding requires at least one sample.")
+
+        data = _read_bgzf_parallel(self._filename, threads)
+        body_offset = _vcf_body_offset(data)
+        all_samples = (
+            len(sample_idxs) == n_samples_total
+            and np.array_equal(sample_idxs, np.arange(n_samples_total, dtype=sample_idxs.dtype))
+        )
+        sample_arg = None if all_samples else sample_idxs.tolist()
+        gt_buffer, pos_buffer, n_records = _vcf.decode_gt(
+            data,
+            body_offset,
+            n_samples_total,
+            sample_arg,
+            return_dosage,
+            threads,
+        )
+        genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
+        if return_dosage:
+            genotypes = genotypes.reshape(n_records, len(sample_idxs))
+        else:
+            genotypes = genotypes.reshape(n_records, len(sample_idxs), 2)
+        arrays = {}
+        if "POS" in field_columns:
+            arrays["POS"] = np.frombuffer(pos_buffer, dtype=np.int32)
+        return self._make_snpobject(
+            genotypes=genotypes,
+            sample_columns=sample_columns,
+            arrays=arrays,
         )
 
     def _read_mmap_gt_only(
@@ -1832,6 +1892,7 @@ class VCFReader(SNPBaseReader):
         genotype_mode: GenotypeMode = "auto",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
+        threads: int = 1,
     ) -> SNPObject:
         """
         Read a VCF file into an :class:`~snputils.snp.genobj.snpobj.SNPObject`.
@@ -1875,6 +1936,10 @@ class VCFReader(SNPBaseReader):
                 detected from the VCF header. Tab-delimited files use optimized
                 byte parsers when possible; other separators use the pandas
                 chunked parser.
+            threads: Number of BGZF decompression and native GT decoder threads.
+                Values above 1 currently require an unfiltered explicit dosage
+                or phased read with at most ``POS`` variant metadata. Dosage additionally requires
+                ``chromosome_ploidy="autosomal"``. The default is 1.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant
@@ -1882,7 +1947,18 @@ class VCFReader(SNPBaseReader):
         """
         genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("VCFReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("VCFReader threads must be at least 1.")
         if genotype_mode == "auto":
+            if threads != 1:
+                raise ValueError(
+                    "Multithreaded VCF reading requires an explicit genotype_mode "
+                    "of 'dosage' or 'phased'."
+                )
             try:
                 return self.read(
                     fields=fields,
@@ -1892,6 +1968,7 @@ class VCFReader(SNPBaseReader):
                     genotype_mode="phased",
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
+                    threads=threads,
                 )
             except ValueError as exc:
                 if _UNPHASED_VCF_PHASED_ERROR not in str(exc):
@@ -1904,6 +1981,7 @@ class VCFReader(SNPBaseReader):
                     genotype_mode="dosage",
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
+                    threads=threads,
                 )
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
@@ -1919,6 +1997,28 @@ class VCFReader(SNPBaseReader):
             exclude_fields,
             samples,
         )
+
+        if threads != 1:
+            if (
+                any(field != "POS" for field in field_columns)
+                or region_filter is not None
+                or (return_dosage and chromosome_ploidy_mode != "autosomal")
+                or detected_separator != "\t"
+                or Path(self._filename).suffixes[-2:] != [".vcf", ".gz"]
+            ):
+                raise ValueError(
+                    "Multithreaded VCF reading currently requires an unfiltered tab-delimited "
+                    ".vcf.gz explicit dosage or phased read with at most POS metadata; dosage additionally "
+                    "requires chromosome_ploidy='autosomal'."
+                )
+            return self._read_parallel_gt_only(
+                names=names,
+                field_columns=field_columns,
+                sample_columns=sample_columns,
+                sample_idxs=sample_idxs,
+                return_dosage=return_dosage,
+                threads=threads,
+            )
 
         if detected_separator != "\t":
             return self._read_pandas_chunks(

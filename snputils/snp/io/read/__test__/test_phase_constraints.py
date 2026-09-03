@@ -151,6 +151,64 @@ def test_pgen_dosage_preserves_negative_missing_sentinel(tmp_path: Path):
     np.testing.assert_array_equal(observed.genotypes[1, 1], genotypes[1, 1])
 
 
+def test_pgen_parallel_dosage_matches_serial(tmp_path: Path):
+    prefix = tmp_path / "parallel"
+    genotypes = np.array(
+        [
+            [0, 1],
+            [2, -1],
+            [1, 2],
+            [-1, 0],
+        ],
+        dtype=np.int8,
+    )
+    snpobj = SNPObject(
+        genotypes=genotypes,
+        samples=np.array(["s1", "s2"], dtype=object),
+        variants_ref=np.array(["A", "C", "G", "T"], dtype=object),
+        variants_alt=np.array(["G", "T", "A", "C"], dtype=object),
+        variants_chrom=np.array(["1", "1", "1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2", "rs3", "rs4"], dtype=object),
+        variants_pos=np.array([100, 200, 300, 400]),
+    )
+    PGENWriter(snpobj, str(prefix)).write()
+
+    serial = PGENReader(prefix).read(
+        fields=["GT"],
+        genotype_mode="dosage",
+        threads=1,
+    )
+    parallel = PGENReader(prefix).read(
+        fields=["GT"],
+        genotype_mode="dosage",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel.genotypes, serial.genotypes)
+    np.testing.assert_array_equal(
+        parallel.genotypes,
+        np.where(genotypes < 0, -9, genotypes).astype(np.int8),
+    )
+
+    filtered_serial = PGENReader(prefix).read(
+        fields=["GT"],
+        variant_idxs=np.array([3, 0, 2], dtype=np.uint32),
+        genotype_mode="dosage",
+        threads=1,
+    )
+    filtered_parallel = PGENReader(prefix).read(
+        fields=["GT"],
+        variant_idxs=np.array([3, 0, 2], dtype=np.uint32),
+        genotype_mode="dosage",
+        threads=2,
+    )
+    np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
+
+    with pytest.raises(ValueError, match="threads must be at least 1"):
+        PGENReader(prefix).read(fields=["GT"], genotype_mode="dosage", threads=0)
+    with pytest.raises(ValueError, match="explicit genotype_mode"):
+        PGENReader(prefix).read(fields=["GT"], genotype_mode="auto", threads=2)
+
+
 def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     prefix = tmp_path / "phased"
     genotypes = np.array(
@@ -163,8 +221,28 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     snpobj = _toy_snpobj(genotypes)
     PGENWriter(snpobj, str(prefix)).write()
 
-    observed = PGENReader(prefix).read()
+    observed = PGENReader(prefix).read(genotype_mode="phased", threads=1)
+    parallel = PGENReader(prefix).read(
+        fields=["GT"],
+        genotype_mode="phased",
+        threads=2,
+    )
     np.testing.assert_array_equal(observed.genotypes, genotypes)
+    np.testing.assert_array_equal(parallel.genotypes, observed.genotypes)
+
+    filtered_serial = PGENReader(prefix).read(
+        fields=["GT"],
+        variant_idxs=np.array([1, 0], dtype=np.uint32),
+        genotype_mode="phased",
+        threads=1,
+    )
+    filtered_parallel = PGENReader(prefix).read(
+        fields=["GT"],
+        variant_idxs=np.array([1, 0], dtype=np.uint32),
+        genotype_mode="phased",
+        threads=2,
+    )
+    np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
 
 
 def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(tmp_path: Path):

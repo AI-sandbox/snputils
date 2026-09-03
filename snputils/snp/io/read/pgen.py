@@ -1,4 +1,6 @@
 import logging
+import operator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterator, List, Optional
 import os
 
@@ -18,6 +20,7 @@ from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
     estimate_phased_alleles_peak_bytes,
     read_phased_alleles,
+    read_phased_alleles_into,
 )
 
 log = logging.getLogger(__name__)
@@ -121,6 +124,117 @@ def _open_pgen_reader(
     )
 
 
+def _read_dosage_parallel(
+    filename_noext: str,
+    *,
+    raw_sample_ct: Optional[int],
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    variant_idxs: np.ndarray,
+    num_variants: int,
+    num_samples: int,
+    threads: int,
+) -> np.ndarray:
+    """Decode ordered biallelic hardcalls with independent pgenlib readers."""
+    genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+    if num_variants == 0 or num_samples == 0:
+        return genotypes
+
+    worker_count = min(threads, num_variants)
+    output_boundaries = np.linspace(
+        0,
+        num_variants,
+        worker_count + 1,
+        dtype=np.int64,
+    )
+
+    def read_partition(worker_idx: int) -> None:
+        output_start = int(output_boundaries[worker_idx])
+        output_stop = int(output_boundaries[worker_idx + 1])
+        partition_variant_idxs = variant_idxs[output_start:output_stop]
+        partition_output = genotypes[output_start:output_stop]
+        reader, contains_multiallelic = _open_pgen_reader(
+            filename_noext,
+            raw_sample_ct=raw_sample_ct,
+            variant_ct=variant_ct,
+            sample_subset=sample_subset,
+            genotype_mode="dosage",
+        )
+        try:
+            if contains_multiallelic:
+                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+            if (
+                int(partition_variant_idxs[-1])
+                - int(partition_variant_idxs[0])
+                + 1
+                == partition_variant_idxs.size
+                and np.all(np.diff(partition_variant_idxs) == 1)
+            ):
+                reader.read_range(
+                    int(partition_variant_idxs[0]),
+                    int(partition_variant_idxs[-1]) + 1,
+                    partition_output,
+                )
+            else:
+                reader.read_list(partition_variant_idxs, partition_output)
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        list(executor.map(read_partition, range(worker_count)))
+    return genotypes
+
+
+def _read_phased_parallel(
+    filename_noext: str,
+    *,
+    raw_sample_ct: Optional[int],
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    variant_idxs: np.ndarray,
+    num_variants: int,
+    num_samples: int,
+    threads: int,
+) -> np.ndarray:
+    """Decode ordered phased alleles with independent pgenlib readers."""
+    genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
+    if num_variants == 0 or num_samples == 0:
+        return genotypes
+
+    worker_count = min(threads, num_variants)
+    output_boundaries = np.linspace(
+        0,
+        num_variants,
+        worker_count + 1,
+        dtype=np.int64,
+    )
+
+    def read_partition(worker_idx: int) -> None:
+        output_start = int(output_boundaries[worker_idx])
+        output_stop = int(output_boundaries[worker_idx + 1])
+        partition_variant_idxs = variant_idxs[output_start:output_stop]
+        partition_output = genotypes[output_start:output_stop]
+        reader, _ = _open_pgen_reader(
+            filename_noext,
+            raw_sample_ct=raw_sample_ct,
+            variant_ct=variant_ct,
+            sample_subset=sample_subset,
+            genotype_mode="phased",
+        )
+        try:
+            read_phased_alleles_into(
+                reader,
+                partition_variant_idxs,
+                partition_output,
+            )
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        list(executor.map(read_partition, range(worker_count)))
+    return genotypes
+
+
 @SNPBaseReader.register
 class PGENReader(SNPBaseReader):
     def read(
@@ -134,6 +248,7 @@ class PGENReader(SNPBaseReader):
         genotype_mode: GenotypeMode = "auto",
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
+        threads: int = 1,
     ) -> SNPObject:
         """
         Read a pgen fileset (pgen, psam, pvar) into a SNPObject.
@@ -161,6 +276,9 @@ class PGENReader(SNPBaseReader):
                 preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
+            threads: Number of independent native pgenlib decoder threads. Values
+                above one are supported for explicit ``genotype_mode="dosage"``
+                and ``genotype_mode="phased"`` reads.
 
         Returns:
             **SNPObject**: 
@@ -174,6 +292,17 @@ class PGENReader(SNPBaseReader):
         ), "Only one of variant_idxs and variant_ids can be specified"
         genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("PGENReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("PGENReader threads must be at least 1.")
+        if threads != 1 and genotype_mode == "auto":
+            raise ValueError(
+                "PGENReader threads require an explicit genotype_mode of "
+                "'dosage' or 'phased'."
+            )
 
         if isinstance(fields, str):
             fields = [fields]
@@ -392,7 +521,11 @@ class PGENReader(SNPBaseReader):
                 if not effective_return_dosage:
                     required_ram = (
                         (num_samples + num_variants) * 4
-                        + estimate_phased_alleles_peak_bytes(num_variants, num_samples)
+                        + estimate_phased_alleles_peak_bytes(
+                            num_variants,
+                            num_samples,
+                            threads=threads,
+                        )
                     )
                 else:
                     required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
@@ -405,15 +538,39 @@ class PGENReader(SNPBaseReader):
                 log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
                 if not effective_return_dosage:
-                    genotypes = read_phased_alleles(
-                        pgen_reader,
-                        variant_idxs,
-                        num_variants,
-                        num_samples,
-                    )
+                    if threads == 1:
+                        genotypes = read_phased_alleles(
+                            pgen_reader,
+                            variant_idxs,
+                            num_variants,
+                            num_samples,
+                        )
+                    else:
+                        genotypes = _read_phased_parallel(
+                            filename_noext,
+                            raw_sample_ct=file_num_samples,
+                            variant_ct=file_num_variants,
+                            sample_subset=sample_idxs,
+                            variant_idxs=variant_idxs,
+                            num_variants=num_variants,
+                            num_samples=num_samples,
+                            threads=threads,
+                        )
                 else:
-                    genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
-                    pgen_reader.read_list(variant_idxs, genotypes)
+                    if threads == 1:
+                        genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+                        pgen_reader.read_list(variant_idxs, genotypes)
+                    else:
+                        genotypes = _read_dosage_parallel(
+                            filename_noext,
+                            raw_sample_ct=file_num_samples,
+                            variant_ct=file_num_variants,
+                            sample_subset=sample_idxs,
+                            variant_idxs=variant_idxs,
+                            num_variants=num_variants,
+                            num_samples=num_samples,
+                            threads=threads,
+                        )
                     if detect_non_diploid and non_diploid_mask is not None:
                         if hardcall_phase_present:
                             non_diploid_output_rows = np.flatnonzero(non_diploid_mask)

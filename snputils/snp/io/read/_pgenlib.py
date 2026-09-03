@@ -29,6 +29,7 @@ def estimate_phased_alleles_peak_bytes(
     num_samples: int,
     *,
     require_phase: bool = False,
+    threads: int = 1,
 ) -> int:
     output_bytes = int(num_variants) * int(num_samples) * 2 * np.dtype(np.int8).itemsize
     int32_bytes = _allele_int32_bytes(num_variants, num_samples)
@@ -39,9 +40,18 @@ def estimate_phased_alleles_peak_bytes(
     )
     if int32_bytes <= PHASED_ALLELE_FULL_READ_BYTES:
         return output_bytes + int32_bytes + phase_bytes
-    chunk_bytes = _allele_int32_bytes(_phased_chunk_size(num_variants, num_samples), num_samples)
+
+    worker_count = min(max(int(threads), 1), max(int(num_variants), 1))
+    worker_variants = (int(num_variants) + worker_count - 1) // worker_count
+    worker_int32_bytes = _allele_int32_bytes(worker_variants, num_samples)
+    if worker_int32_bytes <= PHASED_ALLELE_FULL_READ_BYTES:
+        return output_bytes + int32_bytes + phase_bytes
+
+    chunk_size = _phased_chunk_size(worker_variants, num_samples)
+    chunk_bytes = worker_count * _allele_int32_bytes(chunk_size, num_samples)
     chunk_phase_bytes = (
-        _phased_chunk_size(num_variants, num_samples)
+        worker_count
+        * chunk_size
         * int(num_samples)
         * np.dtype(np.bool_).itemsize
         if require_phase
@@ -67,23 +77,72 @@ def read_phased_alleles(
     require_phase: bool = False,
 ) -> np.ndarray:
     """Read diploid alleles into a compact `(variants, samples, 2)` int8 array."""
+    genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
+    return read_phased_alleles_into(
+        pgen_reader,
+        variant_idxs,
+        genotypes,
+        require_phase=require_phase,
+    )
+
+
+def read_phased_alleles_into(
+    pgen_reader,
+    variant_idxs: np.ndarray,
+    genotypes: np.ndarray,
+    *,
+    require_phase: bool = False,
+) -> np.ndarray:
+    """Read diploid alleles directly into a `(variants, samples, 2)` int8 array."""
+    if genotypes.ndim != 3 or genotypes.shape[2] != 2 or genotypes.dtype != np.int8:
+        raise ValueError("Phased PGEN output must have shape (variants, samples, 2) and dtype int8.")
+
+    num_variants, num_samples, _ = genotypes.shape
     if num_variants == 0 or num_samples == 0:
-        return np.empty((num_variants, num_samples, 2), dtype=np.int8)
+        return genotypes
 
     variant_idxs = np.asarray(variant_idxs, dtype=np.uint32).ravel()
+    if variant_idxs.size != num_variants:
+        raise ValueError("The number of PGEN variant indexes must match the output row count.")
     allele_cols = 2 * int(num_samples)
 
     if _allele_int32_bytes(num_variants, num_samples) <= PHASED_ALLELE_FULL_READ_BYTES:
-        genotypes = np.empty((num_variants, allele_cols), dtype=np.int32)
+        allele_buffer = np.empty((num_variants, allele_cols), dtype=np.int32)
         if require_phase:
             phase_present = np.empty((num_variants, num_samples), dtype=np.bool_)
-            pgen_reader.read_alleles_and_phasepresent_list(variant_idxs, genotypes, phase_present)
-            _raise_if_unphased_heterozygote(genotypes.reshape((num_variants, num_samples, 2)), phase_present)
+            if _is_contiguous_variant_chunk(variant_idxs):
+                pgen_reader.read_alleles_and_phasepresent_range(
+                    int(variant_idxs[0]),
+                    int(variant_idxs[-1]) + 1,
+                    allele_buffer,
+                    phase_present,
+                )
+            else:
+                pgen_reader.read_alleles_and_phasepresent_list(
+                    variant_idxs,
+                    allele_buffer,
+                    phase_present,
+                )
+            _raise_if_unphased_heterozygote(
+                allele_buffer.reshape((num_variants, num_samples, 2)),
+                phase_present,
+            )
         else:
-            pgen_reader.read_alleles_list(variant_idxs, genotypes)
-        return genotypes.astype(np.int8).reshape((num_variants, num_samples, 2))
+            if _is_contiguous_variant_chunk(variant_idxs):
+                pgen_reader.read_alleles_range(
+                    int(variant_idxs[0]),
+                    int(variant_idxs[-1]) + 1,
+                    allele_buffer,
+                )
+            else:
+                pgen_reader.read_alleles_list(variant_idxs, allele_buffer)
+        np.copyto(
+            genotypes.reshape(num_variants, allele_cols),
+            allele_buffer,
+            casting="unsafe",
+        )
+        return genotypes
 
-    genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
     chunk_size = _phased_chunk_size(num_variants, num_samples)
     allele_chunk = np.empty((chunk_size, allele_cols), dtype=np.int32)
     phase_chunk = np.empty((chunk_size, num_samples), dtype=np.bool_) if require_phase else None

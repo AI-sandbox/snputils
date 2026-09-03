@@ -59,15 +59,54 @@ def test_bcf_reader_supports_dosage_genotypes(data_path, snpobj_vcf):
 
 
 def test_bcf_reader_gt_only_sample_selection(data_path, snpobj_vcf):
-    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+    reader = BCFReader(data_path + "/bcf/subset.bcf")
+    snpobj = reader.read(
         fields=["GT"],
         sample_idxs=[3, 0],
         genotype_mode="dosage",
     )
+    parallel = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
 
     expected = sum_diploid_genotypes(snpobj_vcf.genotypes[:, [3, 0], :])
     np.testing.assert_array_equal(snpobj.genotypes, expected)
+    np.testing.assert_array_equal(parallel.genotypes, expected)
     assert snpobj.samples is None
+
+    serial_phased = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="phased",
+    )
+    parallel_phased = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="phased",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_phased.genotypes, serial_phased.genotypes)
+    np.testing.assert_array_equal(parallel_phased.genotypes, snpobj_vcf.genotypes[:, [3, 0], :])
+
+    with pytest.raises(ValueError, match="at least 1"):
+        reader.read(fields=["GT"], genotype_mode="dosage", threads=0)
+    parallel_with_metadata = reader.read(
+        fields=["GT", "POS", "IID"],
+        sample_idxs=[3, 0],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_with_metadata.genotypes, expected)
+    np.testing.assert_array_equal(parallel_with_metadata.variants_pos, snpobj_vcf.variants_pos)
+    np.testing.assert_array_equal(
+        parallel_with_metadata.samples,
+        np.array(["HG00100", "HG00096"], dtype=object),
+    )
 
 
 def test_bcf_reader_core_field_subset(data_path, snpobj_vcf):
@@ -147,8 +186,11 @@ def test_c_decode_gt_haploid_dosage_preserves_values():
 
     gt_buffer, n_records = _bcf.decode_gt(data, 0, 0, 3, 1, 1, 3, None, True)
     observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 3)
+    parallel_buffer, parallel_n_records = _bcf.decode_gt(data, 0, 0, 3, 1, 1, 3, None, True, 2)
+    parallel = np.frombuffer(parallel_buffer, dtype=np.int8).reshape(parallel_n_records, 3)
 
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+    np.testing.assert_array_equal(parallel, observed)
 
 
 def test_c_decode_core_haploid_dosage_and_missing_pass_fallback():

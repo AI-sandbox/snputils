@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import operator
 import struct
 import zlib
 from dataclasses import dataclass
@@ -276,6 +277,7 @@ class BGENReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         genotype_mode: Optional[str] = None,
+        threads: int = 1,
     ) -> SNPObject:
         """
         Read a BGEN file into a SNPObject.
@@ -297,6 +299,9 @@ class BGENReader(SNPBaseReader):
             sample_idxs: Sample indices to read. If None and sample_ids is None, all samples are read.
             variant_ids: Variant IDs to read. Matches BGEN varid, rsid, or ``chrom:pos``.
             variant_idxs: Variant indices to read. If None and variant_ids is None, all variants are read.
+            threads: Native decoder threads for unfiltered dosage reads or
+                genotype-probability reads requesting only ``fields=["GP"]``.
+                The default is 1.
 
         Returns:
             SNPObject: A SNPObject with genotype probabilities in ``calldata_gp`` by
@@ -307,6 +312,17 @@ class BGENReader(SNPBaseReader):
             genotype_mode = str(genotype_mode).strip().lower()
             if genotype_mode not in {"dosage", "phased"}:
                 raise ValueError("BGENReader genotype_mode must be 'dosage' or 'phased' when provided.")
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("BGENReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("BGENReader threads must be at least 1.")
+        if threads != 1 and genotype_mode == "phased":
+            raise ValueError(
+                "BGENReader threads are currently supported for dosage and "
+                "full-probability output, not phased hard calls."
+            )
 
         if sample_idxs is not None and sample_ids is not None:
             raise ValueError("Only one of sample_idxs and sample_ids can be specified.")
@@ -328,18 +344,21 @@ class BGENReader(SNPBaseReader):
         elif genotype_mode == "dosage":
             fields_set.discard("GP")
 
-        if genotype_mode is None and self._can_use_native_bulk_gp(
+        native_bulk_gp = genotype_mode is None and self._can_use_native_bulk_gp(
             fields_set=fields_set,
             sample_path=sample_path,
             sample_ids=sample_ids,
             sample_idxs=sample_idxs,
             variant_ids=variant_ids,
             variant_idxs=variant_idxs,
-        ):
+        )
+        if native_bulk_gp:
             try:
-                calldata_gp = self._read_native_bulk_gp()
+                calldata_gp = self._read_native_bulk_gp(threads=threads)
                 return SNPObject(genotypes=None, calldata_gp=calldata_gp)
             except (NotImplementedError, ValueError) as exc:
+                if threads != 1:
+                    raise
                 fallback_messages = (
                     "uniform probability width",
                     "larger than the allocated output width",
@@ -347,6 +366,11 @@ class BGENReader(SNPBaseReader):
                 if isinstance(exc, ValueError) and not any(message in str(exc) for message in fallback_messages):
                     raise
                 log.debug("Falling back to the general BGEN reader.", exc_info=True)
+        elif threads != 1 and genotype_mode is None:
+            raise ValueError(
+                "Multithreaded BGEN probability reading currently requires "
+                "fields=['GP'] with all samples and variants."
+            )
 
         log.info("Reading %s", self.filename)
         with _DirectBGENFile(self.filename, sample_path=sample_path) as bfile:
@@ -378,6 +402,7 @@ class BGENReader(SNPBaseReader):
                 sample_idxs=sample_idxs,
                 variant_ids=variant_ids,
                 variant_idxs=variant_idxs,
+                threads=threads,
             )
         return SNPObject(
             genotypes=genotypes,
@@ -397,14 +422,28 @@ class BGENReader(SNPBaseReader):
         sample_idxs: Optional[Sequence[int]] = None,
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
+        threads: int = 1,
     ) -> np.ndarray:
         """
         Read biallelic BGEN alternate-allele dosages as a ``float32`` array.
 
         The all-samples/all-variants case uses a native streaming decoder that avoids
         materializing genotype probabilities. Filtered reads fall back to the general
-        probability reader and convert from ``calldata_gp``.
+        probability reader and convert from ``calldata_gp``. Set ``threads`` above
+        1 to decode independent variant blocks in parallel for an unfiltered read.
         """
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("BGENReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("BGENReader threads must be at least 1.")
+        filtered = any(
+            value is not None
+            for value in (sample_ids, sample_idxs, variant_ids, variant_idxs)
+        )
+        if threads != 1 and filtered:
+            raise ValueError("Multithreaded BGEN dosage reading currently requires all samples and variants.")
         if (
             _native_bgen is not None
             and sample_ids is None
@@ -413,12 +452,20 @@ class BGENReader(SNPBaseReader):
             and variant_idxs is None
         ):
             try:
-                buffer, n_variants, n_samples = _native_bgen.read_file_dosage(str(self.filename))
+                buffer, n_variants, n_samples = _native_bgen.read_file_dosage(
+                    str(self.filename),
+                    threads,
+                )
                 if isinstance(buffer, np.ndarray):
                     return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples)
                 return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
             except NotImplementedError:
+                if threads != 1:
+                    raise
                 log.debug("Falling back to probability-based BGEN dosage reading.", exc_info=True)
+
+        if threads != 1:
+            raise ImportError("Multithreaded BGEN dosage reading requires the native BGEN extension.")
 
         snpobj = self.read(
             fields=["GP"],
@@ -450,9 +497,12 @@ class BGENReader(SNPBaseReader):
             and variant_idxs is None
         )
 
-    def _read_native_bulk_gp(self) -> np.ndarray:
+    def _read_native_bulk_gp(self, *, threads: int = 1) -> np.ndarray:
         assert _native_bgen is not None
-        buffer, n_variants, n_samples, width = _native_bgen.read_file_probabilities(str(self.filename))
+        buffer, n_variants, n_samples, width = _native_bgen.read_file_probabilities(
+            str(self.filename),
+            threads,
+        )
         if isinstance(buffer, np.ndarray):
             return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples, width)
         return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples, width)

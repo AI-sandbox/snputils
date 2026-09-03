@@ -59,12 +59,25 @@ def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path):
     BGENWriter(snpobj, path).write(compression="zlib", bit_depth=16, phased=False)
     reader = BGENReader(path)
     fast_gp = reader.read(fields=["GP"]).calldata_gp
+    parallel_gp = reader.read(fields=["GP"], threads=2).calldata_gp
     general_gp = reader.read(fields=["GP"], sample_idxs=np.arange(gp.shape[1])).calldata_gp
     fast_dosage = reader.read_dosage()
+    parallel_dosage = reader.read_dosage(threads=2)
+    parallel_object = reader.read(genotype_mode="dosage", threads=2)
     general_dosage = reader.read(fields=["GP"], sample_idxs=np.arange(gp.shape[1])).dosage()
 
     np.testing.assert_allclose(fast_gp, general_gp, atol=1 / 65535, equal_nan=True)
+    np.testing.assert_array_equal(parallel_gp, fast_gp)
     np.testing.assert_allclose(fast_dosage, general_dosage, atol=1 / 65535, equal_nan=True)
+    np.testing.assert_array_equal(parallel_dosage, fast_dosage)
+    np.testing.assert_array_equal(parallel_object.genotypes, fast_dosage)
+
+    with pytest.raises(ValueError, match="at least 1"):
+        reader.read_dosage(threads=0)
+    with pytest.raises(ValueError, match="all samples and variants"):
+        reader.read_dosage(threads=2, variant_idxs=[0])
+    with pytest.raises(ValueError, match=r"fields=\['GP'\]"):
+        reader.read(fields=["GP", "POS"], threads=2)
 
 
 def test_bgen_reader_dosage_mode_returns_metadata_complete_snpobject(tmp_path):

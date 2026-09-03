@@ -82,6 +82,12 @@ include = ["snputils*"]
 [[tool.setuptools.ext-modules]]
 name = "snputils.snp.io.read._bcf"
 sources = ["snputils/snp/io/read/_bcf.c"]
+libraries = ["pthread"]
+
+[[tool.setuptools.ext-modules]]
+name = "snputils.snp.io.read._vcf"
+sources = ["snputils/snp/io/read/_vcf.c"]
+libraries = ["pthread"]
 
 [[tool.setuptools.ext-modules]]
 name = "snputils.snp.io.write._bcf"
@@ -91,7 +97,7 @@ libraries = ["z"]
 [[tool.setuptools.ext-modules]]
 name = "snputils.snp.io._bgen"
 sources = ["snputils/snp/io/_bgen.c"]
-libraries = ["z"]
+libraries = ["z", "pthread"]
 
 [tool.setuptools_scm]
 

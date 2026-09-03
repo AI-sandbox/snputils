@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import gzip
 import logging
+import operator
 import re
 import struct
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -206,13 +208,108 @@ def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
     return value
 
 
-def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
+def _inflate_bgzf_block_range(
+    compressed_data: bytes,
+    blocks: Sequence[tuple[int, int, int, int]],
+    output: bytearray,
+    start: int,
+    stop: int,
+) -> None:
+    output_view = memoryview(output)
+    try:
+        for compressed_start, compressed_stop, output_start, output_size in blocks[start:stop]:
+            chunk = zlib.decompress(compressed_data[compressed_start:compressed_stop], -15)
+            if len(chunk) != output_size:
+                raise ValueError("BGZF block decompressed to the wrong size.")
+            output_view[output_start:output_start + output_size] = chunk
+    finally:
+        output_view.release()
+
+
+def _read_bgzf_parallel(filename: Union[str, bytes], threads: int) -> Union[bytearray, bytes]:
+    with open(filename, "rb") as handle:
+        compressed_data = handle.read()
+
+    blocks: list[tuple[int, int, int, int]] = []
+    file_offset = 0
+    output_offset = 0
+    data_len = len(compressed_data)
+    while file_offset < data_len:
+        if file_offset + 12 > data_len:
+            break
+        header = compressed_data[file_offset:file_offset + 12]
+        if header[:3] != b"\x1f\x8b\x08" or not (header[3] & 4):
+            break
+
+        xlen = int.from_bytes(header[10:12], "little")
+        extra_start = file_offset + 12
+        extra_end = extra_start + xlen
+        if extra_end > data_len:
+            raise EOFError("Unexpected end of BGZF extra header.")
+
+        extra = compressed_data[extra_start:extra_end]
+        extra_offset = 0
+        block_size = None
+        while extra_offset + 4 <= xlen:
+            subfield_len = int.from_bytes(extra[extra_offset + 2:extra_offset + 4], "little")
+            if extra_offset + 4 + subfield_len > xlen:
+                raise ValueError("Malformed BGZF extra header: subfield length extends beyond XLEN.")
+            if extra[extra_offset:extra_offset + 2] == b"BC" and subfield_len == 2:
+                block_size = int.from_bytes(extra[extra_offset + 4:extra_offset + 6], "little") + 1
+                break
+            extra_offset += 4 + subfield_len
+
+        if block_size is None:
+            break
+        if block_size < 12 + xlen + 8:
+            raise ValueError("Malformed BGZF block: block size is too small.")
+        block_end = file_offset + block_size
+        if block_end > data_len:
+            raise EOFError("Unexpected end of BGZF block.")
+
+        compressed_start = extra_end
+        compressed_stop = block_end - 8
+        output_size = int.from_bytes(compressed_data[block_end - 4:block_end], "little")
+        blocks.append((compressed_start, compressed_stop, output_offset, output_size))
+        output_offset += output_size
+        file_offset = block_end
+
+    if file_offset != data_len:
+        with gzip.open(filename, "rb") as handle:
+            return handle.read()
+    if not blocks:
+        return b""
+
+    output = bytearray(output_offset)
+    worker_count = min(threads, len(blocks))
+    boundaries = [len(blocks) * worker // worker_count for worker in range(worker_count + 1)]
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(
+                _inflate_bgzf_block_range,
+                compressed_data,
+                blocks,
+                output,
+                boundaries[worker],
+                boundaries[worker + 1],
+            )
+            for worker in range(worker_count)
+        ]
+        for future in futures:
+            future.result()
+    return output
+
+
+def _read_bgzf_or_gzip(filename: Union[str, bytes], threads: int = 1) -> Union[bytes, bytearray]:
     """Read a BGZF-compressed file, falling back to generic gzip.
 
     BCF files are normally BGZF. Parsing BGZF blocks directly avoids per-member
     overhead in ``gzip.GzipFile`` while keeping the dependency footprint at the
     Python standard library.
     """
+    if threads > 1:
+        return _read_bgzf_parallel(filename, threads)
+
     chunks = []
     with open(filename, "rb") as handle:
         while True:
@@ -259,8 +356,8 @@ def _read_bgzf_or_gzip(filename: Union[str, bytes]) -> bytes:
         return handle.read()
 
 
-def _load_bcf_data(filename: Union[str, bytes]) -> Tuple[bytes, int, _BCFHeader]:
-    data = _read_bgzf_or_gzip(filename)
+def _load_bcf_data(filename: Union[str, bytes], threads: int = 1) -> Tuple[Union[bytes, bytearray], int, _BCFHeader]:
+    data = _read_bgzf_or_gzip(filename, threads=threads)
     if data[:5] != _BCF_MAGIC:
         raise ValueError(f"{filename!r} does not look like a BCF2.2 file.")
     header_len = _U32.unpack_from(data, 5)[0]
@@ -1061,6 +1158,7 @@ class BCFReader(SNPBaseReader):
         region: Optional[str] = None,
         genotype_mode: GenotypeMode = "auto",
         chromosome_ploidy: Optional[str] = None,
+        threads: int = 1,
     ) -> SNPObject:
         """
         Read a BCF file into a SNPObject.
@@ -1091,6 +1189,11 @@ class BCFReader(SNPBaseReader):
                 all selected variants should be treated as ordinary diploid/autosomal; this
                 skips non-diploid chromosome checks and can be faster. The default None/"auto"
                 preserves existing behavior.
+            threads: Number of BGZF decompression and native GT decoder threads.
+                Values above 1 currently require an unfiltered explicit dosage
+                or phased read containing only ``GT`` and optional ``POS``/``IID``
+                metadata. Dosage additionally requires
+                ``chromosome_ploidy="autosomal"``. The default is 1.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant
@@ -1103,7 +1206,18 @@ class BCFReader(SNPBaseReader):
 
         genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("BCFReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("BCFReader threads must be at least 1.")
         if genotype_mode == "auto":
+            if threads != 1:
+                raise ValueError(
+                    "Multithreaded BCF reading requires an explicit genotype_mode "
+                    "of 'dosage' or 'phased'."
+                )
             try:
                 return self.read(
                     fields=fields,
@@ -1115,6 +1229,7 @@ class BCFReader(SNPBaseReader):
                     region=region,
                     genotype_mode="phased",
                     chromosome_ploidy=chromosome_ploidy,
+                    threads=threads,
                 )
             except ValueError as exc:
                 if "Cannot read unphased BCF genotypes" not in str(exc):
@@ -1129,17 +1244,33 @@ class BCFReader(SNPBaseReader):
                     region=region,
                     genotype_mode="dosage",
                     chromosome_ploidy=chromosome_ploidy,
+                    threads=threads,
                 )
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
 
         selected_fields = _normalize_fields(fields, exclude_fields)
         region_filter = _parse_vcf_region(region)
-        data, body_offset, header = _load_bcf_data(str(self.filename))
+        has_filtering = (variant_ids is not None or variant_idxs is not None or region_filter is not None)
+        parallel_fields_supported = (
+            "GT" in selected_fields
+            and set(selected_fields).issubset({"GT", "POS", "IID"})
+        )
+        if threads != 1 and (
+            not parallel_fields_supported
+            or has_filtering
+            or (return_dosage and chromosome_ploidy_mode != "autosomal")
+        ):
+            raise ValueError(
+                "Multithreaded BCF reading currently requires an unfiltered explicit "
+                "dosage or phased read containing only GT and optional POS/IID metadata; "
+                "dosage additionally requires "
+                "chromosome_ploidy='autosomal'."
+            )
+
+        data, body_offset, header = _load_bcf_data(str(self.filename), threads=threads)
         file_samples = np.asarray(header.samples, dtype=object)
         sample_index_array = _resolve_sample_indices(file_samples, sample_ids, sample_idxs)
-
-        has_filtering = (variant_ids is not None or variant_idxs is not None or region_filter is not None)
 
         if has_filtering:
             return self._read_filtered(
@@ -1150,7 +1281,7 @@ class BCFReader(SNPBaseReader):
 
         return self._read_all(
             data, body_offset, header, file_samples, sample_index_array,
-            selected_fields, return_dosage, detect_non_diploid,
+            selected_fields, return_dosage, detect_non_diploid, threads,
         )
 
     def _read_all(
@@ -1163,12 +1294,13 @@ class BCFReader(SNPBaseReader):
         selected_fields: list[str],
         return_dosage: bool,
         detect_non_diploid: bool,
+        threads: int,
     ) -> SNPObject:
         """Optimized bulk read of all records with no variant filtering."""
-        if selected_fields == ["GT"]:
+        if "GT" in selected_fields and set(selected_fields).issubset({"GT", "POS", "IID"}):
             gt_only = self._try_read_gt_only_all(
                 data, body_offset, header, file_samples, sample_index_array, return_dosage,
-                detect_non_diploid,
+                detect_non_diploid, threads, selected_fields,
             )
             if gt_only is not None:
                 return gt_only
@@ -1476,6 +1608,8 @@ class BCFReader(SNPBaseReader):
         sample_index_array: np.ndarray,
         return_dosage: bool,
         detect_non_diploid: bool,
+        threads: int,
+        selected_fields: Sequence[str],
     ) -> Optional[SNPObject]:
         """Fast path for full-file genotype-only reads.
 
@@ -1484,7 +1618,7 @@ class BCFReader(SNPBaseReader):
         individual sections directly.
         """
         if body_offset >= len(data):
-            return self._empty_snpobject(["GT"], file_samples, sample_index_array, return_dosage)
+            return self._empty_snpobject(list(selected_fields), file_samples, sample_index_array, return_dosage)
         if detect_non_diploid and _header_has_non_diploid_contigs(header):
             return None
 
@@ -1503,7 +1637,11 @@ class BCFReader(SNPBaseReader):
                 genotypes = np.empty((n_records, 0), dtype=np.int8)
             else:
                 genotypes = np.empty((n_records, 0, 2), dtype=np.int8)
-            return SNPObject(genotypes=genotypes)
+            return SNPObject(
+                genotypes=genotypes,
+                samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
+                variants_pos=np.empty(0, dtype=np.int64) if "POS" in selected_fields else None,
+            )
 
         first_indiv_offset = body_offset + 8 + first_l_shared
         gt_layout = _probe_gt_layout(data, first_indiv_offset, n_fmt, n_samples, header)
@@ -1529,6 +1667,7 @@ class BCFReader(SNPBaseReader):
                 first_l_indiv,
                 sample_arg,
                 return_dosage,
+                threads,
             )
             if decoded is not None:
                 gt_buffer, n_records = decoded
@@ -1537,7 +1676,17 @@ class BCFReader(SNPBaseReader):
                     genotypes = genotypes.reshape(n_records, len(sample_index_array))
                 else:
                     genotypes = genotypes.reshape(n_records, len(sample_index_array), 2)
-                return SNPObject(genotypes=genotypes)
+                variants_pos = None
+                if "POS" in selected_fields:
+                    record_offsets = _build_record_offsets(data, body_offset)
+                    variants_pos = _extract_fixed_fields(data, record_offsets)[3]
+                    if len(variants_pos) != n_records:
+                        raise ValueError("BCF genotype and position record counts do not match.")
+                return SNPObject(
+                    genotypes=genotypes,
+                    samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
+                    variants_pos=variants_pos,
+                )
 
         indiv_offsets, uniform_indiv = _build_indiv_offsets(data, body_offset)
         n_records = len(indiv_offsets)
@@ -1548,7 +1697,17 @@ class BCFReader(SNPBaseReader):
             data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
             n_samples, n_records, sample_index_array, return_dosage,
         )
-        return SNPObject(genotypes=genotypes)
+        variants_pos = None
+        if "POS" in selected_fields:
+            record_offsets = _build_record_offsets(data, body_offset)
+            variants_pos = _extract_fixed_fields(data, record_offsets)[3]
+            if len(variants_pos) != n_records:
+                raise ValueError("BCF genotype and position record counts do not match.")
+        return SNPObject(
+            genotypes=genotypes,
+            samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
+            variants_pos=variants_pos,
+        )
 
     def _try_read_core_all(
         self,
@@ -1689,7 +1848,7 @@ class BCFReader(SNPBaseReader):
             # No filtering was actually applied - redirect to fast path
             return self._read_all(data, body_offset, header, file_samples,
                                   sample_index_array, selected_fields, return_dosage,
-                                  detect_non_diploid)
+                                  detect_non_diploid, 1)
 
         n_selected_records = len(record_offsets_list)
         n_selected_samples = len(sample_index_array)

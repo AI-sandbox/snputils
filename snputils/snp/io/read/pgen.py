@@ -756,6 +756,7 @@ class PGENReader(SNPBaseReader):
             all selected variants should be treated as ordinary diploid/autosomal; this
             skips non-diploid chromosome checks and can be faster. The default None/"auto"
             preserves existing behavior.
+
         threads: Number of pgenlib decoder threads used for each chunk.
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)

@@ -21,6 +21,7 @@ if snputils.__version__ == "unknown":
 
 for module_name in (
     "snputils.snp.io.read._bcf",
+    "snputils.snp.io.read._vcf",
     "snputils.snp.io.write._bcf",
     "snputils.snp.io._bgen",
 ):

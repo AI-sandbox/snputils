@@ -1632,7 +1632,13 @@ class BCFReader(SNPBaseReader):
                 f"({len(file_samples)})."
             )
         if n_samples == 0 and n_fmt == 0:
-            n_records = _count_records(data, body_offset)
+            variants_pos = None
+            if "POS" in selected_fields:
+                record_offsets = _build_record_offsets(data, body_offset)
+                n_records = len(record_offsets)
+                variants_pos = _extract_fixed_fields(data, record_offsets)[3]
+            else:
+                n_records = _count_records(data, body_offset)
             if return_dosage:
                 genotypes = np.empty((n_records, 0), dtype=np.int8)
             else:
@@ -1640,7 +1646,7 @@ class BCFReader(SNPBaseReader):
             return SNPObject(
                 genotypes=genotypes,
                 samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
-                variants_pos=np.empty(0, dtype=np.int64) if "POS" in selected_fields else None,
+                variants_pos=variants_pos,
             )
 
         first_indiv_offset = body_offset + 8 + first_l_shared

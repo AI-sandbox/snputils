@@ -244,6 +244,24 @@ def test_bcf_writer_roundtrips_sampleless_annotation_only_bcf(tmp_path):
         np.array(["ANN=missense_variant;DB", "AF=0.125"], dtype=object),
     )
 
+    for threads in (1, 2):
+        phased = BCFReader(output_path).read(
+            fields=["GT", "POS"],
+            genotype_mode="phased",
+            threads=threads,
+        )
+        assert phased.genotypes.shape == (2, 0, 2)
+        np.testing.assert_array_equal(phased.variants_pos, np.array([100, 200]))
+
+        dosage = BCFReader(output_path).read(
+            fields=["GT", "POS"],
+            genotype_mode="dosage",
+            chromosome_ploidy="autosomal",
+            threads=threads,
+        )
+        assert dosage.genotypes.shape == (2, 0)
+        np.testing.assert_array_equal(dosage.variants_pos, np.array([100, 200]))
+
 
 def test_bcf_writer_roundtrips_general_info_filter_and_gp(tmp_path):
     output_path = tmp_path / "metadata_gp.bcf"

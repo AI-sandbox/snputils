@@ -20,6 +20,7 @@ from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
     estimate_phased_alleles_peak_bytes,
     read_phased_alleles,
+    read_phased_alleles_into,
 )
 
 log = logging.getLogger(__name__)
@@ -148,6 +149,53 @@ def _read_dosage_parallel(
                 )
             else:
                 reader.read_list(partition_variant_idxs, partition_output)
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        list(executor.map(read_partition, range(worker_count)))
+    return genotypes
+
+
+def _read_phased_parallel(
+    filename_noext: str,
+    *,
+    raw_sample_ct: int,
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    variant_idxs: np.ndarray,
+    num_variants: int,
+    num_samples: int,
+    threads: int,
+) -> np.ndarray:
+    """Decode BED alleles with independent pgenlib readers."""
+    genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
+    if num_variants == 0 or num_samples == 0:
+        return genotypes
+
+    worker_count = min(threads, num_variants)
+    output_boundaries = np.linspace(
+        0,
+        num_variants,
+        worker_count + 1,
+        dtype=np.int64,
+    )
+
+    def read_partition(worker_idx: int) -> None:
+        output_start = int(output_boundaries[worker_idx])
+        output_stop = int(output_boundaries[worker_idx + 1])
+        reader = pg.PgenReader(
+            str.encode(filename_noext + ".bed"),
+            raw_sample_ct=raw_sample_ct,
+            variant_ct=variant_ct,
+            sample_subset=sample_subset,
+        )
+        try:
+            read_phased_alleles_into(
+                reader,
+                variant_idxs[output_start:output_stop],
+                genotypes[output_start:output_stop],
+            )
         finally:
             reader.close()
 
@@ -358,7 +406,11 @@ class BEDReader(SNPBaseReader):
                 required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
                 num_non_diploid = int(np.sum(non_diploid_mask)) if non_diploid_mask is not None else 0
                 if num_non_diploid:
-                    required_ram += estimate_phased_alleles_peak_bytes(num_non_diploid, num_samples)
+                    required_ram += estimate_phased_alleles_peak_bytes(
+                        num_non_diploid,
+                        num_samples,
+                        threads=threads,
+                    )
             log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
             if not return_dosage:
@@ -394,12 +446,24 @@ class BEDReader(SNPBaseReader):
                         dtype=np.uint32,
                     )
 
-                    separate = read_phased_alleles(
-                        pgen_reader,
-                        non_diploid_variant_idxs,
-                        non_diploid_variant_idxs.size,
-                        num_samples,
-                    )
+                    if threads == 1:
+                        separate = read_phased_alleles(
+                            pgen_reader,
+                            non_diploid_variant_idxs,
+                            non_diploid_variant_idxs.size,
+                            num_samples,
+                        )
+                    else:
+                        separate = _read_phased_parallel(
+                            filename_noext,
+                            raw_sample_ct=file_num_samples,
+                            variant_ct=file_num_variants,
+                            sample_subset=sample_idxs,
+                            variant_idxs=non_diploid_variant_idxs,
+                            num_variants=non_diploid_variant_idxs.size,
+                            num_samples=num_samples,
+                            threads=threads,
+                        )
 
                     genotypes[non_diploid_output_rows] = sum_diploid_alleles(
                         separate[:, :, 0],

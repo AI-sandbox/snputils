@@ -534,6 +534,7 @@ class PGENReader(SNPBaseReader):
                         required_ram += estimate_phased_alleles_peak_bytes(
                             num_non_diploid,
                             num_samples,
+                            threads=threads,
                         )
                 log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
 
@@ -578,12 +579,24 @@ class PGENReader(SNPBaseReader):
                                 variant_idxs[non_diploid_output_rows],
                                 dtype=np.uint32,
                             )
-                            separate = read_phased_alleles(
-                                pgen_reader,
-                                non_diploid_variant_idxs,
-                                non_diploid_variant_idxs.size,
-                                num_samples,
-                            )
+                            if threads == 1:
+                                separate = read_phased_alleles(
+                                    pgen_reader,
+                                    non_diploid_variant_idxs,
+                                    non_diploid_variant_idxs.size,
+                                    num_samples,
+                                )
+                            else:
+                                separate = _read_phased_parallel(
+                                    filename_noext,
+                                    raw_sample_ct=file_num_samples,
+                                    variant_ct=file_num_variants,
+                                    sample_subset=sample_idxs,
+                                    variant_idxs=non_diploid_variant_idxs,
+                                    num_variants=non_diploid_variant_idxs.size,
+                                    num_samples=num_samples,
+                                    threads=threads,
+                                )
                             genotypes[non_diploid_output_rows] = sum_diploid_alleles(
                                 separate[:, :, 0],
                                 separate[:, :, 1],

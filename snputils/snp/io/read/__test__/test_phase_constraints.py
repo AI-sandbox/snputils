@@ -3,10 +3,13 @@ from pathlib import Path
 import numpy as np
 import pgenlib as pg
 import pytest
+import snputils.snp.io.read.bed as bed_module
+import snputils.snp.io.read.pgen as pgen_module
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read import BCFReader, BEDReader, PGENReader
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
+from snputils.snp.io.write.bed import BEDWriter
 from snputils.snp.io.write.pgen import PGENWriter
 
 
@@ -127,6 +130,42 @@ def test_bed_modes(data_path):
         BEDReader("cohort.bed").read(threads=1.5)
 
 
+def test_bed_parallel_non_diploid_correction_matches_serial(tmp_path: Path, monkeypatch):
+    prefix = tmp_path / "mixed"
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [0, 2, -1],
+                [1, 1, 2],
+                [2, 0, -1],
+                [0, 1, 2],
+            ],
+            dtype=np.int8,
+        ),
+        samples=np.array(["s1", "s2", "s3"], dtype=object),
+        variants_ref=np.array(["A", "C", "G", "T"], dtype=object),
+        variants_alt=np.array(["G", "T", "A", "C"], dtype=object),
+        variants_chrom=np.array(["X", "1", "Y", "MT"], dtype=object),
+        variants_id=np.array(["rs1", "rs2", "rs3", "rs4"], dtype=object),
+        variants_pos=np.array([100, 200, 300, 400]),
+    )
+    BEDWriter(snpobj, str(prefix)).write()
+
+    serial = BEDReader(prefix).read(genotype_mode="dosage", threads=1)
+    calls = []
+    read_parallel = bed_module._read_phased_parallel
+
+    def tracked_read_parallel(*args, **kwargs):
+        calls.append((kwargs["num_variants"], kwargs["threads"]))
+        return read_parallel(*args, **kwargs)
+
+    monkeypatch.setattr(bed_module, "_read_phased_parallel", tracked_read_parallel)
+    parallel = BEDReader(prefix).read(genotype_mode="dosage", threads=4)
+
+    assert calls == [(3, 4)]
+    np.testing.assert_array_equal(parallel.genotypes, serial.genotypes)
+
+
 def test_pgen_unphased_hardcalls_reject_phased_mode(tmp_path: Path):
     prefix = tmp_path / "unphased"
     snpobj = _toy_snpobj(
@@ -220,6 +259,42 @@ def test_pgen_parallel_dosage_matches_serial(tmp_path: Path):
         PGENReader(prefix).read(fields=["GT"], genotype_mode="dosage", threads=0)
     with pytest.raises(ValueError, match="explicit genotype_mode"):
         PGENReader(prefix).read(fields=["GT"], genotype_mode="auto", threads=2)
+
+
+def test_pgen_parallel_non_diploid_correction_matches_serial(tmp_path: Path, monkeypatch):
+    prefix = tmp_path / "mixed"
+    snpobj = SNPObject(
+        genotypes=np.array(
+            [
+                [[0, 0], [1, 1], [0, 1]],
+                [[0, 1], [1, 0], [1, 1]],
+                [[1, 1], [0, 0], [1, 0]],
+                [[0, 0], [0, 1], [1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        samples=np.array(["s1", "s2", "s3"], dtype=object),
+        variants_ref=np.array(["A", "C", "G", "T"], dtype=object),
+        variants_alt=np.array(["G", "T", "A", "C"], dtype=object),
+        variants_chrom=np.array(["X", "1", "Y", "MT"], dtype=object),
+        variants_id=np.array(["rs1", "rs2", "rs3", "rs4"], dtype=object),
+        variants_pos=np.array([100, 200, 300, 400]),
+    )
+    PGENWriter(snpobj, str(prefix)).write()
+
+    serial = PGENReader(prefix).read(genotype_mode="dosage", threads=1)
+    calls = []
+    read_parallel = pgen_module._read_phased_parallel
+
+    def tracked_read_parallel(*args, **kwargs):
+        calls.append((kwargs["num_variants"], kwargs["threads"]))
+        return read_parallel(*args, **kwargs)
+
+    monkeypatch.setattr(pgen_module, "_read_phased_parallel", tracked_read_parallel)
+    parallel = PGENReader(prefix).read(genotype_mode="dosage", threads=4)
+
+    assert calls == [(3, 4)]
+    np.testing.assert_array_equal(parallel.genotypes, serial.genotypes)
 
 
 def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):

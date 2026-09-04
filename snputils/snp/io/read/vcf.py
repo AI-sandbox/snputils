@@ -2487,7 +2487,8 @@ class VCFReaderPolars(SNPBaseReader):
              samples: Optional[List[str]] = None,
              genotype_mode: GenotypeMode = "auto",
              chromosome_ploidy: Optional[str] = None,
-             separator: Optional[str] = None
+             separator: Optional[str] = None,
+             threads: Optional[int] = None,
              ) -> SNPObject:
         """
         Read a vcf file into a SNPObject.
@@ -2520,12 +2521,22 @@ class VCFReaderPolars(SNPBaseReader):
                 preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
+            threads: Number of threads used by the eager Polars CSV parser. The
+                default None preserves Polars' automatic thread selection. This
+                does not control subsequent Polars genotype transformations.
 
         Returns:
             snpobj: SNPObject containing the data from the VCF file. The format and content
                 of this object depend on the specified parameters and the content of the VCF file.
         """
         # TODO: add support for excluding GT
+        if threads is not None:
+            try:
+                threads = operator.index(threads)
+            except TypeError as exc:
+                raise TypeError("VCFReaderPolars threads must be an integer or None.") from exc
+            if threads < 1:
+                raise ValueError("VCFReaderPolars threads must be at least 1.")
         genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         if genotype_mode == "auto":
@@ -2538,6 +2549,7 @@ class VCFReaderPolars(SNPBaseReader):
                     genotype_mode="phased",
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
+                    threads=threads,
                 )
             except ValueError as exc:
                 if _UNPHASED_VCF_PHASED_ERROR not in str(exc):
@@ -2550,6 +2562,7 @@ class VCFReaderPolars(SNPBaseReader):
                     genotype_mode="dosage",
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
+                    threads=threads,
                 )
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
@@ -2579,6 +2592,7 @@ class VCFReaderPolars(SNPBaseReader):
                 separator=detected_separator,
                 columns=selected_column_idxs,
                 schema_overrides=col_dtypes,
+                n_threads=threads,
             )
 
             log.debug("vcf polars read")
@@ -2610,6 +2624,7 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
+                threads=1 if threads is None else threads,
             )
 
             return snpobj

@@ -48,3 +48,31 @@ def test_vcf_polars_accepts_chrom_field_aliases(
 
     assert np.array_equal(snpobj.variants_chrom, np.array(["1", "1"]))
     assert np.array_equal(snpobj.variants_pos, np.array([100, 200]))
+
+
+def test_vcf_polars_passes_threads_to_csv_parser(tmp_path: Path, monkeypatch) -> None:
+    vcf_path = tmp_path / "tiny_threads.vcf"
+    _write_tiny_vcf(vcf_path, "#CHROM")
+    observed_n_threads = []
+    read_csv = __import__("polars").read_csv
+
+    def recording_read_csv(*args, **kwargs):
+        observed_n_threads.append(kwargs.get("n_threads"))
+        return read_csv(*args, **kwargs)
+
+    monkeypatch.setattr("snputils.snp.io.read.vcf.pl.read_csv", recording_read_csv)
+    snpobj = VCFReaderPolars(vcf_path).read(genotype_mode="phased", threads=2)
+
+    assert observed_n_threads == [2]
+    assert snpobj.genotypes.shape == (2, 2, 2)
+
+
+@pytest.mark.parametrize("threads", [0, -1])
+def test_vcf_polars_rejects_nonpositive_threads(threads: int) -> None:
+    with pytest.raises(ValueError, match="threads must be at least 1"):
+        VCFReaderPolars("unused.vcf").read(threads=threads)
+
+
+def test_vcf_polars_rejects_noninteger_threads() -> None:
+    with pytest.raises(TypeError, match="threads must be an integer or None"):
+        VCFReaderPolars("unused.vcf").read(threads=1.5)

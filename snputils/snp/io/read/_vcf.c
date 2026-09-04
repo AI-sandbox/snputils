@@ -277,6 +277,22 @@ decode_gt(PyObject *self, PyObject *args)
             }
             record_end++;
         }
+        for (Py_ssize_t sample = 0; sample < n_samples; sample++) {
+            const unsigned char *gt = data + cursor + sample * 4;
+            int first = decode_allele(gt[0]);
+            int second = decode_allele(gt[2]);
+            if ((gt[1] != '|' && gt[1] != '/')
+                    || (sample + 1 < n_samples && gt[3] != '\t')) {
+                PyErr_SetString(
+                    PyExc_ValueError,
+                    "The multithreaded VCF path requires fixed-width diploid GT-only sample fields.");
+                goto error;
+            }
+            if (first == -2 || second == -2) {
+                PyErr_SetString(PyExc_ValueError, "The multithreaded VCF path encountered an invalid GT allele.");
+                goto error;
+            }
+        }
 
         if (n_records >= capacity_records) {
             Py_ssize_t new_capacity;

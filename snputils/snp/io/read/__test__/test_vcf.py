@@ -243,6 +243,24 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
         VCFReader(vcf_path).read(genotype_mode="dosage", threads=2)
 
 
+def test_vcf_parallel_rejects_mixed_width_gt_before_sample_subsetting(tmp_path: Path):
+    vcf_path = tmp_path / "mixed_width.vcf.gz"
+    with gzip.open(vcf_path, "wt", encoding="utf-8") as file:
+        file.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+            "1\t100\trs1\tA\tC,G,T,AA,AC,AG,AT,CA,CG,CT\t.\tPASS\t.\tGT\t10\t10|1\n"
+        )
+
+    with np.testing.assert_raises_regex(ValueError, "fixed-width diploid GT-only"):
+        VCFReader(vcf_path).read(
+            fields=[],
+            samples=["S2"],
+            genotype_mode="phased",
+            threads=2,
+        )
+
+
 def test_read_snp_dispatches_zstandard_vcf(tmp_path: Path):
     import zstandard as zstd
 

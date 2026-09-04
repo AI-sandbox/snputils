@@ -151,8 +151,9 @@ def test_bgen_writer_encodes_hardcalls_as_probabilities(tmp_path):
     np.testing.assert_allclose(observed.calldata_gp, expected, equal_nan=True)
 
 
-def test_bgen_writer_roundtrips_mixed_probability_widths(tmp_path):
-    path = tmp_path / "mixed.bgen"
+@pytest.mark.parametrize("compression", ["zlib", "zstd"])
+def test_bgen_writer_roundtrips_mixed_probability_widths(tmp_path, compression):
+    path = tmp_path / f"mixed_{compression}.bgen"
     gp = np.array(
         [
             [[1.0, 0.0, 0.0, np.nan], [0.0, 1.0, 0.0, np.nan]],
@@ -170,12 +171,15 @@ def test_bgen_writer_roundtrips_mixed_probability_widths(tmp_path):
         variants_pos=np.array([10, 20]),
     )
 
-    BGENWriter(snpobj, path).write(compression="zlib", bit_depth=16)
+    BGENWriter(snpobj, path).write(compression=compression, bit_depth=16)
     observed = BGENReader(path).read()
     observed_gp_only = BGENReader(path).read(fields=["GP"])
+    observed_parallel = BGENReader(path).read(fields=["GP"], threads=2)
 
+    assert observed_parallel.calldata_gp.shape == (2, 2, 4)
     np.testing.assert_allclose(observed.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
     np.testing.assert_allclose(observed_gp_only.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
+    np.testing.assert_allclose(observed_parallel.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
 
 
 def test_bgen_writer_roundtrips_variable_ploidy_unphased(tmp_path):

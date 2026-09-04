@@ -853,7 +853,8 @@ decode_layout2_probabilities_into_impl(
     uint16_t expected_alleles,
     uint32_t output_width,
     float *out,
-    const char **error_message)
+    const char **error_message,
+    uint32_t *actual_width)
 {
     Layout2Info info;
     uint64_t bit_offset = 0;
@@ -867,6 +868,9 @@ decode_layout2_probabilities_into_impl(
             &info,
             error_message) < 0) {
         return -1;
+    }
+    if (actual_width != NULL) {
+        *actual_width = info.width;
     }
     if (output_width != 0 && info.width > output_width) {
         *error_message = "Native bulk BGEN probability reader encountered a probability width larger than the allocated output width.";
@@ -1099,7 +1103,8 @@ decode_layout2_probabilities_into(
         expected_alleles,
         output_width,
         out,
-        &error_message);
+        &error_message,
+        NULL);
     if (status < 0) {
         PyErr_SetString(PyExc_ValueError, error_message);
     }
@@ -1314,6 +1319,7 @@ typedef struct {
     uint32_t n_samples;
     uint32_t compression;
     uint32_t output_width;
+    uint32_t required_output_width;
     int return_probabilities;
     float *out;
     BgenLibdeflateApi *libdeflate;
@@ -1514,6 +1520,7 @@ bgen_decode_worker(void *argument)
 
         int decode_status;
         if (task->return_probabilities) {
+            uint32_t actual_width = 0;
             decode_status = decode_layout2_probabilities_into_impl(
                 payload,
                 payload_len,
@@ -1524,7 +1531,15 @@ bgen_decode_worker(void *argument)
                     + (uint64_t)variant
                     * (uint64_t)task->n_samples
                     * (uint64_t)task->output_width,
-                &task->error_message);
+                &task->error_message,
+                &actual_width);
+            if (decode_status < 0 && actual_width > task->output_width) {
+                if (actual_width > task->required_output_width) {
+                    task->required_output_width = actual_width;
+                }
+                task->error_message = NULL;
+                continue;
+            }
         } else {
             decode_status = decode_layout2_dosage_into_impl(
                 payload,
@@ -1559,7 +1574,8 @@ read_file_parallel(
     int return_probabilities,
     int requested_threads,
     BgenLibdeflateApi *libdeflate,
-    BgenZstdApi *zstd)
+    BgenZstdApi *zstd,
+    uint32_t *required_output_width)
 {
     struct stat file_stat;
     size_t file_size;
@@ -1619,6 +1635,7 @@ read_file_parallel(
         task->n_samples = header->n_samples;
         task->compression = header->compression;
         task->output_width = output_width;
+        task->required_output_width = output_width;
         task->return_probabilities = return_probabilities;
         task->out = out;
         task->libdeflate = libdeflate;
@@ -1658,6 +1675,14 @@ read_file_parallel(
             PyErr_SetString(PyExc_ValueError, tasks[thread].error_message);
             goto cleanup;
         }
+        if (required_output_width != NULL
+                && tasks[thread].required_output_width > *required_output_width) {
+            *required_output_width = tasks[thread].required_output_width;
+        }
+    }
+    if (required_output_width != NULL && *required_output_width > output_width) {
+        status = 1;
+        goto cleanup;
     }
     status = 0;
 
@@ -1773,7 +1798,9 @@ read_file_probabilities(PyObject *self, PyObject *args)
 
         if (threads > 1) {
 #if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
-            if (read_file_parallel(
+            for (;;) {
+                uint32_t required_width = out_width;
+                int parallel_status = read_file_parallel(
                     fp,
                     &header,
                     out,
@@ -1781,8 +1808,26 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     1,
                     threads,
                     libdeflate,
-                    zstd) < 0) {
-                goto error;
+                    zstd,
+                    &required_width);
+                if (parallel_status < 0) {
+                    goto error;
+                }
+                if (parallel_status == 0) {
+                    break;
+                }
+                PyBuffer_Release(&out_view);
+                have_out_view = 0;
+                Py_DECREF(out_obj);
+                out_obj = NULL;
+                out_width = required_width;
+                dims[2] = (Py_ssize_t)out_width;
+                out_obj = allocate_numpy_float32_array(3, dims, &out_view);
+                if (out_obj == NULL) {
+                    goto error;
+                }
+                have_out_view = 1;
+                out = (float *)out_view.buf;
             }
             goto success;
 #else
@@ -1928,7 +1973,7 @@ read_file_dosage(PyObject *self, PyObject *args)
 
     if (threads > 1) {
 #if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
-        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd) < 0) {
+        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd, NULL) < 0) {
             goto error;
         }
         PyBuffer_Release(&out_view);

@@ -50,6 +50,21 @@ typedef struct {
     BgenLibdeflateZlibDecompressFunc zlib_decompress;
 } BgenLibdeflateApi;
 
+typedef size_t (*BgenZstdDecompressFunc)(
+    void *,
+    size_t,
+    const void *,
+    size_t);
+typedef unsigned int (*BgenZstdIsErrorFunc)(size_t);
+
+typedef struct {
+    int checked;
+    int available;
+    void *handle;
+    BgenZstdDecompressFunc decompress;
+    BgenZstdIsErrorFunc is_error;
+} BgenZstdApi;
+
 static BgenLibdeflateApi *
 bgen_get_libdeflate_api(void)
 {
@@ -66,6 +81,43 @@ bgen_get_libdeflate_api(void)
             api.free_decompressor = (BgenLibdeflateFreeFunc)dlsym(api.handle, "libdeflate_free_decompressor");
             api.zlib_decompress = (BgenLibdeflateZlibDecompressFunc)dlsym(api.handle, "libdeflate_zlib_decompress");
             if (api.alloc_decompressor != NULL && api.free_decompressor != NULL && api.zlib_decompress != NULL) {
+                api.available = 1;
+            } else {
+                dlclose(api.handle);
+                memset(&api, 0, sizeof(api));
+                api.checked = 1;
+            }
+        }
+    }
+#else
+    api.checked = 1;
+#endif
+    return &api;
+}
+
+static BgenZstdApi *
+bgen_get_zstd_api(void)
+{
+    static BgenZstdApi api = {0};
+#if BGEN_HAVE_DLOPEN
+    if (!api.checked) {
+        static const char *library_names[] = {
+            "libzstd.so.1",
+            "libzstd.so",
+            "libzstd.1.dylib",
+            "libzstd.dylib",
+        };
+        api.checked = 1;
+        for (size_t idx = 0; idx < sizeof(library_names) / sizeof(library_names[0]); idx++) {
+            api.handle = dlopen(library_names[idx], RTLD_LAZY | RTLD_LOCAL);
+            if (api.handle != NULL) {
+                break;
+            }
+        }
+        if (api.handle != NULL) {
+            api.decompress = (BgenZstdDecompressFunc)dlsym(api.handle, "ZSTD_decompress");
+            api.is_error = (BgenZstdIsErrorFunc)dlsym(api.handle, "ZSTD_isError");
+            if (api.decompress != NULL && api.is_error != NULL) {
                 api.available = 1;
             } else {
                 dlclose(api.handle);
@@ -492,6 +544,7 @@ read_variant_payload(
     int *zstream_initialized,
     BgenLibdeflateApi *libdeflate,
     BgenLibdeflateDecompressor **libdeflate_decompressor,
+    BgenZstdApi *zstd,
     const unsigned char **payload,
     Py_ssize_t *payload_len)
 {
@@ -516,13 +569,7 @@ read_variant_payload(
         PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: compressed length field is truncated.");
         return -1;
     }
-    if (compression == 2) {
-        PyErr_SetString(
-            PyExc_NotImplementedError,
-            "Native bulk BGEN reading currently supports uncompressed and zlib-compressed files.");
-        return -1;
-    }
-    if (compression != 1) {
+    if (compression != 1 && compression != 2) {
         PyErr_SetString(PyExc_ValueError, "Unsupported BGEN compression flag.");
         return -1;
     }
@@ -536,6 +583,27 @@ read_variant_payload(
         }
         if (ensure_byte_capacity(payload_buffer, payload_capacity, (size_t)expected_len) < 0) {
             return -1;
+        }
+        if (compression == 2) {
+            size_t actual_len;
+            if (zstd == NULL || !zstd->available) {
+                PyErr_SetString(
+                    PyExc_NotImplementedError,
+                    "Native BGEN zstd decompression requires a shared libzstd library.");
+                return -1;
+            }
+            actual_len = zstd->decompress(
+                *payload_buffer,
+                (size_t)expected_len,
+                *block_buffer + 4,
+                (size_t)(block_len - 4U));
+            if (zstd->is_error(actual_len) || actual_len != (size_t)expected_len) {
+                PyErr_SetString(PyExc_ValueError, "BGEN genotype block decompressed to the wrong size.");
+                return -1;
+            }
+            *payload = *payload_buffer;
+            *payload_len = (Py_ssize_t)expected_len;
+            return 0;
         }
         if (libdeflate != NULL && libdeflate->available) {
             size_t actual_len = 0;
@@ -1249,6 +1317,7 @@ typedef struct {
     int return_probabilities;
     float *out;
     BgenLibdeflateApi *libdeflate;
+    BgenZstdApi *zstd;
     int error_kind;
     const char *error_message;
 } BgenDosageTask;
@@ -1355,12 +1424,7 @@ bgen_decode_worker(void *argument)
                 task->error_message = "Malformed BGEN genotype block: compressed length field is truncated.";
                 break;
             }
-            if (task->compression == 2) {
-                task->error_kind = BGEN_WORKER_ERROR_NOT_IMPLEMENTED;
-                task->error_message = "Native bulk BGEN reading currently supports uncompressed and zlib-compressed files.";
-                break;
-            }
-            if (task->compression != 1) {
+            if (task->compression != 1 && task->compression != 2) {
                 task->error_kind = BGEN_WORKER_ERROR_VALUE;
                 task->error_message = "Unsupported BGEN compression flag.";
                 break;
@@ -1380,7 +1444,24 @@ bgen_decode_worker(void *argument)
                 payload_capacity = (size_t)expected_len;
             }
 
-            if (task->libdeflate != NULL && task->libdeflate->available) {
+            if (task->compression == 2) {
+                size_t actual_len;
+                if (task->zstd == NULL || !task->zstd->available) {
+                    task->error_kind = BGEN_WORKER_ERROR_NOT_IMPLEMENTED;
+                    task->error_message = "Native BGEN zstd decompression requires a shared libzstd library.";
+                    break;
+                }
+                actual_len = task->zstd->decompress(
+                    payload_buffer,
+                    (size_t)expected_len,
+                    block + 4,
+                    (size_t)(record->block_len - 4U));
+                if (task->zstd->is_error(actual_len) || actual_len != (size_t)expected_len) {
+                    task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                    task->error_message = "BGEN genotype block decompressed to the wrong size.";
+                    break;
+                }
+            } else if (task->libdeflate != NULL && task->libdeflate->available) {
                 size_t actual_len = 0;
                 if (libdeflate_decompressor == NULL) {
                     libdeflate_decompressor = task->libdeflate->alloc_decompressor();
@@ -1477,7 +1558,8 @@ read_file_parallel(
     uint32_t output_width,
     int return_probabilities,
     int requested_threads,
-    BgenLibdeflateApi *libdeflate)
+    BgenLibdeflateApi *libdeflate,
+    BgenZstdApi *zstd)
 {
     struct stat file_stat;
     size_t file_size;
@@ -1540,6 +1622,7 @@ read_file_parallel(
         task->return_probabilities = return_probabilities;
         task->out = out;
         task->libdeflate = libdeflate;
+        task->zstd = zstd;
     }
 
 #if BGEN_HAVE_AVX2
@@ -1609,6 +1692,7 @@ read_file_probabilities(PyObject *self, PyObject *args)
     int zstream_initialized = 0;
     BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
     BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
+    BgenZstdApi *zstd = bgen_get_zstd_api();
 
     if (!PyArg_ParseTuple(args, "s|i", &path, &threads)) {
         return NULL;
@@ -1667,6 +1751,7 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     &zstream_initialized,
                     libdeflate,
                     &libdeflate_decompressor,
+                    zstd,
                     &payload,
                     &payload_len) < 0) {
             goto error;
@@ -1695,7 +1780,8 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     out_width,
                     1,
                     threads,
-                    libdeflate) < 0) {
+                    libdeflate,
+                    zstd) < 0) {
                 goto error;
             }
             goto success;
@@ -1731,6 +1817,7 @@ read_file_probabilities(PyObject *self, PyObject *args)
                         &zstream_initialized,
                         libdeflate,
                         &libdeflate_decompressor,
+                        zstd,
                         &payload,
                         &payload_len) < 0) {
                 goto error;
@@ -1805,6 +1892,7 @@ read_file_dosage(PyObject *self, PyObject *args)
     int zstream_initialized = 0;
     BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
     BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
+    BgenZstdApi *zstd = bgen_get_zstd_api();
 
     if (!PyArg_ParseTuple(args, "s|i", &path, &threads)) {
         return NULL;
@@ -1840,7 +1928,7 @@ read_file_dosage(PyObject *self, PyObject *args)
 
     if (threads > 1) {
 #if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
-        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate) < 0) {
+        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd) < 0) {
             goto error;
         }
         PyBuffer_Release(&out_view);
@@ -1874,6 +1962,7 @@ read_file_dosage(PyObject *self, PyObject *args)
                     &zstream_initialized,
                     libdeflate,
                     &libdeflate_decompressor,
+                    zstd,
                     &payload,
                     &payload_len) < 0) {
             goto error;

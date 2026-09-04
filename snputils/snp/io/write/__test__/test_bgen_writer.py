@@ -37,8 +37,9 @@ def test_bgen_writer_roundtrips_probabilities(tmp_path):
     np.testing.assert_allclose(observed.calldata_gp, gp, atol=1 / 65535, equal_nan=True)
 
 
-def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path):
-    path = tmp_path / "toy_bulk.bgen"
+@pytest.mark.parametrize("compression", ["zlib", "zstd"])
+def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path, compression):
+    path = tmp_path / f"toy_bulk_{compression}.bgen"
     gp = np.array(
         [
             [[1.0, 0.0, 0.0], [0.2, 0.3, 0.5], [np.nan, np.nan, np.nan]],
@@ -56,7 +57,7 @@ def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path):
         variants_pos=np.array([10, 20]),
     )
 
-    BGENWriter(snpobj, path).write(compression="zlib", bit_depth=16, phased=False)
+    BGENWriter(snpobj, path).write(compression=compression, bit_depth=16, phased=False)
     reader = BGENReader(path)
     fast_gp = reader.read(fields=["GP"]).calldata_gp
     parallel_gp = reader.read(fields=["GP"], threads=2).calldata_gp

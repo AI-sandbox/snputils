@@ -2092,8 +2092,8 @@ class VCFReader(SNPBaseReader):
         genotype_mode: ExplicitGenotypeMode = "phased",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
-        threads: int = 1,
         chunk_size: int = 10_000,
+        threads: int = 1,
     ) -> Iterator[SNPObject]:
         """
         Stream a VCF in variant chunks.

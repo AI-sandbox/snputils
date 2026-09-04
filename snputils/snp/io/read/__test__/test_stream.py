@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pytest
 
@@ -6,6 +8,12 @@ from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
 from snputils.stats import allele_freq_stream
 
 MAX_VARIANTS = 10_000
+
+
+@pytest.mark.parametrize("reader_cls", [BEDReader, PGENReader, VCFReader])
+def test_iter_read_preserves_positional_chunk_size(reader_cls):
+    parameters = list(inspect.signature(reader_cls.iter_read).parameters)
+    assert parameters[-2:] == ["chunk_size", "threads"]
 
 
 def _concat_chunks(chunks):

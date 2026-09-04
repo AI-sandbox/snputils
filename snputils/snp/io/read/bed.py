@@ -565,8 +565,8 @@ class BEDReader(SNPBaseReader):
         genotype_mode: ExplicitGenotypeMode = "dosage",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
-        threads: int = 1,
         chunk_size: int = 10_000,
+        threads: int = 1,
     ) -> Iterator[SNPObject]:
         """
         Stream the BED fileset in variant chunks.

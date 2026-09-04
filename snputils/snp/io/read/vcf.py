@@ -2092,6 +2092,7 @@ class VCFReader(SNPBaseReader):
         genotype_mode: ExplicitGenotypeMode = "phased",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
+        threads: int = 1,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
         """
@@ -2102,11 +2103,25 @@ class VCFReader(SNPBaseReader):
             all selected variants should be treated as ordinary diploid/autosomal; this
             skips non-diploid chromosome checks and can be faster. The default None/"auto"
             preserves existing behavior.
+        threads: Number of native GT decoder threads used for each chunk. Values
+            above one require GT-only sample fields; dosage also requires
+            ``chromosome_ploidy="autosomal"``.
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         return_dosage = genotype_mode == "dosage"
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("VCFReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("VCFReader threads must be at least 1.")
+        if threads != 1 and detect_non_diploid:
+            raise ValueError(
+                "Multithreaded VCF streaming dosage reads require "
+                "chromosome_ploidy='autosomal'."
+            )
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
         if separator not in (None, "\t"):
@@ -2135,6 +2150,17 @@ class VCFReader(SNPBaseReader):
             selected_samples,
         )
         n_samples_total = len(names) - 9
+        if threads != 1:
+            from snputils.snp.io.read import _vcf
+
+            all_samples = (
+                len(sample_indices) == n_samples_total
+                and np.array_equal(
+                    sample_indices,
+                    np.arange(n_samples_total, dtype=sample_indices.dtype),
+                )
+            )
+            native_sample_idxs = None if all_samples else sample_indices.tolist()
         wanted_variant_ids = None if variant_ids is None else set(map(str, np.asarray(variant_ids).ravel()))
         wanted_variant_idxs = None if variant_idxs is None else set(map(int, np.asarray(variant_idxs).ravel()))
 
@@ -2151,6 +2177,7 @@ class VCFReader(SNPBaseReader):
             "gt": [],
         }
         records_count = 0
+        gt_lines: list[bytes] = []
 
         def flush() -> Optional[SNPObject]:
             nonlocal records_count
@@ -2161,8 +2188,24 @@ class VCFReader(SNPBaseReader):
                     gt = np.empty((records_count, 0), dtype=np.int8)
                 else:
                     gt = np.empty((records_count, 0, 2), dtype=np.int8)
-            else:
+            elif threads == 1:
                 gt = np.stack(records["gt"], axis=0)
+            else:
+                gt_buffer, _, decoded_records = _vcf.decode_gt(
+                    b"".join(gt_lines),
+                    0,
+                    n_samples_total,
+                    native_sample_idxs,
+                    bool(return_dosage),
+                    threads,
+                )
+                if decoded_records != records_count:
+                    raise RuntimeError("Native VCF chunk decoder returned an unexpected record count.")
+                gt = np.frombuffer(gt_buffer, dtype=np.int8)
+                if return_dosage:
+                    gt = gt.reshape(records_count, len(sample_columns))
+                else:
+                    gt = gt.reshape(records_count, len(sample_columns), 2)
             arrays: dict[str, np.ndarray] = {}
             if "REF" in include:
                 arrays["REF"] = np.asarray(records["ref"], dtype=object)
@@ -2187,6 +2230,7 @@ class VCFReader(SNPBaseReader):
             )
             for values in records.values():
                 values.clear()
+            gt_lines.clear()
             records_count = 0
             return snpobj
 
@@ -2230,22 +2274,29 @@ class VCFReader(SNPBaseReader):
                 if "INFO" in include:
                     records["info"].append(_decode_vcf_value(parts[7]))
                 if sample_columns:
-                    records["gt"].append(
-                        _parse_gt_sample_bytes(
-                            parts[9],
-                            format_value=parts[8],
-                            n_samples_total=n_samples_total,
-                            sample_idxs=sample_indices,
-                            return_dosage=bool(return_dosage),
-                            non_diploid_chromosome=(
-                                (
-                                    _normalized_non_diploid_chromosome(_decode_vcf_value(parts[0])) is not None
-                                )
-                                if detect_non_diploid
-                                else None
-                            ),
+                    if threads == 1:
+                        records["gt"].append(
+                            _parse_gt_sample_bytes(
+                                parts[9],
+                                format_value=parts[8],
+                                n_samples_total=n_samples_total,
+                                sample_idxs=sample_indices,
+                                return_dosage=bool(return_dosage),
+                                non_diploid_chromosome=(
+                                    (
+                                        _normalized_non_diploid_chromosome(_decode_vcf_value(parts[0])) is not None
+                                    )
+                                    if detect_non_diploid
+                                    else None
+                                ),
+                            )
                         )
-                    )
+                    else:
+                        if parts[8] != b"GT":
+                            raise ValueError(
+                                "Multithreaded VCF streaming requires GT-only sample fields."
+                            )
+                        gt_lines.append(line)
                 records_count += 1
                 if records_count >= chunk_size:
                     chunk = flush()
@@ -2646,6 +2697,8 @@ class VCFReaderPolars(SNPBaseReader):
     ) -> Iterator[SNPObject]:
         """
         Stream a VCF in variant chunks using the Polars backend.
+
+        Streaming parallelism uses Polars' process-wide thread pool.
 
         chromosome_ploidy:
             Optional hint for chromosome-specific dosage conversion. Use "autosomal" when

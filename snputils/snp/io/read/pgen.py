@@ -730,6 +730,7 @@ class PGENReader(SNPBaseReader):
         genotype_mode: ExplicitGenotypeMode = "phased",
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
+        threads: int = 1,
         chunk_size: int = 10_000,
     ) -> Iterator[SNPObject]:
         """
@@ -742,9 +743,16 @@ class PGENReader(SNPBaseReader):
             all selected variants should be treated as ordinary diploid/autosomal; this
             skips non-diploid chromosome checks and can be faster. The default None/"auto"
             preserves existing behavior.
+        threads: Number of pgenlib decoder threads used for each chunk.
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         _normalize_chromosome_ploidy(chromosome_ploidy)
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("PGENReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("PGENReader threads must be at least 1.")
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
         if sample_idxs is not None and sample_ids is not None:
@@ -771,4 +779,5 @@ class PGENReader(SNPBaseReader):
                 genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
+                threads=threads,
             )

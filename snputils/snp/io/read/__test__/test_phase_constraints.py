@@ -110,8 +110,21 @@ def test_bed_modes(data_path):
     automatic = BEDReader(data_path + "/bed/subset").read(fields=["GT"], genotype_mode="auto")
     np.testing.assert_array_equal(default.genotypes, automatic.genotypes)
 
+    parallel = BEDReader(data_path + "/bed/subset").read(
+        fields=["GT"],
+        genotype_mode="dosage",
+        threads=4,
+    )
+    np.testing.assert_array_equal(default.genotypes, parallel.genotypes)
+
     with pytest.raises(ValueError, match="BED/BIM/FAM does not store phase"):
         BEDReader("cohort.bed").read(genotype_mode="phased")
+
+    with pytest.raises(ValueError, match="threads must be at least 1"):
+        BEDReader("cohort.bed").read(threads=0)
+
+    with pytest.raises(TypeError, match="threads must be an integer"):
+        BEDReader("cohort.bed").read(threads=1.5)
 
 
 def test_pgen_unphased_hardcalls_reject_phased_mode(tmp_path: Path):

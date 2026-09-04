@@ -1,4 +1,6 @@
 import logging
+import operator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterator, List, Optional, Union
 import csv
@@ -96,6 +98,64 @@ def _strip_bed_fileset_suffix(filename: Union[str, Path]) -> str:
     return filename_str
 
 
+def _read_dosage_parallel(
+    filename_noext: str,
+    *,
+    raw_sample_ct: int,
+    variant_ct: Optional[int],
+    sample_subset: Optional[np.ndarray],
+    variant_idxs: np.ndarray,
+    num_variants: int,
+    num_samples: int,
+    threads: int,
+) -> np.ndarray:
+    """Decode BED hardcalls with independent pgenlib readers."""
+    genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+    if num_variants == 0 or num_samples == 0:
+        return genotypes
+
+    worker_count = min(threads, num_variants)
+    output_boundaries = np.linspace(
+        0,
+        num_variants,
+        worker_count + 1,
+        dtype=np.int64,
+    )
+
+    def read_partition(worker_idx: int) -> None:
+        output_start = int(output_boundaries[worker_idx])
+        output_stop = int(output_boundaries[worker_idx + 1])
+        partition_variant_idxs = variant_idxs[output_start:output_stop]
+        partition_output = genotypes[output_start:output_stop]
+        reader = pg.PgenReader(
+            str.encode(filename_noext + ".bed"),
+            raw_sample_ct=raw_sample_ct,
+            variant_ct=variant_ct,
+            sample_subset=sample_subset,
+        )
+        try:
+            if (
+                int(partition_variant_idxs[-1])
+                - int(partition_variant_idxs[0])
+                + 1
+                == partition_variant_idxs.size
+                and np.all(np.diff(partition_variant_idxs) == 1)
+            ):
+                reader.read_range(
+                    int(partition_variant_idxs[0]),
+                    int(partition_variant_idxs[-1]) + 1,
+                    partition_output,
+                )
+            else:
+                reader.read_list(partition_variant_idxs, partition_output)
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        list(executor.map(read_partition, range(worker_count)))
+    return genotypes
+
+
 @SNPBaseReader.register
 class BEDReader(SNPBaseReader):
     def read(
@@ -109,6 +169,7 @@ class BEDReader(SNPBaseReader):
         genotype_mode: GenotypeMode = "dosage",
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
+        threads: int = 1,
     ) -> SNPObject:
         """
         Read a bed fileset (bed, bim, fam) into a SNPObject.
@@ -135,6 +196,7 @@ class BEDReader(SNPBaseReader):
                 preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
+            threads: Number of independent native pgenlib decoder threads.
 
         Returns:
             **SNPObject**:
@@ -150,6 +212,12 @@ class BEDReader(SNPBaseReader):
         return_dosage = genotype_mode in {"auto", "dosage"}
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         detect_non_diploid = bool(return_dosage) and chromosome_ploidy_mode != "autosomal"
+        try:
+            threads = operator.index(threads)
+        except TypeError as exc:
+            raise TypeError("BEDReader threads must be an integer.") from exc
+        if threads < 1:
+            raise ValueError("BEDReader threads must be at least 1.")
 
         if isinstance(fields, str):
             fields = [fields]
@@ -301,8 +369,20 @@ class BEDReader(SNPBaseReader):
                     num_samples,
                 )
             else:
-                genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
-                pgen_reader.read_list(variant_idxs, genotypes)
+                if threads == 1:
+                    genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
+                    pgen_reader.read_list(variant_idxs, genotypes)
+                else:
+                    genotypes = _read_dosage_parallel(
+                        filename_noext,
+                        raw_sample_ct=file_num_samples,
+                        variant_ct=file_num_variants,
+                        sample_subset=sample_idxs,
+                        variant_idxs=variant_idxs,
+                        num_variants=num_variants,
+                        num_samples=num_samples,
+                        threads=threads,
+                    )
                 if detect_non_diploid and only_read_bed:
                     log.debug(
                         "Skipping non-diploid BED dosage correction because BIM chromosome metadata was not loaded."

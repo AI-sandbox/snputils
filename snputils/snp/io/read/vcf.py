@@ -2675,7 +2675,7 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
-                threads=1 if threads is None else threads,
+                threads=1,
             )
 
             return snpobj

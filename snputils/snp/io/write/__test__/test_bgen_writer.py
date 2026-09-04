@@ -81,6 +81,50 @@ def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path, compressio
         reader.read(fields=["GP", "POS"], threads=2)
 
 
+def test_bgen_reader_falls_back_when_native_zstd_is_unavailable(tmp_path, monkeypatch):
+    from snputils.snp.io.read import bgen as bgen_module
+
+    path = tmp_path / "zstd_fallback.bgen"
+    gp = np.array(
+        [
+            [[1.0, 0.0, 0.0], [0.2, 0.3, 0.5]],
+            [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+    snpobj = SNPObject(
+        calldata_gp=gp,
+        samples=np.array(["s1", "s2"], dtype=object),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2"], dtype=object),
+        variants_pos=np.array([10, 20]),
+    )
+    BGENWriter(snpobj, path).write(compression="zstd", bit_depth=16, phased=False)
+
+    def unavailable(*args):
+        raise NotImplementedError(
+            "Native BGEN zstd decompression requires a shared libzstd library."
+        )
+
+    monkeypatch.setattr(bgen_module._native_bgen, "read_file_probabilities", unavailable)
+    monkeypatch.setattr(bgen_module._native_bgen, "read_file_dosage", unavailable)
+
+    reader = BGENReader(path)
+    with pytest.warns(RuntimeWarning, match="single-threaded Python zstandard"):
+        observed_gp = reader.read(fields=["GP"], threads=2).calldata_gp
+    with pytest.warns(RuntimeWarning, match="single-threaded Python zstandard"):
+        observed_dosage = reader.read_dosage(threads=2)
+
+    np.testing.assert_allclose(observed_gp, gp, atol=1 / 65535)
+    np.testing.assert_allclose(
+        observed_dosage,
+        gp[:, :, 1] + 2 * gp[:, :, 2],
+        atol=1 / 65535,
+    )
+
+
 def test_bgen_reader_dosage_mode_returns_metadata_complete_snpobject(tmp_path):
     path = tmp_path / "dosage_mode.bgen"
     gp = np.array(

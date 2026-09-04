@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import operator
 import struct
+import warnings
 import zlib
 from dataclasses import dataclass
 from importlib import import_module
@@ -25,6 +26,19 @@ except ImportError:  # pragma: no cover - exercised only when the extension is u
 _U16 = struct.Struct("<H")
 _U32 = struct.Struct("<I")
 _ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()
+
+
+def _native_zstd_unavailable(exc: BaseException) -> bool:
+    return isinstance(exc, NotImplementedError) and "shared libzstd library" in str(exc)
+
+
+def _warn_zstd_thread_fallback() -> None:
+    warnings.warn(
+        "Native threaded BGEN zstd decompression is unavailable because libzstd "
+        "could not be loaded; falling back to single-threaded Python zstandard decompression.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def _resolve_compressed_path(sample_path: Union[str, bytes, Path]) -> str:
@@ -301,6 +315,8 @@ class BGENReader(SNPBaseReader):
             variant_idxs: Variant indices to read. If None and variant_ids is None, all variants are read.
             threads: Native decoder threads for unfiltered dosage reads or
                 genotype-probability reads requesting only ``fields=["GP"]``.
+                If native zstd support is unavailable, zstd reads warn and fall
+                back to single-threaded Python decompression.
                 The default is 1.
 
         Returns:
@@ -357,13 +373,19 @@ class BGENReader(SNPBaseReader):
                 calldata_gp = self._read_native_bulk_gp(threads=threads)
                 return SNPObject(genotypes=None, calldata_gp=calldata_gp)
             except (NotImplementedError, ValueError) as exc:
-                if threads != 1:
+                zstd_fallback = _native_zstd_unavailable(exc)
+                if threads != 1 and not zstd_fallback:
                     raise
+                if threads != 1:
+                    _warn_zstd_thread_fallback()
                 fallback_messages = (
                     "uniform probability width",
                     "larger than the allocated output width",
                 )
-                if isinstance(exc, ValueError) and not any(message in str(exc) for message in fallback_messages):
+                if (
+                    isinstance(exc, ValueError)
+                    and not any(message in str(exc) for message in fallback_messages)
+                ):
                     raise
                 log.debug("Falling back to the general BGEN reader.", exc_info=True)
         elif threads != 1 and genotype_mode is None:
@@ -431,6 +453,8 @@ class BGENReader(SNPBaseReader):
         materializing genotype probabilities. Filtered reads fall back to the general
         probability reader and convert from ``calldata_gp``. Set ``threads`` above
         1 to decode independent variant blocks in parallel for an unfiltered read.
+        If native zstd support is unavailable, zstd reads warn and fall back to
+        single-threaded Python decompression.
         """
         try:
             threads = operator.index(threads)
@@ -444,6 +468,7 @@ class BGENReader(SNPBaseReader):
         )
         if threads != 1 and filtered:
             raise ValueError("Multithreaded BGEN dosage reading currently requires all samples and variants.")
+        python_fallback = False
         if (
             _native_bgen is not None
             and sample_ids is None
@@ -459,12 +484,16 @@ class BGENReader(SNPBaseReader):
                 if isinstance(buffer, np.ndarray):
                     return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples)
                 return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
-            except NotImplementedError:
-                if threads != 1:
+            except NotImplementedError as exc:
+                zstd_fallback = _native_zstd_unavailable(exc)
+                if threads != 1 and not zstd_fallback:
                     raise
+                python_fallback = True
+                if threads != 1:
+                    _warn_zstd_thread_fallback()
                 log.debug("Falling back to probability-based BGEN dosage reading.", exc_info=True)
 
-        if threads != 1:
+        if threads != 1 and not python_fallback:
             raise ImportError("Multithreaded BGEN dosage reading requires the native BGEN extension.")
 
         snpobj = self.read(

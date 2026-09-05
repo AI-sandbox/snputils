@@ -360,7 +360,7 @@ class BGENReader(SNPBaseReader):
         elif genotype_mode == "dosage":
             fields_set.discard("GP")
 
-        native_bulk_gp = genotype_mode is None and self._can_use_native_bulk_gp(
+        native_bulk_gp = genotype_mode is None and self._is_native_bulk_gp_request(
             fields_set=fields_set,
             sample_path=sample_path,
             sample_ids=sample_ids,
@@ -369,6 +369,10 @@ class BGENReader(SNPBaseReader):
             variant_idxs=variant_idxs,
         )
         if native_bulk_gp:
+            if _native_bgen is None:
+                raise ImportError(
+                    "Native BGEN support requires the compiled snputils.snp.io._bgen extension."
+                )
             try:
                 calldata_gp = self._read_native_bulk_gp(threads=threads)
                 return SNPObject(genotypes=None, calldata_gp=calldata_gp)
@@ -507,7 +511,7 @@ class BGENReader(SNPBaseReader):
         return snpobj.dosage().astype(np.float32, copy=False)
 
     @staticmethod
-    def _can_use_native_bulk_gp(
+    def _is_native_bulk_gp_request(
         *,
         fields_set: set[str],
         sample_path: Optional[Union[str, bytes]],
@@ -517,8 +521,7 @@ class BGENReader(SNPBaseReader):
         variant_idxs: Optional[Sequence[int]],
     ) -> bool:
         return (
-            _native_bgen is not None
-            and fields_set == {"GP"}
+            fields_set == {"GP"}
             and sample_path is None
             and sample_ids is None
             and sample_idxs is None

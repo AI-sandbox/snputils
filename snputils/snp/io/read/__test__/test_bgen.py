@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from snputils import BGENReader, read_bgen, read_snp
+from snputils.snp.io.read import bgen as bgen_module
 from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 
@@ -14,6 +15,13 @@ def test_bgen_reader_preserves_probabilities(snpobj_bgen, snpobj_vcf):
 
     expected_dosage = sum_diploid_genotypes(snpobj_vcf.genotypes[:100], dtype=np.int16)
     np.testing.assert_allclose(snpobj_bgen.dosage(), expected_dosage, atol=1 / 255)
+
+
+def test_bgen_bulk_probability_read_reports_missing_native_extension(monkeypatch):
+    monkeypatch.setattr(bgen_module, "_native_bgen", None)
+
+    with pytest.raises(ImportError, match="compiled snputils.snp.io._bgen extension"):
+        BGENReader("unused.bgen").read(fields=["GP"], threads=2)
 
 
 def test_bgen_reader_matches_vcf_metadata(snpobj_bgen, snpobj_vcf):

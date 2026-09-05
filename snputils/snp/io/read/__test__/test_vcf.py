@@ -289,6 +289,22 @@ def test_vcf_parallel_rejects_mixed_width_gt_before_sample_subsetting(tmp_path: 
         )
 
 
+def test_vcf_parallel_rejects_haploid_gt_with_clear_error(tmp_path: Path):
+    vcf_path = tmp_path / "haploid.vcf.gz"
+    with gzip.open(vcf_path, "wt", encoding="utf-8") as file:
+        file.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+            "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t1\n"
+        )
+
+    serial = VCFReader(vcf_path).read(fields=[], genotype_mode="phased")
+    np.testing.assert_array_equal(serial.genotypes, np.array([[[1, -1]]], dtype=np.int8))
+
+    with np.testing.assert_raises_regex(ValueError, "fixed-width diploid GT-only"):
+        VCFReader(vcf_path).read(fields=[], genotype_mode="phased", threads=2)
+
+
 def test_read_snp_dispatches_zstandard_vcf(tmp_path: Path):
     import zstandard as zstd
 

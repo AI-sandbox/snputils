@@ -262,7 +262,9 @@ decode_gt(PyObject *self, PyObject *args)
         }
 
         if (sample_bytes > data_len - cursor) {
-            PyErr_SetString(PyExc_ValueError, "VCF sample fields extend beyond end of file.");
+            PyErr_SetString(
+                PyExc_ValueError,
+                "The multithreaded VCF path requires fixed-width diploid GT-only sample fields.");
             goto error;
         }
         content_end = cursor + sample_bytes;

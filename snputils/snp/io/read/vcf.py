@@ -1954,9 +1954,10 @@ class VCFReader(SNPBaseReader):
             threads: Number of BGZF decompression and native GT decoder threads.
                 Values above 1 currently require a filename whose final two
                 suffixes are exactly ``.vcf.gz``, plus an unfiltered explicit
-                dosage or phased read with at most ``POS`` variant metadata.
-                Dosage additionally requires ``chromosome_ploidy="autosomal"``.
-                The default is 1.
+                dosage or phased read with at most ``POS`` variant metadata and
+                fixed-width diploid GT-only sample fields. Use ``threads=1``
+                for haploid calls or other valid GT layouts. Dosage additionally
+                requires ``chromosome_ploidy="autosomal"``. The default is 1.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant

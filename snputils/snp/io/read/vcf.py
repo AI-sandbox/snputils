@@ -842,12 +842,27 @@ class VCFReader(SNPBaseReader):
         from snputils.snp.io.read import _vcf
         from snputils.snp.io.read.bcf import _read_bgzf_parallel
 
-        n_samples_total = len(names) - 9
-        if n_samples_total < 1:
-            raise ValueError("Multithreaded VCF decoding requires at least one sample.")
-
         data = _read_bgzf_parallel(self._filename, threads)
         body_offset = _vcf_body_offset(data)
+        n_samples_total = max(0, len(names) - 9)
+        if n_samples_total == 0:
+            raw = np.frombuffer(data, dtype=np.uint8, offset=body_offset)
+            body_starts, _ = _vcf_body_bounds(raw)
+            n_records = int(body_starts.size)
+            tabs_per_record = len(names) - 1
+            tabs = np.flatnonzero(raw == ord("\t"))
+            if tabs.size != n_records * tabs_per_record:
+                raise ValueError("VCF records do not have the expected number of tab-delimited columns.")
+            tabs = tabs.reshape(n_records, tabs_per_record)
+            arrays = {}
+            if "POS" in field_columns:
+                arrays["POS"] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
+            return self._make_snpobject(
+                genotypes=_empty_genotype_array(n_records, 0, return_dosage),
+                sample_columns=sample_columns,
+                arrays=arrays,
+            )
+
         all_samples = (
             len(sample_idxs) == n_samples_total
             and np.array_equal(sample_idxs, np.arange(n_samples_total, dtype=sample_idxs.dtype))
@@ -1937,9 +1952,11 @@ class VCFReader(SNPBaseReader):
                 byte parsers when possible; other separators use the pandas
                 chunked parser.
             threads: Number of BGZF decompression and native GT decoder threads.
-                Values above 1 currently require an unfiltered explicit dosage
-                or phased read with at most ``POS`` variant metadata. Dosage additionally requires
-                ``chromosome_ploidy="autosomal"``. The default is 1.
+                Values above 1 currently require a filename whose final two
+                suffixes are exactly ``.vcf.gz``, plus an unfiltered explicit
+                dosage or phased read with at most ``POS`` variant metadata.
+                Dosage additionally requires ``chromosome_ploidy="autosomal"``.
+                The default is 1.
 
         Returns:
             SNPObject: Object containing selected genotype, sample, and variant

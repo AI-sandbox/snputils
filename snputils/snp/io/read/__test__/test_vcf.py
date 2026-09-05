@@ -243,6 +243,34 @@ def test_vcf_reader_reads_gt_only_vcf_gz(tmp_path: Path):
         VCFReader(vcf_path).read(genotype_mode="dosage", threads=2)
 
 
+def test_vcf_reader_reads_sampleless_vcf_gz_with_threads(tmp_path: Path):
+    vcf_path = tmp_path / "annotations_only.vcf.gz"
+    with gzip.open(vcf_path, "wt", encoding="utf-8") as file:
+        file.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "1\t100\trs1\tA\tG\t.\tPASS\tANN=missense_variant\n"
+            "1\t200\trs2\tC\tT\t.\tPASS\tANN=synonymous_variant\n"
+        )
+
+    phased = VCFReader(vcf_path).read(
+        fields=["POS"],
+        genotype_mode="phased",
+        threads=2,
+    )
+    dosage = VCFReader(vcf_path).read(
+        fields=[],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
+
+    assert phased.genotypes.shape == (2, 0, 2)
+    assert dosage.genotypes.shape == (2, 0)
+    np.testing.assert_array_equal(phased.variants_pos, np.array([100, 200], dtype=np.int32))
+    np.testing.assert_array_equal(phased.samples, np.array([]))
+
+
 def test_vcf_parallel_rejects_mixed_width_gt_before_sample_subsetting(tmp_path: Path):
     vcf_path = tmp_path / "mixed_width.vcf.gz"
     with gzip.open(vcf_path, "wt", encoding="utf-8") as file:

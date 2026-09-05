@@ -337,6 +337,99 @@ read_int_value_unsigned(const unsigned char *ptr, Py_ssize_t type_size)
 }
 
 static int
+read_typed_scalar_uint(
+    const unsigned char *data,
+    Py_ssize_t data_len,
+    Py_ssize_t *offset,
+    uint32_t *value)
+{
+    Py_ssize_t n_vals, type_size;
+    int type_code;
+
+    if (read_typed_descriptor(data, data_len, offset, &n_vals, &type_code, &type_size) < 0) {
+        return -1;
+    }
+    if (n_vals != 1 || (type_code != 1 && type_code != 2 && type_code != 3)) {
+        PyErr_SetString(PyExc_ValueError, "Expected a scalar integer FORMAT key in the BCF record.");
+        return -1;
+    }
+    if (*offset > data_len || type_size > data_len - *offset) {
+        PyErr_SetString(PyExc_ValueError, "Malformed BCF: FORMAT key is truncated.");
+        return -1;
+    }
+    *value = read_int_value_unsigned(data + *offset, type_size);
+    *offset += type_size;
+    return 0;
+}
+
+static int
+gt_layout_matches(
+    const unsigned char *data,
+    Py_ssize_t data_len,
+    Py_ssize_t indiv_offset,
+    Py_ssize_t l_indiv,
+    Py_ssize_t n_fmt,
+    Py_ssize_t n_samples,
+    int gt_idx,
+    Py_ssize_t expected_gt_rel_offset,
+    Py_ssize_t expected_n_vals,
+    Py_ssize_t expected_type_size)
+{
+    Py_ssize_t offset = indiv_offset;
+    Py_ssize_t indiv_end;
+    int found = 0;
+
+    if (indiv_offset < 0 || l_indiv < 0 || indiv_offset > data_len || l_indiv > data_len - indiv_offset) {
+        PyErr_SetString(PyExc_ValueError, "Malformed BCF: individual section extends beyond end of record.");
+        return -1;
+    }
+    indiv_end = indiv_offset + l_indiv;
+
+    for (Py_ssize_t field = 0; field < n_fmt; field++) {
+        uint32_t key;
+        Py_ssize_t n_vals, type_size, values_offset, values_nbytes;
+        int type_code;
+
+        if (read_typed_scalar_uint(data, indiv_end, &offset, &key) < 0
+            || read_typed_descriptor(data, indiv_end, &offset, &n_vals, &type_code, &type_size) < 0) {
+            return -1;
+        }
+        values_offset = offset;
+        if (n_samples != 0 && n_vals > PY_SSIZE_T_MAX / n_samples) {
+            PyErr_SetString(PyExc_MemoryError, "BCF FORMAT field is too large.");
+            return -1;
+        }
+        values_nbytes = n_samples * n_vals;
+        if (values_nbytes != 0 && type_size > PY_SSIZE_T_MAX / values_nbytes) {
+            PyErr_SetString(PyExc_MemoryError, "BCF FORMAT field is too large.");
+            return -1;
+        }
+        values_nbytes *= type_size;
+        if (values_offset > indiv_end || values_nbytes > indiv_end - values_offset) {
+            PyErr_SetString(PyExc_ValueError, "Malformed BCF: FORMAT field extends beyond end of record.");
+            return -1;
+        }
+
+        if (key == (uint32_t)gt_idx) {
+            if (found
+                || values_offset - indiv_offset != expected_gt_rel_offset
+                || n_vals != expected_n_vals
+                || type_size != expected_type_size) {
+                return 0;
+            }
+            found = 1;
+        }
+        offset = values_offset + values_nbytes;
+    }
+
+    if (offset != indiv_end) {
+        PyErr_SetString(PyExc_ValueError, "Malformed BCF: FORMAT fields do not consume the individual section.");
+        return -1;
+    }
+    return found;
+}
+
+static int
 sum_diploid_gt_values(int first, int second)
 {
     if (first < 0 || second < 0) {
@@ -483,7 +576,8 @@ decode_gt_dosage_parallel(
     const Py_ssize_t *sample_indices,
     int all_samples,
     int return_dosage,
-    int requested_threads)
+    int requested_threads,
+    int gt_idx)
 {
     Py_ssize_t *gt_offsets = NULL;
     Py_ssize_t capacity_records = 0;
@@ -532,8 +626,9 @@ decode_gt_dosage_parallel(
     }
 
     while (offset < data_len) {
-        uint32_t l_shared_u32, l_indiv_u32;
+        uint32_t l_shared_u32, l_indiv_u32, n_fmt_samples_u32;
         Py_ssize_t l_shared, l_indiv, indiv_offset, record_end, gt_offset;
+        int layout_matches;
 
         if (read_u32_le(data, data_len, offset, &l_shared_u32) < 0
                 || read_u32_le(data, data_len, offset + 4, &l_indiv_u32) < 0) {
@@ -555,6 +650,35 @@ decode_gt_dosage_parallel(
             goto error;
         }
         record_end = indiv_offset + l_indiv;
+        if (gt_idx >= 0) {
+            if (l_shared < 24
+                || read_u32_le(data, data_len, offset + 8 + 20, &n_fmt_samples_u32) < 0) {
+                PyErr_SetString(PyExc_ValueError, "Malformed BCF: shared section is truncated.");
+                goto error;
+            }
+            if ((n_fmt_samples_u32 & 0xFFFFFFu) != (uint32_t)n_samples) {
+                PyErr_SetString(PyExc_ValueError, "BCF record sample count does not match header sample count.");
+                goto error;
+            }
+            layout_matches = gt_layout_matches(
+                data,
+                data_len,
+                indiv_offset,
+                l_indiv,
+                (Py_ssize_t)(n_fmt_samples_u32 >> 24),
+                n_samples,
+                gt_idx,
+                gt_rel_offset,
+                n_vals,
+                type_size);
+            if (layout_matches < 0) {
+                goto error;
+            }
+            if (!layout_matches) {
+                PyMem_Free(gt_offsets);
+                Py_RETURN_NONE;
+            }
+        }
         if (l_shared >= 20) {
             const unsigned char *n_alleles_ptr = data + offset + 8 + 16;
             uint32_t n_alleles = (uint32_t)n_alleles_ptr[2] | ((uint32_t)n_alleles_ptr[3] << 8);
@@ -694,6 +818,7 @@ decode_gt(PyObject *self, PyObject *args)
     Py_ssize_t offset, n_records;
     int return_dosage;
     int threads = 1;
+    int gt_idx = -1;
     int all_samples;
     const unsigned char *data;
     Py_ssize_t data_len;
@@ -701,7 +826,7 @@ decode_gt(PyObject *self, PyObject *args)
     data_view.buf = NULL;
     if (!PyArg_ParseTuple(
             args,
-            "OnnnnnnOp|i",
+            "OnnnnnnOp|ii",
             &data_obj,
             &body_offset,
             &gt_rel_offset,
@@ -711,7 +836,8 @@ decode_gt(PyObject *self, PyObject *args)
             &expected_l_indiv,
             &sample_indices_obj,
             &return_dosage,
-            &threads)) {
+            &threads,
+            &gt_idx)) {
         return NULL;
     }
 
@@ -793,7 +919,8 @@ decode_gt(PyObject *self, PyObject *args)
             sample_indices,
             all_samples,
             return_dosage,
-            threads);
+            threads,
+            gt_idx);
         PyBuffer_Release(&data_view);
         PyMem_Free(sample_indices);
         return parallel_result;
@@ -836,8 +963,9 @@ decode_gt(PyObject *self, PyObject *args)
     offset = body_offset;
     n_records = 0;
     while (offset < data_len) {
-        uint32_t l_shared_u32, l_indiv_u32;
+        uint32_t l_shared_u32, l_indiv_u32, n_fmt_samples_u32;
         Py_ssize_t l_shared, l_indiv, indiv_offset, gt_offset, record_end, gt_span;
+        int layout_matches;
         char *row;
 
         if (read_u32_le(data, data_len, offset, &l_shared_u32) < 0
@@ -879,6 +1007,46 @@ decode_gt(PyObject *self, PyObject *args)
             PyMem_Free(sample_indices);
             PyErr_SetString(PyExc_ValueError, "Malformed BCF: record extends beyond end of file.");
             return NULL;
+        }
+        if (gt_idx >= 0) {
+            if (l_shared < 24
+                || read_u32_le(data, data_len, offset + 8 + 20, &n_fmt_samples_u32) < 0) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                PyErr_SetString(PyExc_ValueError, "Malformed BCF: shared section is truncated.");
+                return NULL;
+            }
+            if ((n_fmt_samples_u32 & 0xFFFFFFu) != (uint32_t)n_samples) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                PyErr_SetString(PyExc_ValueError, "BCF record sample count does not match header sample count.");
+                return NULL;
+            }
+            layout_matches = gt_layout_matches(
+                data,
+                data_len,
+                indiv_offset,
+                l_indiv,
+                (Py_ssize_t)(n_fmt_samples_u32 >> 24),
+                n_samples,
+                gt_idx,
+                gt_rel_offset,
+                n_vals,
+                type_size);
+            if (layout_matches < 0) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                return NULL;
+            }
+            if (!layout_matches) {
+                Py_DECREF(out);
+                PyBuffer_Release(&data_view);
+                PyMem_Free(sample_indices);
+                Py_RETURN_NONE;
+            }
         }
 
         if (n_samples != 0 && n_vals > PY_SSIZE_T_MAX / n_samples) {

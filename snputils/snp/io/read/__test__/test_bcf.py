@@ -6,6 +6,7 @@ import pytest
 from snputils import BCFReader, read_bcf, read_snp
 from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.io.read.bcf import (
+    _BCFHeader,
     _batch_decode_gt,
     _build_indiv_offsets,
     _decode_gt_array,
@@ -238,6 +239,66 @@ def test_c_decode_gt_treats_int8_vector_end_as_missing():
         )
         observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 2, 2)
         np.testing.assert_array_equal(observed, expected)
+
+
+def test_varying_format_layout_warns_and_uses_serial_gt_decoder():
+    samples = np.array(["s1", "s2"], dtype=object)
+    header = _BCFHeader(
+        samples=samples,
+        contigs={0: "1"},
+        filters={},
+        info={},
+        formats={1: {"ID": "GT"}, 2: {"ID": "DP"}},
+    )
+
+    def format_field(key, values):
+        return _encode_typed_int_list([key]) + b"\x21" + bytes(values)
+
+    shared = struct.pack("<iiIfII", 0, 9, 1, 12.5, 2 << 16, (2 << 24) | 2)
+    first_indiv = format_field(1, [2, 3, 4, 5]) + format_field(2, [20, 20, 20, 20])
+    second_indiv = format_field(2, [20, 20, 20, 20]) + format_field(1, [4, 3, 2, 5])
+    data = (
+        struct.pack("<II", len(shared), len(first_indiv))
+        + shared
+        + first_indiv
+        + struct.pack("<II", len(shared), len(second_indiv))
+        + shared
+        + second_indiv
+    )
+
+    with pytest.warns(RuntimeWarning, match="FORMAT layouts vary"):
+        observed = BCFReader("unused.bcf")._read_all(
+            data,
+            0,
+            header,
+            samples,
+            np.array([0, 1]),
+            ["GT"],
+            return_dosage=False,
+            detect_non_diploid=False,
+            threads=2,
+        )
+    serial = BCFReader("unused.bcf")._read_all(
+        data,
+        0,
+        header,
+        samples,
+        np.array([0, 1]),
+        ["GT"],
+        return_dosage=False,
+        detect_non_diploid=False,
+        threads=1,
+    )
+
+    expected = np.array(
+        [
+            [[0, 0], [1, 1]],
+            [[1, 0], [0, 1]],
+        ],
+        dtype=np.int8,
+    )
+    np.testing.assert_array_equal(observed.genotypes, expected)
+    np.testing.assert_array_equal(serial.genotypes, expected)
 
 
 def test_c_decode_gt_haploid_dosage_preserves_values():

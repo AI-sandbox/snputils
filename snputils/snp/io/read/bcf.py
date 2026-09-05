@@ -5,6 +5,7 @@ import logging
 import operator
 import re
 import struct
+import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1298,16 +1299,17 @@ class BCFReader(SNPBaseReader):
         return_dosage: bool,
         detect_non_diploid: bool,
         threads: int,
+        try_fast_paths: bool = True,
     ) -> SNPObject:
         """Optimized bulk read of all records with no variant filtering."""
-        if "GT" in selected_fields and set(selected_fields).issubset({"GT", "POS", "IID"}):
+        if try_fast_paths and "GT" in selected_fields and set(selected_fields).issubset({"GT", "POS", "IID"}):
             gt_only = self._try_read_gt_only_all(
                 data, body_offset, header, file_samples, sample_index_array, return_dosage,
                 detect_non_diploid, threads, selected_fields,
             )
             if gt_only is not None:
                 return gt_only
-        elif "GT" in selected_fields and set(selected_fields).issubset(_CORE_FIELDS):
+        elif try_fast_paths and "GT" in selected_fields and set(selected_fields).issubset(_CORE_FIELDS):
             core = self._try_read_core_all(
                 data, body_offset, header, file_samples, sample_index_array, selected_fields, return_dosage,
                 detect_non_diploid,
@@ -1380,7 +1382,7 @@ class BCFReader(SNPBaseReader):
                 # Check if all records have uniform l_indiv (same FORMAT layout)
                 uniform_indiv = np.all(l_indiv == l_indiv[0])
 
-                if uniform_indiv:
+                if uniform_indiv and try_fast_paths:
                     genotypes = _batch_decode_gt(
                         data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
                         n_file_samples, n_records, sample_index_array, return_dosage,
@@ -1658,12 +1660,17 @@ class BCFReader(SNPBaseReader):
             raise ValueError("BCF FORMAT field does not contain GT for all selected records.")
 
         gt_data_rel_offset, gt_n_vals, gt_type_size, _total_indiv_bytes = gt_layout
+        gt_idx = next(idx for idx, value in header.formats.items() if value["ID"] == "GT")
 
         try:
             from snputils.snp.io.read import _bcf
         except ImportError:
             _bcf = None
 
+        fallback_warning = (
+            "The native BCF GT decoder is unavailable; GT decoding is falling back "
+            "to the serial per-record path."
+        )
         if _bcf is not None:
             sample_arg = None if _all_samples_selected(sample_index_array, n_samples) else sample_index_array.tolist()
             decoded = _bcf.decode_gt(
@@ -1677,6 +1684,7 @@ class BCFReader(SNPBaseReader):
                 sample_arg,
                 return_dosage,
                 threads,
+                gt_idx,
             )
             if decoded is not None:
                 gt_buffer, n_records = decoded
@@ -1696,26 +1704,27 @@ class BCFReader(SNPBaseReader):
                     samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
                     variants_pos=variants_pos,
                 )
-
-        indiv_offsets, uniform_indiv = _build_indiv_offsets(data, body_offset)
-        n_records = len(indiv_offsets)
-        if not uniform_indiv:
-            return None
-
-        genotypes = _batch_decode_gt(
-            data, indiv_offsets, gt_data_rel_offset, gt_n_vals, gt_type_size,
-            n_samples, n_records, sample_index_array, return_dosage,
-        )
-        variants_pos = None
-        if "POS" in selected_fields:
-            record_offsets = _build_record_offsets(data, body_offset)
-            variants_pos = _extract_fixed_fields(data, record_offsets)[3]
-            if len(variants_pos) != n_records:
-                raise ValueError("BCF genotype and position record counts do not match.")
-        return SNPObject(
-            genotypes=genotypes,
-            samples=file_samples[sample_index_array] if "IID" in selected_fields else None,
-            variants_pos=variants_pos,
+            fallback_warning = (
+                "BCF FORMAT layouts vary between records; GT decoding is falling back "
+                "to the serial per-record path."
+            )
+        if threads > 1:
+            warnings.warn(
+                fallback_warning,
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        return self._read_all(
+            data,
+            body_offset,
+            header,
+            file_samples,
+            sample_index_array,
+            list(selected_fields),
+            return_dosage,
+            detect_non_diploid,
+            1,
+            try_fast_paths=False,
         )
 
     def _try_read_core_all(

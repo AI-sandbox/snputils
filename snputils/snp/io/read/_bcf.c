@@ -25,6 +25,18 @@ read_u32_le(const unsigned char *data, Py_ssize_t data_len, Py_ssize_t offset, u
 }
 
 static int
+decode_gt_raw_value(uint32_t raw, Py_ssize_t type_size)
+{
+    uint32_t vector_end = type_size == 1
+        ? 0x81u
+        : (type_size == 2 ? 0x8001u : 0x80000001u);
+    if (raw == vector_end) {
+        return -1;
+    }
+    return (int)(raw >> 1) - 1;
+}
+
+static int
 decode_gt_value(const unsigned char *ptr, Py_ssize_t type_size)
 {
     uint32_t raw = 0;
@@ -38,7 +50,7 @@ decode_gt_value(const unsigned char *ptr, Py_ssize_t type_size)
             | ((uint32_t)ptr[2] << 16)
             | ((uint32_t)ptr[3] << 24);
     }
-    return (int)(raw >> 1) - 1;
+    return decode_gt_raw_value(raw, type_size);
 }
 
 static int
@@ -337,7 +349,7 @@ static int
 reject_unphased_second_allele(const unsigned char *gt, Py_ssize_t type_size)
 {
     uint32_t second_raw = read_int_value_unsigned(gt + type_size, type_size);
-    int second = (int)(second_raw >> 1) - 1;
+    int second = decode_gt_raw_value(second_raw, type_size);
     if (second >= 0 && (second_raw & 1u) == 0) {
         PyErr_SetString(
             PyExc_ValueError,
@@ -443,7 +455,7 @@ decode_gt_dosage_worker(void *argument)
                     uint32_t second_raw = read_int_value_unsigned(
                         gt + task->type_size,
                         task->type_size);
-                    second = (int)(second_raw >> 1) - 1;
+                    second = decode_gt_raw_value(second_raw, task->type_size);
                     if (second >= 0 && (second_raw & 1u) == 0) {
                         task->failed = 1;
                         return NULL;

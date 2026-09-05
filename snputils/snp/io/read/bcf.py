@@ -39,6 +39,7 @@ _I32 = struct.Struct("<i")
 _F32 = struct.Struct("<f")
 _TYPE_SIZES = {0: 0, 1: 1, 2: 2, 3: 4, 5: 4, 7: 1}
 _INT_UNSIGNED_DTYPES = {1: np.uint8, 2: np.dtype("<u2"), 4: np.dtype("<u4")}
+_INT_VECTOR_END = {1: 0x81, 2: 0x8001, 4: 0x80000001}
 _FLOAT_MISSING = 0x7F800001
 _FLOAT_VECTOR_END = 0x7F800002
 _HEADER_META_RE = re.compile(r"^##(contig|INFO|FORMAT|FILTER)=<(.*)>$")
@@ -823,6 +824,7 @@ def _decode_gt_array(
         offset=offset,
     ).reshape(n_samples, n_vals)
     decoded = (raw.astype(np.int32, copy=False) >> 1) - 1
+    decoded[raw == _INT_VECTOR_END[type_size]] = -1
     if n_vals == 1:
         padded = np.full((n_samples, 2), -1, dtype=np.int8)
         padded[:, 0] = decoded[:, 0].astype(np.int8, copy=False)
@@ -1073,6 +1075,7 @@ def _batch_decode_gt(
 
         # Decode: BCF GT encoding is (allele_index + 1) << 1 | phase.
         decoded = (raw.astype(np.int16, copy=False) >> 1) - 1
+        decoded[raw == _INT_VECTOR_END[type_size]] = -1
 
         if n_vals == 1:
             if return_dosage:

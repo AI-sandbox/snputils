@@ -5,7 +5,12 @@ import pytest
 
 from snputils import BCFReader, read_bcf, read_snp
 from snputils._utils.genotypes import sum_diploid_genotypes
-from snputils.snp.io.read.bcf import _batch_decode_gt, _build_indiv_offsets, _read_bgzf_or_gzip
+from snputils.snp.io.read.bcf import (
+    _batch_decode_gt,
+    _build_indiv_offsets,
+    _decode_gt_array,
+    _read_bgzf_or_gzip,
+)
 from snputils.snp.io.write.bcf import _encode_typed_int_list, _encode_typed_string
 
 
@@ -178,6 +183,61 @@ def test_batch_decode_haploid_dosage_preserves_values():
     )
 
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+
+
+def test_python_gt_decoders_treat_int8_vector_end_as_missing():
+    gt_values = bytes([2, 0x81, 4, 3])
+    expected = np.array([[[0, -1], [1, 0]]], dtype=np.int8)
+
+    per_record = _decode_gt_array(
+        gt_values,
+        0,
+        n_samples=2,
+        n_vals=2,
+        type_size=1,
+        require_phase=True,
+    )
+    batched = _batch_decode_gt(
+        data=gt_values,
+        indiv_offsets=np.array([0], dtype=np.int64),
+        gt_data_rel_offset=0,
+        n_vals=2,
+        type_size=1,
+        n_samples=2,
+        n_records=1,
+        sample_index_array=np.array([0, 1], dtype=int),
+        return_dosage=False,
+    )
+
+    np.testing.assert_array_equal(per_record, expected[0])
+    np.testing.assert_array_equal(batched, expected)
+
+
+def test_c_decode_gt_treats_int8_vector_end_as_missing():
+    _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
+    gt_values = bytes([2, 0x81, 4, 3])
+    record = struct.pack("<II", 0, len(gt_values)) + gt_values
+    data = record * 2
+    expected = np.tile(
+        np.array([[[0, -1], [1, 0]]], dtype=np.int8),
+        (2, 1, 1),
+    )
+
+    for threads in (1, 2):
+        gt_buffer, n_records = _bcf.decode_gt(
+            data,
+            0,
+            0,
+            2,
+            2,
+            1,
+            len(gt_values),
+            None,
+            False,
+            threads,
+        )
+        observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 2, 2)
+        np.testing.assert_array_equal(observed, expected)
 
 
 def test_c_decode_gt_haploid_dosage_preserves_values():

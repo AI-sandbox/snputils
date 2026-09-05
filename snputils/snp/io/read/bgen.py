@@ -360,7 +360,7 @@ class BGENReader(SNPBaseReader):
         elif genotype_mode == "dosage":
             fields_set.discard("GP")
 
-        native_bulk_gp = genotype_mode is None and self._is_native_bulk_gp_request(
+        native_bulk_gp_request = genotype_mode is None and self._is_native_bulk_gp_request(
             fields_set=fields_set,
             sample_path=sample_path,
             sample_ids=sample_ids,
@@ -368,11 +368,8 @@ class BGENReader(SNPBaseReader):
             variant_ids=variant_ids,
             variant_idxs=variant_idxs,
         )
+        native_bulk_gp = native_bulk_gp_request and _native_bgen is not None
         if native_bulk_gp:
-            if _native_bgen is None:
-                raise ImportError(
-                    "Native BGEN support requires the compiled snputils.snp.io._bgen extension."
-                )
             try:
                 calldata_gp = self._read_native_bulk_gp(threads=threads)
                 return SNPObject(genotypes=None, calldata_gp=calldata_gp)
@@ -393,6 +390,11 @@ class BGENReader(SNPBaseReader):
                     raise
                 log.debug("Falling back to the general BGEN reader.", exc_info=True)
         elif threads != 1 and genotype_mode is None:
+            if native_bulk_gp_request:
+                raise ImportError(
+                    "Multithreaded BGEN probability reading requires the compiled "
+                    "snputils.snp.io._bgen extension."
+                )
             raise ValueError(
                 "Multithreaded BGEN probability reading currently requires "
                 "fields=['GP'] with all samples and variants."

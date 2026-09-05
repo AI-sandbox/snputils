@@ -1,4 +1,5 @@
 import struct
+import zlib
 
 import numpy as np
 import pytest
@@ -13,6 +14,31 @@ from snputils.snp.io.read.bcf import (
     _read_bgzf_or_gzip,
 )
 from snputils.snp.io.write.bcf import _encode_typed_int_list, _encode_typed_string
+
+
+def _make_bgzf_block(
+    payload: bytes,
+    *,
+    isize: int | None = None,
+    crc32: int | None = None,
+) -> bytes:
+    compressor = zlib.compressobj(wbits=-15)
+    compressed = compressor.compress(payload) + compressor.flush()
+    block_size = 12 + 6 + len(compressed) + 8
+    header = (
+        b"\x1f\x8b\x08\x04"
+        + b"\x00\x00\x00\x00"
+        + b"\x00\xff"
+        + (6).to_bytes(2, "little")
+        + b"BC"
+        + (2).to_bytes(2, "little")
+        + (block_size - 1).to_bytes(2, "little")
+    )
+    trailer = (
+        (zlib.crc32(payload) if crc32 is None else crc32).to_bytes(4, "little")
+        + (len(payload) if isize is None else isize).to_bytes(4, "little")
+    )
+    return header + compressed + trailer
 
 
 def test_bcf_reader_matches_vcf_genotypes_and_metadata(snpobj_bcf, snpobj_vcf):
@@ -158,6 +184,24 @@ def test_bgzf_extra_subfield_length_cannot_exceed_xlen(tmp_path):
 
     with pytest.raises(ValueError, match="subfield length extends beyond XLEN"):
         _read_bgzf_or_gzip(path)
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_bgzf_isize_cannot_exceed_64_kib(tmp_path, threads):
+    path = tmp_path / "oversized_isize.bcf"
+    path.write_bytes(_make_bgzf_block(b"BCF", isize=65_537))
+
+    with pytest.raises(ValueError, match="ISIZE exceeds the 64 KiB limit"):
+        _read_bgzf_or_gzip(path, threads=threads)
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_bgzf_crc32_is_validated(tmp_path, threads):
+    path = tmp_path / "bad_crc.bcf"
+    path.write_bytes(_make_bgzf_block(b"BCF", crc32=0))
+
+    with pytest.raises(ValueError, match="CRC32 checksum does not match"):
+        _read_bgzf_or_gzip(path, threads=threads)
 
 
 def test_build_indiv_offsets_rejects_truncated_record_headers():

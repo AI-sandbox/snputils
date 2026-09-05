@@ -35,6 +35,7 @@ _ALL_FIELDS = ["GT", "GP", "IID", "REF", "ALT", "#CHROM", "ID", "POS", "QUAL", "
 _CORE_FIELDS = frozenset(_DEFAULT_FIELDS)
 
 _BCF_MAGIC = b"BCF\x02\x02"
+_BGZF_MAX_UNCOMPRESSED_BLOCK_SIZE = 1 << 16
 _U32 = struct.Struct("<I")
 _I32 = struct.Struct("<i")
 _F32 = struct.Struct("<f")
@@ -223,6 +224,12 @@ def _inflate_bgzf_block_range(
             chunk = zlib.decompress(compressed_data[compressed_start:compressed_stop], -15)
             if len(chunk) != output_size:
                 raise ValueError("BGZF block decompressed to the wrong size.")
+            expected_crc = int.from_bytes(
+                compressed_data[compressed_stop:compressed_stop + 4],
+                "little",
+            )
+            if zlib.crc32(chunk) & 0xFFFFFFFF != expected_crc:
+                raise ValueError("BGZF block CRC32 checksum does not match.")
             output_view[output_start:output_start + output_size] = chunk
     finally:
         output_view.release()
@@ -272,6 +279,8 @@ def _read_bgzf_parallel(filename: Union[str, bytes], threads: int) -> Union[byte
         compressed_start = extra_end
         compressed_stop = block_end - 8
         output_size = int.from_bytes(compressed_data[block_end - 4:block_end], "little")
+        if output_size > _BGZF_MAX_UNCOMPRESSED_BLOCK_SIZE:
+            raise ValueError("Malformed BGZF block: ISIZE exceeds the 64 KiB limit.")
         blocks.append((compressed_start, compressed_stop, output_offset, output_size))
         output_offset += output_size
         file_offset = block_end
@@ -349,10 +358,17 @@ def _read_bgzf_or_gzip(filename: Union[str, bytes], threads: int = 1) -> Union[b
                 raise EOFError("Unexpected end of BGZF block.")
 
             compressed = block_tail[:-8]
-            if compressed:
-                chunk = zlib.decompress(compressed, -15)
-                if chunk:
-                    chunks.append(chunk)
+            expected_crc = int.from_bytes(block_tail[-8:-4], "little")
+            output_size = int.from_bytes(block_tail[-4:], "little")
+            if output_size > _BGZF_MAX_UNCOMPRESSED_BLOCK_SIZE:
+                raise ValueError("Malformed BGZF block: ISIZE exceeds the 64 KiB limit.")
+            chunk = zlib.decompress(compressed, -15)
+            if len(chunk) != output_size:
+                raise ValueError("BGZF block decompressed to the wrong size.")
+            if zlib.crc32(chunk) & 0xFFFFFFFF != expected_crc:
+                raise ValueError("BGZF block CRC32 checksum does not match.")
+            if chunk:
+                chunks.append(chunk)
 
     with gzip.open(filename, "rb") as handle:
         return handle.read()

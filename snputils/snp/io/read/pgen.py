@@ -94,15 +94,26 @@ def _open_pgen_reader(
     variant_ct: Optional[int],
     sample_subset: Optional[np.ndarray],
     genotype_mode: GenotypeMode,
-) -> tuple[Any, bool]:
+    allele_idx_offsets: Optional[np.ndarray] = None,
+) -> tuple[Any, bool, Optional[np.ndarray]]:
     """Open the biallelic fast path first; consult PVAR only after PGEN reports multiallelic data."""
     reader_kwargs = {
         "raw_sample_ct": raw_sample_ct,
         "variant_ct": variant_ct,
         "sample_subset": sample_subset,
     }
+    if allele_idx_offsets is not None:
+        return (
+            pg.PgenReader(
+                str.encode(filename_noext + ".pgen"),
+                allele_idx_offsets=allele_idx_offsets,
+                **reader_kwargs,
+            ),
+            True,
+            allele_idx_offsets,
+        )
     try:
-        return pg.PgenReader(str.encode(filename_noext + ".pgen"), **reader_kwargs), False
+        return pg.PgenReader(str.encode(filename_noext + ".pgen"), **reader_kwargs), False, None
     except RuntimeError as exc:
         if "multiallelic variants present" not in str(exc):
             raise
@@ -121,6 +132,7 @@ def _open_pgen_reader(
             **reader_kwargs,
         ),
         True,
+        allele_idx_offsets,
     )
 
 
@@ -153,7 +165,7 @@ def _read_dosage_parallel(
         output_stop = int(output_boundaries[worker_idx + 1])
         partition_variant_idxs = variant_idxs[output_start:output_stop]
         partition_output = genotypes[output_start:output_stop]
-        reader, contains_multiallelic = _open_pgen_reader(
+        reader, contains_multiallelic, _ = _open_pgen_reader(
             filename_noext,
             raw_sample_ct=raw_sample_ct,
             variant_ct=variant_ct,
@@ -195,6 +207,7 @@ def _read_phased_parallel(
     num_variants: int,
     num_samples: int,
     threads: int,
+    allele_idx_offsets: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Decode ordered phased alleles with independent pgenlib readers."""
     genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
@@ -214,12 +227,13 @@ def _read_phased_parallel(
         output_stop = int(output_boundaries[worker_idx + 1])
         partition_variant_idxs = variant_idxs[output_start:output_stop]
         partition_output = genotypes[output_start:output_stop]
-        reader, _ = _open_pgen_reader(
+        reader, _, _ = _open_pgen_reader(
             filename_noext,
             raw_sample_ct=raw_sample_ct,
             variant_ct=variant_ct,
             sample_subset=sample_subset,
             genotype_mode="phased",
+            allele_idx_offsets=allele_idx_offsets,
         )
         try:
             read_phased_alleles_into(
@@ -476,7 +490,7 @@ class PGENReader(SNPBaseReader):
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.pgen")
-            pgen_reader, contains_multiallelic = _open_pgen_reader(
+            pgen_reader, contains_multiallelic, allele_idx_offsets = _open_pgen_reader(
                 filename_noext,
                 raw_sample_ct=file_num_samples,
                 variant_ct=file_num_variants,
@@ -556,6 +570,7 @@ class PGENReader(SNPBaseReader):
                             num_variants=num_variants,
                             num_samples=num_samples,
                             threads=threads,
+                            allele_idx_offsets=allele_idx_offsets,
                         )
                 else:
                     if threads == 1:
@@ -596,6 +611,7 @@ class PGENReader(SNPBaseReader):
                                     num_variants=non_diploid_variant_idxs.size,
                                     num_samples=num_samples,
                                     threads=threads,
+                                    allele_idx_offsets=allele_idx_offsets,
                                 )
                             genotypes[non_diploid_output_rows] = sum_diploid_alleles(
                                 separate[:, :, 0],

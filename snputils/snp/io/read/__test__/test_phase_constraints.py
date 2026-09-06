@@ -333,22 +333,30 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
 
 
-def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(tmp_path: Path):
+def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(
+    tmp_path: Path,
+    monkeypatch,
+):
     prefix = tmp_path / "multiallelic"
     with pg.PgenWriter(
         filename=str(prefix.with_suffix(".pgen")).encode(),
         sample_ct=2,
-        variant_ct=1,
+        variant_ct=4,
         hardcall_phase_present=True,
         allele_ct_limit=3,
     ) as writer:
-        writer.append_alleles(
-            np.array([0, 2, 1, 2], dtype=np.int32),
-            all_phased=True,
-            allele_ct=3,
-        )
+        for _ in range(4):
+            writer.append_alleles(
+                np.array([0, 2, 1, 2], dtype=np.int32),
+                all_phased=True,
+                allele_ct=3,
+            )
     prefix.with_suffix(".pvar").write_text(
-        "#CHROM\tPOS\tID\tREF\tALT\n1\t100\trs1\tA\tG,T\n"
+        "#CHROM\tPOS\tID\tREF\tALT\n"
+        "1\t100\trs1\tA\tG,T\n"
+        "1\t200\trs2\tA\tG,T\n"
+        "1\t300\trs3\tA\tG,T\n"
+        "1\t400\trs4\tA\tG,T\n"
     )
     prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
 
@@ -358,10 +366,28 @@ def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_pat
     phased = PGENReader(prefix).read(fields=["GT"], genotype_mode="phased")
     np.testing.assert_array_equal(
         phased.genotypes,
-        np.array([[[0, 2], [1, 2]]], dtype=np.int8),
+        np.tile(np.array([[[0, 2], [1, 2]]], dtype=np.int8), (4, 1, 1)),
     )
     automatic = PGENReader(prefix).read(fields=["GT"], genotype_mode="auto")
     np.testing.assert_array_equal(automatic.genotypes, phased.genotypes)
+
+    pvar_reader = pg.PvarReader
+    pvar_reads = 0
+
+    def tracked_pvar_reader(*args, **kwargs):
+        nonlocal pvar_reads
+        pvar_reads += 1
+        return pvar_reader(*args, **kwargs)
+
+    monkeypatch.setattr(pgen_module.pg, "PvarReader", tracked_pvar_reader)
+    parallel = PGENReader(prefix).read(
+        fields=["GT"],
+        genotype_mode="phased",
+        threads=4,
+    )
+
+    assert pvar_reads == 1
+    np.testing.assert_array_equal(parallel.genotypes, phased.genotypes)
 
 
 def test_reader_modes_are_validated(tmp_path: Path):

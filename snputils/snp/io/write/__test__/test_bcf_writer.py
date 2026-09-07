@@ -35,6 +35,12 @@ def test_bcf_writer_roundtrip(tmp_path):
     np.testing.assert_array_equal(observed.genotypes, sum_diploid_genotypes(snpobj.genotypes))
     with pytest.raises(ValueError, match="unphased BCF genotypes"):
         BCFReader(str(output_path)).read(genotype_mode="phased")
+    with pytest.raises(ValueError, match="unphased BCF genotypes"):
+        BCFReader(str(output_path)).read(
+            fields=["GT"],
+            genotype_mode="phased",
+            threads=2,
+        )
     np.testing.assert_array_equal(observed.samples, snpobj.samples)
     np.testing.assert_array_equal(observed.variants_chrom, snpobj.variants_chrom)
     np.testing.assert_array_equal(observed.variants_pos, snpobj.variants_pos)
@@ -65,8 +71,14 @@ def test_bcf_writer_phased(tmp_path):
     BCFWriter(snpobj, str(output_path), phased=True).write()
 
     observed = BCFReader(str(output_path)).read()
+    parallel = BCFReader(str(output_path)).read(
+        fields=["GT"],
+        genotype_mode="phased",
+        threads=2,
+    )
 
     np.testing.assert_array_equal(observed.genotypes, snpobj.genotypes)
+    np.testing.assert_array_equal(parallel.genotypes, snpobj.genotypes)
     np.testing.assert_array_equal(observed.variants_id, np.array([".", "rs3"], dtype=object))
     np.testing.assert_allclose(observed.variants_qual, snpobj.variants_qual, equal_nan=True)
 
@@ -88,6 +100,12 @@ def test_bcf_dosage_rejects_multiallelic_while_phased_mode_preserves_calls(tmp_p
         BCFReader(output_path).read(fields=["GT"], genotype_mode="dosage")
 
     phased = BCFReader(output_path).read(fields=["GT"], genotype_mode="phased")
+    parallel_phased = BCFReader(output_path).read(
+        fields=["GT"],
+        genotype_mode="phased",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_phased.genotypes, phased.genotypes)
     np.testing.assert_array_equal(phased.genotypes, snpobj.genotypes)
     automatic = BCFReader(output_path).read(fields=["GT"], genotype_mode="auto")
     np.testing.assert_array_equal(automatic.genotypes, snpobj.genotypes)
@@ -225,6 +243,24 @@ def test_bcf_writer_roundtrips_sampleless_annotation_only_bcf(tmp_path):
         observed.variants_info.astype(str),
         np.array(["ANN=missense_variant;DB", "AF=0.125"], dtype=object),
     )
+
+    for threads in (1, 2):
+        phased = BCFReader(output_path).read(
+            fields=["GT", "POS"],
+            genotype_mode="phased",
+            threads=threads,
+        )
+        assert phased.genotypes.shape == (2, 0, 2)
+        np.testing.assert_array_equal(phased.variants_pos, np.array([100, 200]))
+
+        dosage = BCFReader(output_path).read(
+            fields=["GT", "POS"],
+            genotype_mode="dosage",
+            chromosome_ploidy="autosomal",
+            threads=threads,
+        )
+        assert dosage.genotypes.shape == (2, 0)
+        np.testing.assert_array_equal(dosage.variants_pos, np.array([100, 200]))
 
 
 def test_bcf_writer_roundtrips_general_info_filter_and_gp(tmp_path):

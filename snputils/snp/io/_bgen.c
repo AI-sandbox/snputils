@@ -10,9 +10,17 @@
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #define BGEN_HAVE_DLOPEN 1
+#define BGEN_HAVE_MMAP 1
+#define BGEN_HAVE_PTHREAD 1
 #else
 #define BGEN_HAVE_DLOPEN 0
+#define BGEN_HAVE_MMAP 0
+#define BGEN_HAVE_PTHREAD 0
 #endif
 
 #if defined(__x86_64__) && defined(__GNUC__)
@@ -42,6 +50,21 @@ typedef struct {
     BgenLibdeflateZlibDecompressFunc zlib_decompress;
 } BgenLibdeflateApi;
 
+typedef size_t (*BgenZstdDecompressFunc)(
+    void *,
+    size_t,
+    const void *,
+    size_t);
+typedef unsigned int (*BgenZstdIsErrorFunc)(size_t);
+
+typedef struct {
+    int checked;
+    int available;
+    void *handle;
+    BgenZstdDecompressFunc decompress;
+    BgenZstdIsErrorFunc is_error;
+} BgenZstdApi;
+
 static BgenLibdeflateApi *
 bgen_get_libdeflate_api(void)
 {
@@ -58,6 +81,43 @@ bgen_get_libdeflate_api(void)
             api.free_decompressor = (BgenLibdeflateFreeFunc)dlsym(api.handle, "libdeflate_free_decompressor");
             api.zlib_decompress = (BgenLibdeflateZlibDecompressFunc)dlsym(api.handle, "libdeflate_zlib_decompress");
             if (api.alloc_decompressor != NULL && api.free_decompressor != NULL && api.zlib_decompress != NULL) {
+                api.available = 1;
+            } else {
+                dlclose(api.handle);
+                memset(&api, 0, sizeof(api));
+                api.checked = 1;
+            }
+        }
+    }
+#else
+    api.checked = 1;
+#endif
+    return &api;
+}
+
+static BgenZstdApi *
+bgen_get_zstd_api(void)
+{
+    static BgenZstdApi api = {0};
+#if BGEN_HAVE_DLOPEN
+    if (!api.checked) {
+        static const char *library_names[] = {
+            "libzstd.so.1",
+            "libzstd.so",
+            "libzstd.1.dylib",
+            "libzstd.dylib",
+        };
+        api.checked = 1;
+        for (size_t idx = 0; idx < sizeof(library_names) / sizeof(library_names[0]); idx++) {
+            api.handle = dlopen(library_names[idx], RTLD_LAZY | RTLD_LOCAL);
+            if (api.handle != NULL) {
+                break;
+            }
+        }
+        if (api.handle != NULL) {
+            api.decompress = (BgenZstdDecompressFunc)dlsym(api.handle, "ZSTD_decompress");
+            api.is_error = (BgenZstdIsErrorFunc)dlsym(api.handle, "ZSTD_isError");
+            if (api.decompress != NULL && api.is_error != NULL) {
                 api.available = 1;
             } else {
                 dlclose(api.handle);
@@ -120,11 +180,16 @@ choose_u64(unsigned int n, unsigned int k)
 }
 
 static int
-max_probabilities(unsigned int ploidy, unsigned int n_alleles, int phased, uint32_t *value)
+max_probabilities_impl(
+    unsigned int ploidy,
+    unsigned int n_alleles,
+    int phased,
+    uint32_t *value,
+    const char **error_message)
 {
     uint64_t width;
     if (n_alleles == 0) {
-        PyErr_SetString(PyExc_ValueError, "BGEN allele count must be positive.");
+        *error_message = "BGEN allele count must be positive.";
         return -1;
     }
     if (phased) {
@@ -133,11 +198,27 @@ max_probabilities(unsigned int ploidy, unsigned int n_alleles, int phased, uint3
         width = choose_u64(ploidy + n_alleles - 1, n_alleles - 1);
     }
     if (width > UINT32_MAX) {
-        PyErr_SetString(PyExc_ValueError, "BGEN probability width is too large.");
+        *error_message = "BGEN probability width is too large.";
         return -1;
     }
     *value = (uint32_t)width;
     return 0;
+}
+
+static int
+max_probabilities(unsigned int ploidy, unsigned int n_alleles, int phased, uint32_t *value)
+{
+    const char *error_message = NULL;
+    int status = max_probabilities_impl(
+        ploidy,
+        n_alleles,
+        phased,
+        value,
+        &error_message);
+    if (status < 0) {
+        PyErr_SetString(PyExc_ValueError, error_message);
+    }
+    return status;
 }
 
 static uint32_t
@@ -463,6 +544,7 @@ read_variant_payload(
     int *zstream_initialized,
     BgenLibdeflateApi *libdeflate,
     BgenLibdeflateDecompressor **libdeflate_decompressor,
+    BgenZstdApi *zstd,
     const unsigned char **payload,
     Py_ssize_t *payload_len)
 {
@@ -487,13 +569,7 @@ read_variant_payload(
         PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: compressed length field is truncated.");
         return -1;
     }
-    if (compression == 2) {
-        PyErr_SetString(
-            PyExc_NotImplementedError,
-            "Native bulk BGEN reading currently supports uncompressed and zlib-compressed files.");
-        return -1;
-    }
-    if (compression != 1) {
+    if (compression != 1 && compression != 2) {
         PyErr_SetString(PyExc_ValueError, "Unsupported BGEN compression flag.");
         return -1;
     }
@@ -507,6 +583,27 @@ read_variant_payload(
         }
         if (ensure_byte_capacity(payload_buffer, payload_capacity, (size_t)expected_len) < 0) {
             return -1;
+        }
+        if (compression == 2) {
+            size_t actual_len;
+            if (zstd == NULL || !zstd->available) {
+                PyErr_SetString(
+                    PyExc_NotImplementedError,
+                    "Native BGEN zstd decompression requires a shared libzstd library.");
+                return -1;
+            }
+            actual_len = zstd->decompress(
+                *payload_buffer,
+                (size_t)expected_len,
+                *block_buffer + 4,
+                (size_t)(block_len - 4U));
+            if (zstd->is_error(actual_len) || actual_len != (size_t)expected_len) {
+                PyErr_SetString(PyExc_ValueError, "BGEN genotype block decompressed to the wrong size.");
+                return -1;
+            }
+            *payload = *payload_buffer;
+            *payload_len = (Py_ssize_t)expected_len;
+            return 0;
         }
         if (libdeflate != NULL && libdeflate->available) {
             size_t actual_len = 0;
@@ -563,6 +660,57 @@ read_variant_payload(
 }
 
 static int
+parse_layout2_info_impl(
+    const unsigned char *data,
+    Py_ssize_t data_len,
+    uint32_t expected_samples,
+    uint16_t expected_alleles,
+    Layout2Info *info,
+    const char **error_message)
+{
+    Py_ssize_t prob_offset;
+    if (data_len < 10) {
+        *error_message = "Malformed BGEN genotype block: layout-2 header is truncated.";
+        return -1;
+    }
+    info->n_samples = read_u32_le(data);
+    info->n_alleles = read_u16_le(data + 4);
+    if (info->n_samples != expected_samples || info->n_alleles != expected_alleles) {
+        *error_message = "Malformed BGEN genotype block: sample or allele count mismatch.";
+        return -1;
+    }
+    info->min_ploidy = data[6];
+    info->max_ploidy = data[7];
+    if (8 + (Py_ssize_t)info->n_samples + 2 > data_len) {
+        *error_message = "Malformed BGEN genotype block: ploidy bytes are truncated.";
+        return -1;
+    }
+    info->ploidy_bytes = data + 8;
+    info->phased = (int)data[8 + info->n_samples];
+    info->bit_depth = data[8 + info->n_samples + 1];
+    if (info->bit_depth < 1 || info->bit_depth > 32) {
+        *error_message = "BGEN probability bit depth must be between 1 and 32.";
+        return -1;
+    }
+    if (max_probabilities_impl(
+            info->max_ploidy,
+            info->n_alleles,
+            info->phased,
+            &info->width,
+            error_message) < 0) {
+        return -1;
+    }
+    if (info->width == 0) {
+        *error_message = "BGEN probability width cannot be zero.";
+        return -1;
+    }
+    prob_offset = 10 + (Py_ssize_t)info->n_samples;
+    info->probabilities = data + prob_offset;
+    info->probabilities_len = data_len - prob_offset;
+    return 0;
+}
+
+static int
 parse_layout2_info(
     const unsigned char *data,
     Py_ssize_t data_len,
@@ -570,41 +718,18 @@ parse_layout2_info(
     uint16_t expected_alleles,
     Layout2Info *info)
 {
-    Py_ssize_t prob_offset;
-    if (data_len < 10) {
-        PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: layout-2 header is truncated.");
-        return -1;
+    const char *error_message = NULL;
+    int status = parse_layout2_info_impl(
+        data,
+        data_len,
+        expected_samples,
+        expected_alleles,
+        info,
+        &error_message);
+    if (status < 0) {
+        PyErr_SetString(PyExc_ValueError, error_message);
     }
-    info->n_samples = read_u32_le(data);
-    info->n_alleles = read_u16_le(data + 4);
-    if (info->n_samples != expected_samples || info->n_alleles != expected_alleles) {
-        PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: sample or allele count mismatch.");
-        return -1;
-    }
-    info->min_ploidy = data[6];
-    info->max_ploidy = data[7];
-    if (8 + (Py_ssize_t)info->n_samples + 2 > data_len) {
-        PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: ploidy bytes are truncated.");
-        return -1;
-    }
-    info->ploidy_bytes = data + 8;
-    info->phased = (int)data[8 + info->n_samples];
-    info->bit_depth = data[8 + info->n_samples + 1];
-    if (info->bit_depth < 1 || info->bit_depth > 32) {
-        PyErr_SetString(PyExc_ValueError, "BGEN probability bit depth must be between 1 and 32.");
-        return -1;
-    }
-    if (max_probabilities(info->max_ploidy, info->n_alleles, info->phased, &info->width) < 0) {
-        return -1;
-    }
-    if (info->width == 0) {
-        PyErr_SetString(PyExc_ValueError, "BGEN probability width cannot be zero.");
-        return -1;
-    }
-    prob_offset = 10 + (Py_ssize_t)info->n_samples;
-    info->probabilities = data + prob_offset;
-    info->probabilities_len = data_len - prob_offset;
-    return 0;
+    return status;
 }
 
 static double
@@ -721,30 +846,41 @@ decode_phased_biallelic8_probabilities_avx2(const unsigned char *bits, uint32_t 
 #endif
 
 static int
-decode_layout2_probabilities_into(
+decode_layout2_probabilities_into_impl(
     const unsigned char *data,
     Py_ssize_t data_len,
     uint32_t expected_samples,
     uint16_t expected_alleles,
     uint32_t output_width,
-    float *out)
+    float *out,
+    const char **error_message,
+    uint32_t *actual_width)
 {
     Layout2Info info;
     uint64_t bit_offset = 0;
     double denominator;
 
-    if (parse_layout2_info(data, data_len, expected_samples, expected_alleles, &info) < 0) {
+    if (parse_layout2_info_impl(
+            data,
+            data_len,
+            expected_samples,
+            expected_alleles,
+            &info,
+            error_message) < 0) {
         return -1;
     }
+    if (actual_width != NULL) {
+        *actual_width = info.width;
+    }
     if (output_width != 0 && info.width > output_width) {
-        PyErr_SetString(PyExc_ValueError, "Native bulk BGEN probability reader encountered a probability width larger than the allocated output width.");
+        *error_message = "Native bulk BGEN probability reader encountered a probability width larger than the allocated output width.";
         return -1;
     }
 
 #if BGEN_HAVE_AVX2
     if (output_width == 4 && info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 16) {
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 4U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         if (bgen_cpu_has_avx2() && ploidy_all_value_avx2(info.ploidy_bytes, info.n_samples, 2)) {
@@ -757,7 +893,7 @@ decode_layout2_probabilities_into(
 #if BGEN_HAVE_AVX2
     if (output_width == 4 && info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 8) {
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         if (bgen_cpu_has_avx2() && ploidy_all_value_avx2(info.ploidy_bytes, info.n_samples, 2)) {
@@ -770,7 +906,7 @@ decode_layout2_probabilities_into(
     if (info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 16) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 4U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -799,7 +935,7 @@ decode_layout2_probabilities_into(
     if (info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && !info.phased && info.bit_depth == 16) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 4U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -827,7 +963,7 @@ decode_layout2_probabilities_into(
     if (info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 8) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -856,7 +992,7 @@ decode_layout2_probabilities_into(
     if (info.n_alleles == 2 && info.min_ploidy == 2 && info.max_ploidy == 2 && !info.phased && info.bit_depth == 8) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -889,7 +1025,7 @@ decode_layout2_probabilities_into(
         float *row = out + ((uint64_t)sample * (uint64_t)output_width);
 
         if (ploidy < info.min_ploidy || ploidy > info.max_ploidy) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: sample ploidy is out of range.");
+            *error_message = "Malformed BGEN genotype block: sample ploidy is out of range.";
             return -1;
         }
 
@@ -898,7 +1034,12 @@ decode_layout2_probabilities_into(
             uint32_t sample_width;
             uint32_t stored;
             double remainder = 1.0;
-            if (max_probabilities(ploidy, info.n_alleles, 0, &sample_width) < 0) {
+            if (max_probabilities_impl(
+                    ploidy,
+                    info.n_alleles,
+                    0,
+                    &sample_width,
+                    error_message) < 0) {
                 return -1;
             }
             stored = sample_width > 0 ? sample_width - 1 : 0;
@@ -906,7 +1047,7 @@ decode_layout2_probabilities_into(
                 int ok = 1;
                 uint32_t raw = read_bits_lsb(info.probabilities, info.probabilities_len, bit_offset, info.bit_depth, &ok);
                 if (!ok) {
-                    PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+                    *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
                     return -1;
                 }
                 bit_offset += info.bit_depth;
@@ -926,7 +1067,7 @@ decode_layout2_probabilities_into(
                     int ok = 1;
                     uint32_t raw = read_bits_lsb(info.probabilities, info.probabilities_len, bit_offset, info.bit_depth, &ok);
                     if (!ok) {
-                        PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+                        *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
                         return -1;
                     }
                     bit_offset += info.bit_depth;
@@ -946,29 +1087,61 @@ decode_layout2_probabilities_into(
 }
 
 static int
-decode_layout2_dosage_into(
+decode_layout2_probabilities_into(
     const unsigned char *data,
     Py_ssize_t data_len,
     uint32_t expected_samples,
     uint16_t expected_alleles,
+    uint32_t output_width,
     float *out)
+{
+    const char *error_message = NULL;
+    int status = decode_layout2_probabilities_into_impl(
+        data,
+        data_len,
+        expected_samples,
+        expected_alleles,
+        output_width,
+        out,
+        &error_message,
+        NULL);
+    if (status < 0) {
+        PyErr_SetString(PyExc_ValueError, error_message);
+    }
+    return status;
+}
+
+static int
+decode_layout2_dosage_into_impl(
+    const unsigned char *data,
+    Py_ssize_t data_len,
+    uint32_t expected_samples,
+    uint16_t expected_alleles,
+    float *out,
+    const char **error_message)
 {
     Layout2Info info;
     uint64_t bit_offset = 0;
     double denominator;
 
-    if (parse_layout2_info(data, data_len, expected_samples, expected_alleles, &info) < 0) {
+    if (parse_layout2_info_impl(
+            data,
+            data_len,
+            expected_samples,
+            expected_alleles,
+            &info,
+            error_message) < 0) {
         return -1;
     }
     if (info.n_alleles != 2) {
-        PyErr_SetString(PyExc_ValueError, "Native BGEN dosage reading currently supports biallelic variants.");
+        *error_message = "Native BGEN dosage reading currently supports biallelic variants.";
         return -1;
     }
 
     if (info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 16) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 4U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -987,7 +1160,7 @@ decode_layout2_dosage_into(
     if (info.min_ploidy == 2 && info.max_ploidy == 2 && !info.phased && info.bit_depth == 16) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 4U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -1008,7 +1181,7 @@ decode_layout2_dosage_into(
     if (info.min_ploidy == 2 && info.max_ploidy == 2 && info.phased && info.bit_depth == 8) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -1027,7 +1200,7 @@ decode_layout2_dosage_into(
     if (info.min_ploidy == 2 && info.max_ploidy == 2 && !info.phased && info.bit_depth == 8) {
         const unsigned char *bits = info.probabilities;
         if ((uint64_t)info.probabilities_len < (uint64_t)info.n_samples * 2U) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+            *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
             return -1;
         }
         for (uint32_t sample = 0; sample < info.n_samples; sample++) {
@@ -1053,7 +1226,7 @@ decode_layout2_dosage_into(
         double dosage = 0.0;
 
         if (ploidy < info.min_ploidy || ploidy > info.max_ploidy) {
-            PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: sample ploidy is out of range.");
+            *error_message = "Malformed BGEN genotype block: sample ploidy is out of range.";
             return -1;
         }
 
@@ -1061,7 +1234,12 @@ decode_layout2_dosage_into(
             uint32_t sample_width;
             uint32_t stored;
             double remainder = 1.0;
-            if (max_probabilities(ploidy, info.n_alleles, 0, &sample_width) < 0) {
+            if (max_probabilities_impl(
+                    ploidy,
+                    info.n_alleles,
+                    0,
+                    &sample_width,
+                    error_message) < 0) {
                 return -1;
             }
             stored = sample_width > 0 ? sample_width - 1 : 0;
@@ -1069,7 +1247,7 @@ decode_layout2_dosage_into(
                 int ok = 1;
                 uint32_t raw = read_bits_lsb(info.probabilities, info.probabilities_len, bit_offset, info.bit_depth, &ok);
                 if (!ok) {
-                    PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+                    *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
                     return -1;
                 }
                 bit_offset += info.bit_depth;
@@ -1090,7 +1268,7 @@ decode_layout2_dosage_into(
                 int ok = 1;
                 uint32_t raw = read_bits_lsb(info.probabilities, info.probabilities_len, bit_offset, info.bit_depth, &ok);
                 if (!ok) {
-                    PyErr_SetString(PyExc_ValueError, "Malformed BGEN genotype block: probability bits are truncated.");
+                    *error_message = "Malformed BGEN genotype block: probability bits are truncated.";
                     return -1;
                 }
                 bit_offset += info.bit_depth;
@@ -1104,10 +1282,426 @@ decode_layout2_dosage_into(
     return 0;
 }
 
+static int
+decode_layout2_dosage_into(
+    const unsigned char *data,
+    Py_ssize_t data_len,
+    uint32_t expected_samples,
+    uint16_t expected_alleles,
+    float *out)
+{
+    const char *error_message = NULL;
+    int status = decode_layout2_dosage_into_impl(
+        data,
+        data_len,
+        expected_samples,
+        expected_alleles,
+        out,
+        &error_message);
+    if (status < 0) {
+        PyErr_SetString(PyExc_ValueError, error_message);
+    }
+    return status;
+}
+
+#if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
+typedef struct {
+    size_t payload_offset;
+    uint32_t block_len;
+    uint16_t n_alleles;
+} BgenDosageRecord;
+
+typedef struct {
+    const unsigned char *file_data;
+    const BgenDosageRecord *records;
+    uint32_t start_variant;
+    uint32_t end_variant;
+    uint32_t n_samples;
+    uint32_t compression;
+    uint32_t output_width;
+    uint32_t required_output_width;
+    int return_probabilities;
+    float *out;
+    BgenLibdeflateApi *libdeflate;
+    BgenZstdApi *zstd;
+    int error_kind;
+    const char *error_message;
+} BgenDosageTask;
+
+enum {
+    BGEN_WORKER_ERROR_NONE = 0,
+    BGEN_WORKER_ERROR_VALUE = 1,
+    BGEN_WORKER_ERROR_MEMORY = 2,
+    BGEN_WORKER_ERROR_NOT_IMPLEMENTED = 3
+};
+
+static int
+memory_skip(size_t *offset, size_t data_len, size_t amount, const char **error_message)
+{
+    if (*offset > data_len || amount > data_len - *offset) {
+        *error_message = "Malformed BGEN file: variant data are truncated.";
+        return -1;
+    }
+    *offset += amount;
+    return 0;
+}
+
+static int
+memory_skip_len_prefixed_text(
+    const unsigned char *data,
+    size_t data_len,
+    size_t *offset,
+    int len_size,
+    const char **error_message)
+{
+    uint32_t text_len;
+    if (memory_skip(offset, data_len, (size_t)len_size, error_message) < 0) {
+        return -1;
+    }
+    text_len = len_size == 2
+        ? (uint32_t)read_u16_le(data + *offset - 2)
+        : read_u32_le(data + *offset - 4);
+    return memory_skip(offset, data_len, (size_t)text_len, error_message);
+}
+
+static int
+index_dosage_records(
+    const unsigned char *data,
+    size_t data_len,
+    const BgenHeader *header,
+    BgenDosageRecord *records,
+    const char **error_message)
+{
+    size_t offset = (size_t)header->first_variant_offset;
+
+    for (uint32_t variant = 0; variant < header->n_variants; variant++) {
+        uint16_t n_alleles;
+        uint32_t block_len;
+
+        if (memory_skip_len_prefixed_text(data, data_len, &offset, 2, error_message) < 0
+                || memory_skip_len_prefixed_text(data, data_len, &offset, 2, error_message) < 0
+                || memory_skip_len_prefixed_text(data, data_len, &offset, 2, error_message) < 0
+                || memory_skip(&offset, data_len, 4, error_message) < 0
+                || memory_skip(&offset, data_len, 2, error_message) < 0) {
+            return -1;
+        }
+        n_alleles = read_u16_le(data + offset - 2);
+        for (uint16_t allele = 0; allele < n_alleles; allele++) {
+            if (memory_skip_len_prefixed_text(data, data_len, &offset, 4, error_message) < 0) {
+                return -1;
+            }
+        }
+        if (memory_skip(&offset, data_len, 4, error_message) < 0) {
+            return -1;
+        }
+        block_len = read_u32_le(data + offset - 4);
+        records[variant].payload_offset = offset;
+        records[variant].block_len = block_len;
+        records[variant].n_alleles = n_alleles;
+        if (memory_skip(&offset, data_len, (size_t)block_len, error_message) < 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void *
+bgen_decode_worker(void *argument)
+{
+    BgenDosageTask *task = (BgenDosageTask *)argument;
+    unsigned char *payload_buffer = NULL;
+    size_t payload_capacity = 0;
+    z_stream zstream;
+    int zstream_initialized = 0;
+    BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
+
+    memset(&zstream, 0, sizeof(zstream));
+    for (uint32_t variant = task->start_variant; variant < task->end_variant; variant++) {
+        const BgenDosageRecord *record = &task->records[variant];
+        const unsigned char *block = task->file_data + record->payload_offset;
+        const unsigned char *payload = block;
+        Py_ssize_t payload_len = (Py_ssize_t)record->block_len;
+
+        if (task->compression != 0) {
+            uint32_t expected_len;
+            int zlib_status;
+            if (record->block_len < 4) {
+                task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                task->error_message = "Malformed BGEN genotype block: compressed length field is truncated.";
+                break;
+            }
+            if (task->compression != 1 && task->compression != 2) {
+                task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                task->error_message = "Unsupported BGEN compression flag.";
+                break;
+            }
+
+            expected_len = read_u32_le(block);
+            if ((size_t)expected_len > payload_capacity) {
+                unsigned char *resized = (unsigned char *)realloc(
+                    payload_buffer,
+                    expected_len == 0 ? 1 : (size_t)expected_len);
+                if (resized == NULL) {
+                    task->error_kind = BGEN_WORKER_ERROR_MEMORY;
+                    task->error_message = "Could not allocate a BGEN decompression buffer.";
+                    break;
+                }
+                payload_buffer = resized;
+                payload_capacity = (size_t)expected_len;
+            }
+
+            if (task->compression == 2) {
+                size_t actual_len;
+                if (task->zstd == NULL || !task->zstd->available) {
+                    task->error_kind = BGEN_WORKER_ERROR_NOT_IMPLEMENTED;
+                    task->error_message = "Native BGEN zstd decompression requires a shared libzstd library.";
+                    break;
+                }
+                actual_len = task->zstd->decompress(
+                    payload_buffer,
+                    (size_t)expected_len,
+                    block + 4,
+                    (size_t)(record->block_len - 4U));
+                if (task->zstd->is_error(actual_len) || actual_len != (size_t)expected_len) {
+                    task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                    task->error_message = "BGEN genotype block decompressed to the wrong size.";
+                    break;
+                }
+            } else if (task->libdeflate != NULL && task->libdeflate->available) {
+                size_t actual_len = 0;
+                if (libdeflate_decompressor == NULL) {
+                    libdeflate_decompressor = task->libdeflate->alloc_decompressor();
+                    if (libdeflate_decompressor == NULL) {
+                        task->error_kind = BGEN_WORKER_ERROR_MEMORY;
+                        task->error_message = "Could not allocate a BGEN libdeflate decompressor.";
+                        break;
+                    }
+                }
+                zlib_status = task->libdeflate->zlib_decompress(
+                    libdeflate_decompressor,
+                    block + 4,
+                    (size_t)(record->block_len - 4U),
+                    payload_buffer,
+                    (size_t)expected_len,
+                    &actual_len);
+                if (zlib_status != 0 || actual_len != (size_t)expected_len) {
+                    task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                    task->error_message = "BGEN genotype block decompressed to the wrong size.";
+                    break;
+                }
+            } else {
+                if (!zstream_initialized) {
+                    zlib_status = inflateInit(&zstream);
+                    if (zlib_status != Z_OK) {
+                        task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                        task->error_message = "Could not initialize BGEN zlib decompressor.";
+                        break;
+                    }
+                    zstream_initialized = 1;
+                } else if (inflateReset(&zstream) != Z_OK) {
+                    task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                    task->error_message = "Could not reset BGEN zlib decompressor.";
+                    break;
+                }
+                zstream.next_in = (Bytef *)(block + 4);
+                zstream.avail_in = (uInt)(record->block_len - 4U);
+                zstream.next_out = payload_buffer;
+                zstream.avail_out = (uInt)expected_len;
+                zlib_status = inflate(&zstream, Z_FINISH);
+                if (zlib_status != Z_STREAM_END || zstream.total_out != (uLong)expected_len) {
+                    task->error_kind = BGEN_WORKER_ERROR_VALUE;
+                    task->error_message = "BGEN genotype block decompressed to the wrong size.";
+                    break;
+                }
+            }
+            payload = payload_buffer;
+            payload_len = (Py_ssize_t)expected_len;
+        }
+
+        int decode_status;
+        if (task->return_probabilities) {
+            uint32_t actual_width = 0;
+            decode_status = decode_layout2_probabilities_into_impl(
+                payload,
+                payload_len,
+                task->n_samples,
+                record->n_alleles,
+                task->output_width,
+                task->out
+                    + (uint64_t)variant
+                    * (uint64_t)task->n_samples
+                    * (uint64_t)task->output_width,
+                &task->error_message,
+                &actual_width);
+            if (decode_status < 0 && actual_width > task->output_width) {
+                if (actual_width > task->required_output_width) {
+                    task->required_output_width = actual_width;
+                }
+                task->error_message = NULL;
+                continue;
+            }
+        } else {
+            decode_status = decode_layout2_dosage_into_impl(
+                payload,
+                payload_len,
+                task->n_samples,
+                record->n_alleles,
+                task->out + (uint64_t)variant * (uint64_t)task->n_samples,
+                &task->error_message);
+        }
+        if (decode_status < 0) {
+            task->error_kind = BGEN_WORKER_ERROR_VALUE;
+            break;
+        }
+    }
+
+    if (libdeflate_decompressor != NULL) {
+        task->libdeflate->free_decompressor(libdeflate_decompressor);
+    }
+    if (zstream_initialized) {
+        inflateEnd(&zstream);
+    }
+    free(payload_buffer);
+    return NULL;
+}
+
+static int
+read_file_parallel(
+    FILE *fp,
+    const BgenHeader *header,
+    float *out,
+    uint32_t output_width,
+    int return_probabilities,
+    int requested_threads,
+    BgenLibdeflateApi *libdeflate,
+    BgenZstdApi *zstd,
+    uint32_t *required_output_width)
+{
+    struct stat file_stat;
+    size_t file_size;
+    unsigned char *file_data = MAP_FAILED;
+    BgenDosageRecord *records = NULL;
+    BgenDosageTask *tasks = NULL;
+    pthread_t *thread_ids = NULL;
+    uint32_t thread_count;
+    uint32_t created_threads = 0;
+    int create_failed = 0;
+    int status = -1;
+    const char *error_message = NULL;
+
+    if (header->n_variants == 0) {
+        return 0;
+    }
+    thread_count = (uint32_t)requested_threads;
+    if (thread_count > header->n_variants) {
+        thread_count = header->n_variants;
+    }
+    if (fstat(fileno(fp), &file_stat) != 0) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        goto cleanup;
+    }
+    if (file_stat.st_size < 0 || (uintmax_t)file_stat.st_size > (uintmax_t)SIZE_MAX) {
+        PyErr_SetString(PyExc_MemoryError, "BGEN file is too large to memory-map.");
+        goto cleanup;
+    }
+    file_size = (size_t)file_stat.st_size;
+    file_data = (unsigned char *)mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fileno(fp), 0);
+    if (file_data == MAP_FAILED) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        goto cleanup;
+    }
+    if ((size_t)header->n_variants > SIZE_MAX / sizeof(*records)) {
+        PyErr_NoMemory();
+        goto cleanup;
+    }
+    records = (BgenDosageRecord *)malloc((size_t)header->n_variants * sizeof(*records));
+    tasks = (BgenDosageTask *)calloc((size_t)thread_count, sizeof(*tasks));
+    thread_ids = (pthread_t *)malloc((size_t)thread_count * sizeof(*thread_ids));
+    if (records == NULL || tasks == NULL || thread_ids == NULL) {
+        PyErr_NoMemory();
+        goto cleanup;
+    }
+    if (index_dosage_records(file_data, file_size, header, records, &error_message) < 0) {
+        PyErr_SetString(PyExc_ValueError, error_message);
+        goto cleanup;
+    }
+
+    for (uint32_t thread = 0; thread < thread_count; thread++) {
+        BgenDosageTask *task = &tasks[thread];
+        task->file_data = file_data;
+        task->records = records;
+        task->start_variant = (uint32_t)(((uint64_t)thread * header->n_variants) / thread_count);
+        task->end_variant = (uint32_t)(((uint64_t)(thread + 1U) * header->n_variants) / thread_count);
+        task->n_samples = header->n_samples;
+        task->compression = header->compression;
+        task->output_width = output_width;
+        task->required_output_width = output_width;
+        task->return_probabilities = return_probabilities;
+        task->out = out;
+        task->libdeflate = libdeflate;
+        task->zstd = zstd;
+    }
+
+#if BGEN_HAVE_AVX2
+    (void)bgen_cpu_has_avx2();
+#endif
+    Py_BEGIN_ALLOW_THREADS
+    for (uint32_t thread = 0; thread < thread_count; thread++) {
+        if (pthread_create(&thread_ids[thread], NULL, bgen_decode_worker, &tasks[thread]) != 0) {
+            create_failed = 1;
+            break;
+        }
+        created_threads++;
+    }
+    for (uint32_t thread = 0; thread < created_threads; thread++) {
+        pthread_join(thread_ids[thread], NULL);
+    }
+    Py_END_ALLOW_THREADS
+
+    if (create_failed) {
+        PyErr_SetString(PyExc_RuntimeError, "Could not create the requested BGEN reader threads.");
+        goto cleanup;
+    }
+    for (uint32_t thread = 0; thread < thread_count; thread++) {
+        if (tasks[thread].error_kind == BGEN_WORKER_ERROR_MEMORY) {
+            PyErr_NoMemory();
+            goto cleanup;
+        }
+        if (tasks[thread].error_kind == BGEN_WORKER_ERROR_NOT_IMPLEMENTED) {
+            PyErr_SetString(PyExc_NotImplementedError, tasks[thread].error_message);
+            goto cleanup;
+        }
+        if (tasks[thread].error_kind != BGEN_WORKER_ERROR_NONE) {
+            PyErr_SetString(PyExc_ValueError, tasks[thread].error_message);
+            goto cleanup;
+        }
+        if (required_output_width != NULL
+                && tasks[thread].required_output_width > *required_output_width) {
+            *required_output_width = tasks[thread].required_output_width;
+        }
+    }
+    if (required_output_width != NULL && *required_output_width > output_width) {
+        status = 1;
+        goto cleanup;
+    }
+    status = 0;
+
+cleanup:
+    free(thread_ids);
+    free(tasks);
+    free(records);
+    if (file_data != MAP_FAILED) {
+        munmap(file_data, file_size);
+    }
+    return status;
+}
+#endif
+
 static PyObject *
 read_file_probabilities(PyObject *self, PyObject *args)
 {
     const char *path;
+    int threads = 1;
     FILE *fp = NULL;
     BgenHeader header;
     unsigned char *block_buffer = NULL;
@@ -1123,8 +1717,13 @@ read_file_probabilities(PyObject *self, PyObject *args)
     int zstream_initialized = 0;
     BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
     BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
+    BgenZstdApi *zstd = bgen_get_zstd_api();
 
-    if (!PyArg_ParseTuple(args, "s", &path)) {
+    if (!PyArg_ParseTuple(args, "s|i", &path, &threads)) {
+        return NULL;
+    }
+    if (threads < 1) {
+        PyErr_SetString(PyExc_ValueError, "BGEN probability reader threads must be at least 1.");
         return NULL;
     }
     fp = fopen(path, "rb");
@@ -1156,11 +1755,13 @@ read_file_probabilities(PyObject *self, PyObject *args)
         have_out_view = 1;
     }
 
-    for (uint32_t variant = 0; variant < header.n_variants; variant++) {
+    if (header.n_variants > 0) {
         uint16_t n_alleles;
         uint32_t block_len;
         const unsigned char *payload;
         Py_ssize_t payload_len;
+        Layout2Info info;
+        Py_ssize_t dims[3];
 
         if (read_variant_prefix(fp, &n_alleles, &block_len) < 0
                 || read_variant_payload(
@@ -1175,27 +1776,66 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     &zstream_initialized,
                     libdeflate,
                     &libdeflate_decompressor,
+                    zstd,
                     &payload,
                     &payload_len) < 0) {
             goto error;
         }
 
-        if (variant == 0) {
-            Layout2Info info;
-            Py_ssize_t dims[3];
-            if (parse_layout2_info(payload, payload_len, header.n_samples, n_alleles, &info) < 0) {
-                goto error;
+        if (parse_layout2_info(payload, payload_len, header.n_samples, n_alleles, &info) < 0) {
+            goto error;
+        }
+        out_width = info.width;
+        dims[0] = (Py_ssize_t)header.n_variants;
+        dims[1] = (Py_ssize_t)header.n_samples;
+        dims[2] = (Py_ssize_t)out_width;
+        out_obj = allocate_numpy_float32_array(3, dims, &out_view);
+        if (out_obj == NULL) {
+            goto error;
+        }
+        have_out_view = 1;
+        out = (float *)out_view.buf;
+
+        if (threads > 1) {
+#if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
+            for (;;) {
+                uint32_t required_width = out_width;
+                int parallel_status = read_file_parallel(
+                    fp,
+                    &header,
+                    out,
+                    out_width,
+                    1,
+                    threads,
+                    libdeflate,
+                    zstd,
+                    &required_width);
+                if (parallel_status < 0) {
+                    goto error;
+                }
+                if (parallel_status == 0) {
+                    break;
+                }
+                PyBuffer_Release(&out_view);
+                have_out_view = 0;
+                Py_DECREF(out_obj);
+                out_obj = NULL;
+                out_width = required_width;
+                dims[2] = (Py_ssize_t)out_width;
+                out_obj = allocate_numpy_float32_array(3, dims, &out_view);
+                if (out_obj == NULL) {
+                    goto error;
+                }
+                have_out_view = 1;
+                out = (float *)out_view.buf;
             }
-            out_width = info.width;
-            dims[0] = (Py_ssize_t)header.n_variants;
-            dims[1] = (Py_ssize_t)header.n_samples;
-            dims[2] = (Py_ssize_t)out_width;
-            out_obj = allocate_numpy_float32_array(3, dims, &out_view);
-            if (out_obj == NULL) {
-                goto error;
-            }
-            have_out_view = 1;
-            out = (float *)out_view.buf;
+            goto success;
+#else
+            PyErr_SetString(
+                PyExc_NotImplementedError,
+                "Multithreaded BGEN probability reading is unavailable on this platform.");
+            goto error;
+#endif
         }
 
         if (decode_layout2_probabilities_into(
@@ -1204,11 +1844,45 @@ read_file_probabilities(PyObject *self, PyObject *args)
                 header.n_samples,
                 n_alleles,
                 out_width,
-                out + (uint64_t)variant * (uint64_t)header.n_samples * (uint64_t)out_width) < 0) {
+                out) < 0) {
             goto error;
+        }
+
+        for (uint32_t variant = 1; variant < header.n_variants; variant++) {
+            if (read_variant_prefix(fp, &n_alleles, &block_len) < 0
+                    || read_variant_payload(
+                        fp,
+                        header.compression,
+                        block_len,
+                        &block_buffer,
+                        &block_capacity,
+                        &payload_buffer,
+                        &payload_capacity,
+                        &zstream,
+                        &zstream_initialized,
+                        libdeflate,
+                        &libdeflate_decompressor,
+                        zstd,
+                        &payload,
+                        &payload_len) < 0) {
+                goto error;
+            }
+            if (decode_layout2_probabilities_into(
+                    payload,
+                    payload_len,
+                    header.n_samples,
+                    n_alleles,
+                    out_width,
+                    out
+                        + (uint64_t)variant
+                        * (uint64_t)header.n_samples
+                        * (uint64_t)out_width) < 0) {
+                goto error;
+            }
         }
     }
 
+success:
     if (have_out_view) {
         PyBuffer_Release(&out_view);
         have_out_view = 0;
@@ -1247,6 +1921,7 @@ static PyObject *
 read_file_dosage(PyObject *self, PyObject *args)
 {
     const char *path;
+    int threads = 1;
     FILE *fp = NULL;
     BgenHeader header;
     unsigned char *block_buffer = NULL;
@@ -1262,8 +1937,13 @@ read_file_dosage(PyObject *self, PyObject *args)
     int zstream_initialized = 0;
     BgenLibdeflateApi *libdeflate = bgen_get_libdeflate_api();
     BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
+    BgenZstdApi *zstd = bgen_get_zstd_api();
 
-    if (!PyArg_ParseTuple(args, "s", &path)) {
+    if (!PyArg_ParseTuple(args, "s|i", &path, &threads)) {
+        return NULL;
+    }
+    if (threads < 1) {
+        PyErr_SetString(PyExc_ValueError, "BGEN dosage reader threads must be at least 1.");
         return NULL;
     }
     fp = fopen(path, "rb");
@@ -1291,6 +1971,23 @@ read_file_dosage(PyObject *self, PyObject *args)
     have_out_view = 1;
     out = (float *)out_view.buf;
 
+    if (threads > 1) {
+#if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
+        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd, NULL) < 0) {
+            goto error;
+        }
+        PyBuffer_Release(&out_view);
+        have_out_view = 0;
+        fclose(fp);
+        return Py_BuildValue("NII", out_obj, header.n_variants, header.n_samples);
+#else
+        PyErr_SetString(
+            PyExc_NotImplementedError,
+            "Multithreaded BGEN dosage reading is unavailable on this platform.");
+        goto error;
+#endif
+    }
+
     for (uint32_t variant = 0; variant < header.n_variants; variant++) {
         uint16_t n_alleles;
         uint32_t block_len;
@@ -1310,6 +2007,7 @@ read_file_dosage(PyObject *self, PyObject *args)
                     &zstream_initialized,
                     libdeflate,
                     &libdeflate_decompressor,
+                    zstd,
                     &payload,
                     &payload_len) < 0) {
             goto error;

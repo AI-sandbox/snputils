@@ -1,12 +1,46 @@
+from __future__ import annotations
+
 import struct
+import zlib
 
 import numpy as np
 import pytest
 
 from snputils import BCFReader, read_bcf, read_snp
 from snputils._utils.genotypes import sum_diploid_genotypes
-from snputils.snp.io.read.bcf import _batch_decode_gt, _build_indiv_offsets, _read_bgzf_or_gzip
+from snputils.snp.io.read.bcf import (
+    _BCFHeader,
+    _batch_decode_gt,
+    _build_indiv_offsets,
+    _decode_gt_array,
+    _read_bgzf_or_gzip,
+)
 from snputils.snp.io.write.bcf import _encode_typed_int_list, _encode_typed_string
+
+
+def _make_bgzf_block(
+    payload: bytes,
+    *,
+    isize: int | None = None,
+    crc32: int | None = None,
+) -> bytes:
+    compressor = zlib.compressobj(wbits=-15)
+    compressed = compressor.compress(payload) + compressor.flush()
+    block_size = 12 + 6 + len(compressed) + 8
+    header = (
+        b"\x1f\x8b\x08\x04"
+        + b"\x00\x00\x00\x00"
+        + b"\x00\xff"
+        + (6).to_bytes(2, "little")
+        + b"BC"
+        + (2).to_bytes(2, "little")
+        + (block_size - 1).to_bytes(2, "little")
+    )
+    trailer = (
+        (zlib.crc32(payload) if crc32 is None else crc32).to_bytes(4, "little")
+        + (len(payload) if isize is None else isize).to_bytes(4, "little")
+    )
+    return header + compressed + trailer
 
 
 def test_bcf_reader_matches_vcf_genotypes_and_metadata(snpobj_bcf, snpobj_vcf):
@@ -59,15 +93,54 @@ def test_bcf_reader_supports_dosage_genotypes(data_path, snpobj_vcf):
 
 
 def test_bcf_reader_gt_only_sample_selection(data_path, snpobj_vcf):
-    snpobj = BCFReader(data_path + "/bcf/subset.bcf").read(
+    reader = BCFReader(data_path + "/bcf/subset.bcf")
+    snpobj = reader.read(
         fields=["GT"],
         sample_idxs=[3, 0],
         genotype_mode="dosage",
     )
+    parallel = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
 
     expected = sum_diploid_genotypes(snpobj_vcf.genotypes[:, [3, 0], :])
     np.testing.assert_array_equal(snpobj.genotypes, expected)
+    np.testing.assert_array_equal(parallel.genotypes, expected)
     assert snpobj.samples is None
+
+    serial_phased = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="phased",
+    )
+    parallel_phased = reader.read(
+        fields=["GT"],
+        sample_idxs=[3, 0],
+        genotype_mode="phased",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_phased.genotypes, serial_phased.genotypes)
+    np.testing.assert_array_equal(parallel_phased.genotypes, snpobj_vcf.genotypes[:, [3, 0], :])
+
+    with pytest.raises(ValueError, match="at least 1"):
+        reader.read(fields=["GT"], genotype_mode="dosage", threads=0)
+    parallel_with_metadata = reader.read(
+        fields=["GT", "POS", "IID"],
+        sample_idxs=[3, 0],
+        genotype_mode="dosage",
+        chromosome_ploidy="autosomal",
+        threads=2,
+    )
+    np.testing.assert_array_equal(parallel_with_metadata.genotypes, expected)
+    np.testing.assert_array_equal(parallel_with_metadata.variants_pos, snpobj_vcf.variants_pos)
+    np.testing.assert_array_equal(
+        parallel_with_metadata.samples,
+        np.array(["HG00100", "HG00096"], dtype=object),
+    )
 
 
 def test_bcf_reader_core_field_subset(data_path, snpobj_vcf):
@@ -115,6 +188,24 @@ def test_bgzf_extra_subfield_length_cannot_exceed_xlen(tmp_path):
         _read_bgzf_or_gzip(path)
 
 
+@pytest.mark.parametrize("threads", [1, 2])
+def test_bgzf_isize_cannot_exceed_64_kib(tmp_path, threads):
+    path = tmp_path / "oversized_isize.bcf"
+    path.write_bytes(_make_bgzf_block(b"BCF", isize=65_537))
+
+    with pytest.raises(ValueError, match="ISIZE exceeds the 64 KiB limit"):
+        _read_bgzf_or_gzip(path, threads=threads)
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_bgzf_crc32_is_validated(tmp_path, threads):
+    path = tmp_path / "bad_crc.bcf"
+    path.write_bytes(_make_bgzf_block(b"BCF", crc32=0))
+
+    with pytest.raises(ValueError, match="CRC32 checksum does not match"):
+        _read_bgzf_or_gzip(path, threads=threads)
+
+
 def test_build_indiv_offsets_rejects_truncated_record_headers():
     with pytest.raises(ValueError, match="record header is truncated"):
         _build_indiv_offsets(b"\x00" * 7, 0)
@@ -141,14 +232,132 @@ def test_batch_decode_haploid_dosage_preserves_values():
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
 
 
+def test_python_gt_decoders_treat_int8_vector_end_as_missing():
+    gt_values = bytes([2, 0x81, 4, 3])
+    expected = np.array([[[0, -1], [1, 0]]], dtype=np.int8)
+
+    per_record = _decode_gt_array(
+        gt_values,
+        0,
+        n_samples=2,
+        n_vals=2,
+        type_size=1,
+        require_phase=True,
+    )
+    batched = _batch_decode_gt(
+        data=gt_values,
+        indiv_offsets=np.array([0], dtype=np.int64),
+        gt_data_rel_offset=0,
+        n_vals=2,
+        type_size=1,
+        n_samples=2,
+        n_records=1,
+        sample_index_array=np.array([0, 1], dtype=int),
+        return_dosage=False,
+    )
+
+    np.testing.assert_array_equal(per_record, expected[0])
+    np.testing.assert_array_equal(batched, expected)
+
+
+def test_c_decode_gt_treats_int8_vector_end_as_missing():
+    _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
+    gt_values = bytes([2, 0x81, 4, 3])
+    record = struct.pack("<II", 0, len(gt_values)) + gt_values
+    data = record * 2
+    expected = np.tile(
+        np.array([[[0, -1], [1, 0]]], dtype=np.int8),
+        (2, 1, 1),
+    )
+
+    for threads in (1, 2):
+        gt_buffer, n_records = _bcf.decode_gt(
+            data,
+            0,
+            0,
+            2,
+            2,
+            1,
+            len(gt_values),
+            None,
+            False,
+            threads,
+        )
+        observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 2, 2)
+        np.testing.assert_array_equal(observed, expected)
+
+
+def test_varying_format_layout_warns_and_uses_serial_gt_decoder():
+    samples = np.array(["s1", "s2"], dtype=object)
+    header = _BCFHeader(
+        samples=samples,
+        contigs={0: "1"},
+        filters={},
+        info={},
+        formats={1: {"ID": "GT"}, 2: {"ID": "DP"}},
+    )
+
+    def format_field(key, values):
+        return _encode_typed_int_list([key]) + b"\x21" + bytes(values)
+
+    shared = struct.pack("<iiIfII", 0, 9, 1, 12.5, 2 << 16, (2 << 24) | 2)
+    first_indiv = format_field(1, [2, 3, 4, 5]) + format_field(2, [20, 20, 20, 20])
+    second_indiv = format_field(2, [20, 20, 20, 20]) + format_field(1, [4, 3, 2, 5])
+    data = (
+        struct.pack("<II", len(shared), len(first_indiv))
+        + shared
+        + first_indiv
+        + struct.pack("<II", len(shared), len(second_indiv))
+        + shared
+        + second_indiv
+    )
+
+    with pytest.warns(RuntimeWarning, match="FORMAT layouts vary"):
+        observed = BCFReader("unused.bcf")._read_all(
+            data,
+            0,
+            header,
+            samples,
+            np.array([0, 1]),
+            ["GT"],
+            return_dosage=False,
+            detect_non_diploid=False,
+            threads=2,
+        )
+    serial = BCFReader("unused.bcf")._read_all(
+        data,
+        0,
+        header,
+        samples,
+        np.array([0, 1]),
+        ["GT"],
+        return_dosage=False,
+        detect_non_diploid=False,
+        threads=1,
+    )
+
+    expected = np.array(
+        [
+            [[0, 0], [1, 1]],
+            [[1, 0], [0, 1]],
+        ],
+        dtype=np.int8,
+    )
+    np.testing.assert_array_equal(observed.genotypes, expected)
+    np.testing.assert_array_equal(serial.genotypes, expected)
+
+
 def test_c_decode_gt_haploid_dosage_preserves_values():
     _bcf = pytest.importorskip("snputils.snp.io.read._bcf")
     data = struct.pack("<II", 0, 3) + bytes([2, 4, 0])
 
     gt_buffer, n_records = _bcf.decode_gt(data, 0, 0, 3, 1, 1, 3, None, True)
     observed = np.frombuffer(gt_buffer, dtype=np.int8).reshape(n_records, 3)
+    parallel_buffer, parallel_n_records = _bcf.decode_gt(data, 0, 0, 3, 1, 1, 3, None, True, 2)
+    parallel = np.frombuffer(parallel_buffer, dtype=np.int8).reshape(parallel_n_records, 3)
 
     np.testing.assert_array_equal(observed, np.array([[0, 1, -1]], dtype=np.int8))
+    np.testing.assert_array_equal(parallel, observed)
 
 
 def test_c_decode_core_haploid_dosage_and_missing_pass_fallback():

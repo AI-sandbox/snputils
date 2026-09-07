@@ -1,10 +1,19 @@
+import inspect
+
 import numpy as np
+import pytest
 
 from snputils.snp.io.read import BEDReader, PGENReader
-from snputils.snp.io.read.vcf import VCFReaderPolars
+from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
 from snputils.stats import allele_freq_stream
 
 MAX_VARIANTS = 10_000
+
+
+@pytest.mark.parametrize("reader_cls", [BEDReader, PGENReader, VCFReader])
+def test_iter_read_preserves_positional_chunk_size(reader_cls):
+    parameters = list(inspect.signature(reader_cls.iter_read).parameters)
+    assert parameters[-2:] == ["chunk_size", "threads"]
 
 
 def _concat_chunks(chunks):
@@ -39,7 +48,7 @@ def test_bed_iter_read_reconstructs_eager_object(data_path):
     subset = _first_n_variant_idxs(reader)
 
     eager_subset = reader.read(genotype_mode="dosage", variant_idxs=subset)
-    chunks = list(reader.iter_read(genotype_mode="dosage", variant_idxs=subset, chunk_size=300))
+    chunks = list(reader.iter_read(genotype_mode="dosage", variant_idxs=subset, threads=4, chunk_size=300))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -103,7 +112,7 @@ def test_pgen_iter_read_reconstructs_subset_eager_object(data_path):
     subset = np.array([0, 1, 2, 5, 9, 20, 21, 45, 80], dtype=np.uint32)
 
     eager_subset = reader.read(genotype_mode="phased", variant_idxs=subset)
-    chunks = list(reader.iter_read(genotype_mode="phased", variant_idxs=subset, chunk_size=3))
+    chunks = list(reader.iter_read(genotype_mode="phased", variant_idxs=subset, threads=4, chunk_size=3))
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
@@ -163,6 +172,41 @@ def test_vcf_polars_iter_read_reconstructs_eager_object(data_path, tmp_path):
     reader = VCFReaderPolars(str(mini_vcf))
     eager = reader.read(genotype_mode="phased")
     chunks = list(reader.iter_read(genotype_mode="phased", chunk_size=300))
+
+    assert len(chunks) > 1
+    gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)
+
+    np.testing.assert_array_equal(gt, eager.genotypes)
+    np.testing.assert_array_equal(var_id, eager.variants_id)
+    np.testing.assert_array_equal(var_pos, eager.variants_pos)
+    np.testing.assert_array_equal(var_ref, eager.variants_ref)
+    np.testing.assert_array_equal(var_alt, eager.variants_alt)
+    np.testing.assert_array_equal(var_chrom, eager.variants_chrom)
+    np.testing.assert_array_equal(chunks[0].samples, eager.samples)
+
+
+@pytest.mark.parametrize("genotype_mode", ["phased", "dosage"])
+def test_vcf_iter_read_reconstructs_eager_object_with_threads(
+    data_path,
+    tmp_path,
+    genotype_mode,
+):
+    mini_vcf = tmp_path / "subset_10k_native.vcf"
+    _write_vcf_head(data_path + "/vcf/subset.vcf", mini_vcf, n_variants=MAX_VARIANTS)
+    reader = VCFReader(str(mini_vcf))
+    chromosome_ploidy = "autosomal" if genotype_mode == "dosage" else None
+    eager = reader.read(
+        genotype_mode=genotype_mode,
+        chromosome_ploidy=chromosome_ploidy,
+    )
+    chunks = list(
+        reader.iter_read(
+            genotype_mode=genotype_mode,
+            chromosome_ploidy=chromosome_ploidy,
+            threads=4,
+            chunk_size=300,
+        )
+    )
 
     assert len(chunks) > 1
     gt, var_id, var_pos, var_ref, var_alt, var_chrom = _concat_chunks(chunks)

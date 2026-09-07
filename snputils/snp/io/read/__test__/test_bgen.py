@@ -1,7 +1,10 @@
+import struct
+
 import numpy as np
 import pytest
 
 from snputils import BGENReader, read_bgen, read_snp
+from snputils.snp.io.read import bgen as bgen_module
 from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
 
@@ -14,6 +17,25 @@ def test_bgen_reader_preserves_probabilities(snpobj_bgen, snpobj_vcf):
 
     expected_dosage = sum_diploid_genotypes(snpobj_vcf.genotypes[:100], dtype=np.int16)
     np.testing.assert_allclose(snpobj_bgen.dosage(), expected_dosage, atol=1 / 255)
+
+
+def test_bgen_bulk_probability_read_reports_missing_native_extension(monkeypatch):
+    monkeypatch.setattr(bgen_module, "_native_bgen", None)
+
+    with pytest.raises(ImportError, match="compiled snputils.snp.io._bgen extension"):
+        BGENReader("unused.bgen").read(fields=["GP"], threads=2)
+
+
+def test_bgen_missing_native_extension_keeps_serial_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "empty.bgen"
+    path.write_bytes(struct.pack("<IIII4sI", 20, 20, 0, 0, b"bgen", 2 << 2))
+    monkeypatch.setattr(bgen_module, "_native_bgen", None)
+
+    snpobj = BGENReader(path).read(fields=["GP"], threads=1)
+    dosage = BGENReader(path).read_dosage(threads=1)
+
+    assert snpobj.calldata_gp.shape == (0, 0, 0)
+    assert dosage.shape == (0, 0)
 
 
 def test_bgen_reader_matches_vcf_metadata(snpobj_bgen, snpobj_vcf):

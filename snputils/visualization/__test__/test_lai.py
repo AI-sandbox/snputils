@@ -3,10 +3,11 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from snputils.visualization.constants import CHROM_SIZES
+from snputils.visualization.constants import CHROM_SIZES, snputils_palette
 from snputils.visualization.lai import plot_lai
 
 
@@ -85,3 +86,35 @@ def test_plot_lai_scales_chromosome_widths_from_constants():
     actual_ratio = first_width / second_width
     assert np.isclose(actual_ratio, expected_ratio, rtol=1e-6)
     plt.close(ax.figure)
+
+
+def test_plot_lai_uses_snputils_palette_when_colors_are_omitted():
+    laiobj = LocalAncestryObject(
+        haplotypes=["sample0.0", "sample0.1"],
+        lai=np.array([[0, 1], [1, 0]], dtype=np.int8),
+        samples=["sample0"],
+        ancestry_map={"0": "AFR", "1": "EUR"},
+    )
+
+    plot_lai(
+        laiobj,
+        sort=False,
+        figsize=(4, 2),
+        legend=True,
+        scale=1,
+    )
+
+    ax = plt.gca()
+    legend = ax.get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == ["AFR", "EUR"]
+    assert [patch.get_facecolor() for patch in legend.get_patches()] == [
+        mcolors.to_rgba(color) for color in snputils_palette[:2]
+    ]
+    plt.close(ax.figure)
+
+
+def test_plot_lai_is_available_from_viz_namespace():
+    from snputils import viz
+
+    assert viz.plot_lai is plot_lai

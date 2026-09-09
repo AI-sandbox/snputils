@@ -5,7 +5,7 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as patches
 
 from snputils.ancestry.genobj.local import LocalAncestryObject
-from snputils.visualization.constants import CHROM_SIZES
+from snputils.visualization.constants import CHROM_SIZES, build_palette_mapping
 
 
 def _custom_cmap(colors: Dict, padding: float = 1.05):
@@ -71,7 +71,7 @@ def _infer_chromosome_size_build(
 
 def plot_lai(
     laiobj: LocalAncestryObject, 
-    colors: Dict,
+    colors: Optional[Dict]=None,
     sort: Optional[bool]=True,
     figsize: Optional[Tuple[float, float]]=None,
     legend: Optional[bool]=False,
@@ -88,7 +88,9 @@ def plot_lai(
 
     Args:
         laiobj: A LocalAncestryObject containing LAI data.
-        colors: A dictionary with ancestry-color mapping.
+        colors: An optional dictionary mapping ancestry labels to colors. If None,
+            colors are assigned from the snputils palette in ancestry-map order.
+            Defaults to None.
         sort: If True, sort samples based on the most frequent ancestry. 
             Samples are displayed with the most predominant ancestry first, followed by the 
             second most predominant, and so on. Defaults to True.
@@ -180,6 +182,9 @@ def plot_lai(
     else:
         # The ancestry_map is already in the correct integer-to-ancestry format
         ancestry_map_reverse = laiobj.ancestry_map
+
+    if colors is None:
+        colors = build_palette_mapping(ancestry_map_reverse.values())
     
     # Dictionary with integer-to-color mapping
     colors_map = {key : colors[value] for key, value in ancestry_map_reverse.items()}

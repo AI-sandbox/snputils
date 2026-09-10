@@ -24,13 +24,21 @@ su.viz.scatter(
 Raster plot where each row is a sample (two phased haplotypes) and each column is a genomic window.
 
 ```python
-colors = {0: "steelblue", 1: "tomato", 2: "gold"}
-
 su.viz.plot_lai(
     laiobj=laiobj,
-    colors=colors,
     legend=True,
     title="Local Ancestry",
+)
+```
+
+By default, ancestry labels are assigned colors from the snputils palette in
+the order they appear in `laiobj.ancestry_map`. Pass a label-to-color mapping to
+`colors` when you need a custom palette:
+
+```python
+su.viz.plot_lai(
+    laiobj,
+    colors={"AFR": "steelblue", "EUR": "tomato", "AMR": "gold"},
 )
 ```
 

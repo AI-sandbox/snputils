@@ -90,7 +90,6 @@ autodoc_mock_imports = [
     "pgenlib",
     "plotly",
     "plotly_express",
-    "polars",
     "pygrgl",
     "scipy",
     "sklearn",

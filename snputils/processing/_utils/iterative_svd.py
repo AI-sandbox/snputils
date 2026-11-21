@@ -19,7 +19,7 @@ import copy
 import logging
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 
-from .solver import Solver
+from .solver import ALLOW_NAN, Solver
 from .common import masked_mse
 
 F32PREC = np.finfo(np.float32).eps
@@ -81,7 +81,7 @@ class IterativeSVD(Solver):
     def solve(self, X, missing_mask):
         if self.choose_best:
             cv_errors = []
-            X = check_array(X, force_all_finite=False)
+            X = check_array(X, **ALLOW_NAN)
             observed_mask = ~missing_mask
             validation_mask = self.create_validation_mask(X, missing_mask)
             net_missing_mask = missing_mask + validation_mask
@@ -163,7 +163,7 @@ class IterativeSVD(Solver):
             return X_filled
         
         else:
-            X = check_array(X, force_all_finite=False)
+            X = check_array(X, **ALLOW_NAN)
             observed_mask = ~missing_mask
             X_filled = copy.deepcopy(X)
             curr_rank = self.rank

@@ -10,10 +10,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import warnings
 import numpy as np
 from sklearn.utils import check_array
 from .common import generate_random_column_samples
+
+# scikit-learn 1.6 renamed force_all_finite to ensure_all_finite; 1.8 removed the old name.
+if "ensure_all_finite" in inspect.signature(check_array).parameters:
+    ALLOW_NAN = {"ensure_all_finite": False}
+else:
+    ALLOW_NAN = {"force_all_finite": False}
 
 
 class Solver(object):
@@ -90,7 +97,7 @@ class Solver(object):
         inplace : bool
             Modify matrix or fill a copy
         """
-        X = check_array(X, force_all_finite=False)
+        X = check_array(X, **ALLOW_NAN)
 
         if not inplace:
             X = X.copy()
@@ -121,7 +128,7 @@ class Solver(object):
         Check to make sure that the input matrix and its mask of missing
         values are valid. Returns X and missing mask.
         """
-        X = check_array(X, force_all_finite=False)
+        X = check_array(X, **ALLOW_NAN)
         if X.dtype != "f" and X.dtype != "d":
             X = X.astype(float)
 

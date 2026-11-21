@@ -1,6 +1,9 @@
+import inspect
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
+import polars as pl
 import pytest
 
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
@@ -50,21 +53,23 @@ def test_vcf_polars_accepts_chrom_field_aliases(
     assert np.array_equal(snpobj.variants_pos, np.array([100, 200]))
 
 
-def test_vcf_polars_passes_threads_to_csv_parser(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("threads", [None, 2])
+def test_vcf_polars_csv_parser_threads(tmp_path: Path, monkeypatch, threads, caplog) -> None:
     vcf_path = tmp_path / "tiny_threads.vcf"
     _write_tiny_vcf(vcf_path, "#CHROM")
-    observed_n_threads = []
-    read_csv = __import__("polars").read_csv
+    supports_n_threads = "n_threads" in inspect.signature(pl.read_csv).parameters
+    read_csv = Mock(wraps=pl.read_csv)
+    monkeypatch.setattr(pl, "read_csv", read_csv)
+    snpobj = VCFReaderPolars(vcf_path).read(genotype_mode="phased", threads=threads)
 
-    def recording_read_csv(*args, **kwargs):
-        observed_n_threads.append(kwargs.get("n_threads"))
-        return read_csv(*args, **kwargs)
-
-    monkeypatch.setattr("snputils.snp.io.read.vcf.pl.read_csv", recording_read_csv)
-    snpobj = VCFReaderPolars(vcf_path).read(genotype_mode="phased", threads=2)
-
-    assert observed_n_threads == [2]
+    read_csv.assert_called_once()
+    if supports_n_threads:
+        assert read_csv.call_args.kwargs["n_threads"] == threads
+    else:
+        assert "n_threads" not in read_csv.call_args.kwargs
+    np.testing.assert_array_equal(snpobj.variants_filter_pass, ["PASS", "PASS"])
     assert snpobj.genotypes.shape == (2, 2, 2)
+    assert ("POLARS_MAX_THREADS" in caplog.text) == (threads is not None and not supports_n_threads)
 
 
 def test_vcf_polars_fallback_uses_single_native_reader_thread(tmp_path: Path, monkeypatch) -> None:

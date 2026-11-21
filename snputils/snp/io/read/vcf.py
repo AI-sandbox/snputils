@@ -1,3 +1,4 @@
+import inspect
 import logging
 from typing import Optional, List, Any, Union, Iterator, Tuple, Dict, Sequence
 from pathlib import Path
@@ -19,6 +20,9 @@ from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.base import SNPBaseReader
 import pathlib 
 log = logging.getLogger(__name__)
+
+
+_POLARS_CSV_HAS_N_THREADS = "n_threads" in inspect.signature(pl.read_csv).parameters
 
 
 _UNPHASED_VCF_PHASED_ERROR = (
@@ -2590,9 +2594,9 @@ class VCFReaderPolars(SNPBaseReader):
                 preserves existing behavior.
             separator: Separator used in the pvar file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
-            threads: Number of threads used by the eager Polars CSV parser. The
-                default None preserves Polars' automatic thread selection. This
-                does not control subsequent Polars genotype transformations.
+            threads: Number of CSV parser threads on Polars 1.x. None lets Polars
+                choose. Polars 2.x uses its process-wide thread pool for CSV reads.
+                Set POLARS_MAX_THREADS before starting Python to size that pool.
 
         Returns:
             snpobj: SNPObject containing the data from the VCF file. The format and content
@@ -2653,7 +2657,16 @@ class VCFReaderPolars(SNPBaseReader):
                     chrom_idx = list(col_dtypes).index(chrom_column)
                     selected_column_idxs = sorted(set(selected_column_idxs + [chrom_idx]))
 
-            # Read the VCF file into a Polars DataFrame
+            thread_options = {}
+            if _POLARS_CSV_HAS_N_THREADS:
+                thread_options["n_threads"] = threads
+            elif threads is not None:
+                log.warning(
+                    "Polars uses its process-wide thread pool for this read. "
+                    "Set POLARS_MAX_THREADS=%d before starting Python to select its size.",
+                    threads,
+                )
+
             vcf = pl.read_csv(
                 self._filename,
                 comment_prefix="##",
@@ -2661,7 +2674,7 @@ class VCFReaderPolars(SNPBaseReader):
                 separator=detected_separator,
                 columns=selected_column_idxs,
                 schema_overrides=col_dtypes,
-                n_threads=threads,
+                **thread_options,
             )
 
             log.debug("vcf polars read")

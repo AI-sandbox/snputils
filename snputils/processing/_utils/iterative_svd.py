@@ -72,7 +72,9 @@ class IterativeSVD(Solver):
     def create_validation_mask(self, X, missing_mask):
         observed_mask = ~missing_mask
         idx = np.flatnonzero(observed_mask)
-        sampling = random.sample(list(idx), k=int(len(idx)*0.01))
+        if len(idx) < 2:
+            raise ValueError("Rank cross-validation requires at least two observed entries.")
+        sampling = random.sample(list(idx), k=max(1, len(idx) // 100))
         validation_mask = np.zeros(observed_mask.shape[0] * observed_mask.shape[1], dtype=bool)
         validation_mask[sampling] = True
         validation_mask = validation_mask.reshape(observed_mask.shape)
@@ -80,8 +82,15 @@ class IterativeSVD(Solver):
     
     def solve(self, X, missing_mask):
         if self.choose_best:
-            cv_errors = []
             X = check_array(X, **ALLOW_NAN)
+            end_rank = self.end_rank
+            if self.svd_algorithm == "arpack":
+                end_rank = min(end_rank, min(X.shape) - 1)
+            if not 1 <= self.start_rank <= end_rank:
+                raise ValueError(
+                    f"Invalid rank range {self.start_rank}..{self.end_rank} for "
+                    f"{self.svd_algorithm} on a matrix with shape {X.shape}."
+                )
             observed_mask = ~missing_mask
             validation_mask = self.create_validation_mask(X, missing_mask)
             net_missing_mask = missing_mask + validation_mask
@@ -123,7 +132,7 @@ class IterativeSVD(Solver):
                             curr_rank, cv_error))
                 return cv_error
 
-            ranks = np.arange(self.start_rank, self.end_rank+1)
+            ranks = np.arange(self.start_rank, end_rank + 1)
 #             pool = mp.Pool(self.num_cores)
 #             cv_errors = pool.map(cross_validation, ranks)
 #             pool.close()

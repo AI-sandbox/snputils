@@ -85,7 +85,6 @@ autodoc_mock_imports = [
     "joblib",
     "matplotlib",
     "nbformat",
-    "numpy",
     "pandas",
     "pgenlib",
     "plotly",

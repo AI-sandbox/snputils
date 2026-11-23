@@ -2520,8 +2520,9 @@ class VCFReaderPolars(SNPBaseReader):
         gt = vcf.select(sample_columns)
         formats = vcf["FORMAT"].unique().to_list()
         if formats != ["GT"]:
-            indexes = {fmt: _format_gt_index(fmt) for fmt in formats}
-            index = pl.col("FORMAT").replace_strict(indexes, return_dtype=pl.Int64)
+            # GT is optional per record. A null index yields a missing call for every sample.
+            indexes = {fmt: _format_gt_index(fmt) for fmt in formats if fmt and "GT" in fmt.split(":")}
+            index = pl.col("FORMAT").replace_strict(indexes, default=None, return_dtype=pl.Int64)
             gt = vcf.select(pl.col(sample_columns).str.split(":").list.get(index, null_on_oob=True))
 
         if not return_dosage and gt.select(pl.all().str.contains("/", literal=True).any()).to_numpy().any():

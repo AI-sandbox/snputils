@@ -19,6 +19,29 @@ def _write_tiny_vcf(path: Path, chrom_header: str) -> None:
     )
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["eager", "streaming"])
+@pytest.mark.parametrize("mode", ["phased", "dosage"])
+def test_polars_preserves_records_without_gt(tmp_path, streaming, mode, caplog):
+    path = tmp_path / "missing_gt.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+        "1\t10\t.\tA\tC\t.\tPASS\t.\tGT\t0|1\t1|1\n"
+        "1\t20\t.\tA\tC\t.\tPASS\t.\tDP\t.\t23\n"
+        "1\t30\t.\tA\tC\t.\tPASS\t.\tGT:DP\t1|0:8\t0|0:9\n"
+    )
+    reader = VCFReaderPolars(path)
+    kwargs = dict(fields=["POS"], genotype_mode=mode)
+    chunks = list(reader.iter_read(chunk_size=1, **kwargs)) if streaming else [reader.read(**kwargs)]
+    expected = (
+        [[[0, 1], [1, 1]], [[-1, -1], [-1, -1]], [[1, 0], [0, 0]]]
+        if mode == "phased" else [[1, 2], [-1, -1], [1, 0]]
+    )
+    np.testing.assert_array_equal(np.concatenate([chunk.variants_pos for chunk in chunks]), [10, 20, 30])
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected)
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
 @pytest.mark.parametrize("chrom_header", ["#CHROM", "CHROM"])
 def test_vcf_polars_reads_sample_names_for_both_chrom_headers(tmp_path: Path, chrom_header: str) -> None:
     vcf_path = tmp_path / f"tiny_{chrom_header.replace('#', 'hash_')}.vcf"

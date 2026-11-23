@@ -73,7 +73,8 @@ class mdPCA:
                 - `'cov_matrix_imputation_ils'`: 
                     The method of 'cov_matrix_imputation', but where afterwards missing samples are re-projected onto the space 
                     given by 'cov_matrix_imputation' using the same iterative method on the original covariance matrix just 
-                    as done in 'regularized_optimization_ils'. At least one sample must have all SNPs observed.
+                    as done in 'regularized_optimization_ils'. To project incomplete samples, the scores of the
+                    fully observed samples must span all requested components.
                     A pair of samples needs at least two shared SNPs to contribute to the projection.
                 - `'nonmissing_pca_ils'`: 
                     The method of 'weighted_cov_pca' on the non-missing samples, followed by the projection of missing samples onto 
@@ -142,8 +143,9 @@ class mdPCA:
             rsid_or_chrompos (int, default=2): 
                 Format indicator for SNP IDs in `self.__X_new_`. Use 1 for `rsID` format or 2 for `chromosome_position`.
             percent_vals_masked (float, default=0): 
-                Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
-                `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
+                Percentage of covariance entries to mask for `'cov_matrix_imputation'` or
+                `'cov_matrix_imputation_ils'`. Both entries of each off-diagonal pair are
+                masked together, rounding down if the cutoff would split a pair.
         """
         if labels is not None:
             if labels_file is not None:
@@ -774,8 +776,8 @@ class mdPCA:
 
     @staticmethod
     def _iterative_svd_matrix_completion(cov):
-        num_masked = np.isnan(cov).sum()
-        if num_masked > 0:
+        missing = np.isnan(cov)
+        if missing.any():
             start_time = time.time()
             start_rank = 1
             end_rank = 10
@@ -783,6 +785,10 @@ class mdPCA:
             choose_best = True
             num_cores = 5
             cov_complete = IterativeSVD(start_rank=start_rank, end_rank=end_rank, rank=rank, choose_best=choose_best, num_cores=num_cores).fit_transform(cov)
+            # A missing pair gets one estimate. If its mirror was observed, use that value.
+            mirror = cov.T[missing]
+            pair_mean = (cov_complete[missing] + cov_complete.T[missing]) / 2
+            cov_complete[missing] = np.where(np.isnan(mirror), pair_mean, mirror)
             logging.info("Iterative SVD --- %s seconds ---" % (time.time() - start_time))
         else:
             cov_complete = cov
@@ -834,14 +840,22 @@ class mdPCA:
         masked_inds_val = sorted(list(set(masked_inds_new) - set(masked_inds)))
         return X_incomplete, masked_inds_val
 
-    @staticmethod    
+    @staticmethod
     def _create_cov_mask(cov, strength_mat, percent_vals_masked):
-        cov_flattened = cov.reshape(-1).copy()
-        num_vals_masked = int(percent_vals_masked * len(cov_flattened) / 100)
-        pos_masked = strength_mat.reshape(-1).argsort()[:num_vals_masked]
-        cov_flattened[pos_masked] = np.nan
-        cov_masked = cov_flattened.reshape(cov.shape)
-        return cov_masked
+        """Mask the weakest pairs, rounding down if the cell budget would split a pair."""
+        masked = cov.copy()
+        budget = int(percent_vals_masked * cov.size / 100)
+        if budget == 0:
+            return masked
+
+        rows, cols = np.triu_indices_from(cov)
+        order = np.argsort(strength_mat[rows, cols], kind="stable")[:budget]
+        pair_sizes = np.where(rows[order] == cols[order], 1, 2)
+        selected = order[np.cumsum(pair_sizes) <= budget]
+        i, j = rows[selected], cols[selected]
+        masked[i, j] = np.nan
+        masked[j, i] = np.nan
+        return masked
 
     def _regularized_optimization_ils(self, X_incomplete, covariance_matrix_file, n_components):
         def run_cov_matrix_regularized_optimization_ils(X_incomplete, covariance_matrix_file):
@@ -937,6 +951,12 @@ class mdPCA:
         fitted = np.flatnonzero(missing_counts == 0)
         if not fitted.size:
             raise ValueError("cov_matrix_imputation_ils requires at least one fully observed sample.")
+        missing = np.flatnonzero(missing_counts)
+        if missing.size and fitted.size < n_components:
+            raise ValueError(
+                f"Projecting {n_components} components requires at least {n_components} fully observed samples, "
+                f"but found {fitted.size}."
+            )
 
         observed, completed, strength = self._complete_covariance(X_incomplete, percent_vals_masked)
         # Use imputed entries to compute centering offsets for incomplete rows.
@@ -947,16 +967,22 @@ class mdPCA:
         observed[undefined] = np.nan
 
         scores = self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
-        missing = np.flatnonzero(missing_counts)
         for i in missing[np.argsort(missing_counts[missing], kind="stable")]:
             neighbors = fitted[np.isfinite(observed[i, fitted])]
             if not neighbors.size:
                 raise ValueError(f"Cannot project sample at index {i}: no previously fitted sample "
                                  "shares at least two observed SNPs with it.")
             weights = strength[i, neighbors]
-            scores[i] = np.linalg.lstsq(
+            projected, _, rank, _ = np.linalg.lstsq(
                 scores[neighbors] * weights[:, None], observed[i, neighbors] * weights, rcond=None
-            )[0]
+            )
+            if rank < n_components:
+                raise ValueError(
+                    f"Cannot project sample at index {i}: the weighted sample scores have rank {rank} "
+                    f"for {n_components} requested components. Reduce n_components or include more "
+                    "independent fully observed samples."
+                )
+            scores[i] = projected
             fitted = np.append(fitted, i)
         return scores
 

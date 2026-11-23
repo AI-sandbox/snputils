@@ -42,3 +42,12 @@ def test_iterative_svd_cannot_cross_validate_one_observation():
     matrix = np.array([[1., np.nan], [np.nan, np.nan]])
     with pytest.raises(ValueError, match="at least two observed entries"):
         IterativeSVD(init_fill_method="zero").fit_transform(matrix)
+
+
+def test_covariance_completion_averages_estimates_and_preserves_observed_mirrors(monkeypatch):
+    cov = np.array([[4, np.nan, 1], [np.nan, 5, 2], [np.nan, 2, 6]])
+    estimates = np.array([[4., 0.5, 1.], [1.5, 5., 2.], [0.4, 2., 6.]])
+    monkeypatch.setattr(IterativeSVD, "fit_transform", lambda self, matrix: estimates.copy())
+
+    completed = mdPCA._iterative_svd_matrix_completion(cov)
+    np.testing.assert_array_equal(completed, [[4, 1, 1], [1, 5, 2], [1, 2, 6]])

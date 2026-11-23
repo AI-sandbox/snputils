@@ -4,6 +4,38 @@ import pytest
 from snputils.processing.mdpca import mdPCA
 
 
+def test_imputed_covariance_stays_symmetric_with_tied_overlap(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    genotypes = np.random.default_rng(182).binomial(1, 0.3, size=(12, 60)).astype(float)
+    genotypes[8:, :10] = np.nan
+    model = mdPCA()
+    observed, completed, strength = model._complete_covariance(genotypes, percent_vals_masked=20)
+    masked = np.isnan(model._create_cov_mask(observed, strength, 20))
+
+    np.testing.assert_array_equal(masked, masked.T)
+    assert masked.sum() == 28
+    assert strength[masked].max() <= strength[~masked].min()
+    np.testing.assert_array_equal(completed[~masked], observed[~masked])
+    np.testing.assert_array_equal(completed, completed.T)
+    assert np.isfinite(completed).all()
+
+    path = tmp_path / "cov.npy"
+    model._fit_completed_covariance(completed, path, n_components=2)
+    centered = np.load(path)
+    np.testing.assert_array_equal(centered, centered.T)
+    np.testing.assert_allclose(centered.mean(axis=0), 0, atol=1e-6)
+
+
+def test_covariance_mask_counts_diagonals_once_and_keeps_pairs_whole():
+    strength = np.array([[0.25, 0.25, 0.25], [0.25, 1, 1], [0.25, 1, 1]])
+    cov = np.eye(3)
+    # The weakest diagonal costs one cell and the next pair costs two.
+    for percent, expected_count in [(0, 0), (23, 1), (34, 3), (100, 9)]:
+        masked = np.isnan(mdPCA._create_cov_mask(cov, strength, percent))
+        np.testing.assert_array_equal(masked, masked.T)
+        assert masked.sum() == expected_count
+
+
 def test_ils_fits_completed_covariance_and_projects_observed_covariances(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     genotypes = np.random.default_rng(182).binomial(2, 0.3, size=(12, 60)).astype(float)
@@ -36,6 +68,32 @@ def test_ils_requires_a_complete_sample():
     model = mdPCA(method="cov_matrix_imputation_ils", n_components=1)
     with pytest.raises(ValueError, match="at least one fully observed"):
         model._run_cov_matrix(genotypes, np.ones(3))
+
+
+@pytest.mark.parametrize(("n_complete", "message"), [
+    (1, "at least 2 fully observed samples"),
+    (4, "rank 1 for 2 requested components"),
+])
+def test_ils_rejects_insufficient_projection_rank(n_complete, message):
+    genotypes = np.random.default_rng(182).binomial(1, 0.3, size=(12, 60)).astype(float)
+    genotypes[:n_complete] = genotypes[0].copy()
+    incomplete = np.arange(n_complete, len(genotypes))
+    genotypes[incomplete, incomplete] = np.nan
+
+    model = mdPCA(method="cov_matrix_imputation_ils", n_components=2)
+    with pytest.raises(ValueError, match=message):
+        model._run_cov_matrix(genotypes, np.ones(len(genotypes)))
+
+
+@pytest.mark.parametrize("n_components", [1, 2])
+def test_ils_accepts_one_independent_complete_sample_per_component(n_components):
+    genotypes = np.random.default_rng(182).binomial(1, 0.3, size=(12, 60)).astype(float)
+    incomplete = np.arange(n_components, len(genotypes))
+    genotypes[incomplete, incomplete] = np.nan
+
+    model = mdPCA(method="cov_matrix_imputation_ils", n_components=n_components)
+    scores = model._run_cov_matrix(genotypes, np.ones(len(genotypes)))
+    assert np.linalg.matrix_rank(scores) == n_components
 
 
 @pytest.mark.parametrize("method", ["cov_matrix_imputation", "cov_matrix_imputation_ils"])

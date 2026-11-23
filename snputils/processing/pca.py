@@ -509,6 +509,41 @@ class PCA:
         if self.snpobj is not None:
             self.fit_transform(snpobj)
 
+    def __setstate__(self, state):
+        """Restore models saved before projection caches and variant order were recorded."""
+        self._cached_input = None
+        self._cached_row_ids = None
+        self._fitted_variant_order = None
+        self.__sample_row_ids = None
+        self.__dict__.update(state)
+        if "_PCA__sample_row_ids" in state or self.haplotypes_ is None:
+            return
+
+        from .dimred_tabular import pca_row_individual_ids
+
+        labels = self.haplotypes_
+        original_ids = set()
+        if self.snpobj is not None and self.snpobj.samples is not None:
+            original_ids = set(map(str, self.snpobj.samples))
+        samples = labels.copy()
+        if labels and not all(label in original_ids for label in labels):
+            # Old models could keep only the row labels. Expanded rows were written
+            # as contiguous sample|0, sample|1, ... groups.
+            candidates = pca_row_individual_ids(labels)
+            ploidy = 0
+            for i, label in enumerate(labels):
+                if label != f"{candidates[0]}|{i}":
+                    break
+                ploidy += 1
+            if ploidy and len(labels) % ploidy == 0 and all(
+                label == f"{candidates[i - i % ploidy]}|{i % ploidy}"
+                for i, label in enumerate(labels)
+            ) and (ploidy > 1 or not self.average_haplotypes):
+                samples = candidates
+        self.__sample_row_ids = samples
+        if self.X_ is not None and len(samples) == self.X_.shape[0]:
+            self._cached_row_ids = samples, labels.copy()
+
     @property
     def snpobj(self) -> Optional['SNPObject']:
         """
@@ -1039,7 +1074,9 @@ class PCA:
             snps_subset (int or array-like, optional):
                 Variants to use for projection. This must match the variant set
                 and order used during fitting. Across inputs without variant identifiers
-                or genomic coordinates, the selected positions must match.
+                or genomic coordinates, the selected positions must match. For models
+                saved before fitted variant order was recorded, refit before applying
+                a SNP selection. The saved matrix can still be projected directly.
 
         Returns:
             tensor or array:
@@ -1058,8 +1095,11 @@ class PCA:
             matrix = self._prepare_matrix(source)
         if self.components_ is not None:
             _validate_projection_shape(matrix, self.components_)
-        if source is not None and self._fitted_variant_order is not None:
-            self._fitted_variant_order.validate(_VariantOrder.from_input(source))
+        if source is not None:
+            if self._fitted_variant_order is not None:
+                self._fitted_variant_order.validate(_VariantOrder.from_input(source))
+            elif self.components_ is not None and source.snps_subset is not None:
+                raise ValueError("Refit this saved PCA model to validate the fitted variant order for a SNP selection.")
         scores = self.pca.transform(matrix)
         if source is not None:
             self._cache_input(matrix, source)

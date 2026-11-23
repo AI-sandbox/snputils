@@ -399,3 +399,44 @@ def test_projection_uses_fitted_coordinates_and_alleles_without_variant_ids():
     with pytest.raises(ValueError, match="fitted variant order"):
         pca.transform(aligned)
     np.testing.assert_allclose(pca.transform(), expected)
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+@pytest.mark.parametrize("store_source", [False, True])
+def test_load_pca_pickle_without_projection_cache(expanded, store_source):
+    import pickle
+
+    gt = np.array([[[0, 0], [1, 1]], [[0, 1], [0, 0]], [[1, 1], [0, 1]]])
+    samples = ["family|0", "family|B"]
+    snp = SNPObject(genotypes=gt, samples=samples)
+    model = PCA(snpobj=snp if store_source else None, average_haplotypes=not expanded)
+    if not store_source:
+        model.fit_transform(snp)
+    scores = model.X_new_.copy()
+    labels = model.haplotypes_.copy()
+    # These attributes were absent from pickles written before projection caching.
+    for key in ("_cached_input", "_cached_row_ids", "_fitted_variant_order", "_PCA__sample_row_ids"):
+        del vars(model)[key]
+
+    restored = pickle.loads(pickle.dumps(model))
+    expected_ids = np.repeat(samples, 2).tolist() if expanded else samples
+    assert restored.samples_ == expected_ids
+    np.testing.assert_allclose(restored.transform(), scores, atol=1e-12)
+    assert restored.haplotypes_ == labels
+    assert restored.samples_ == expected_ids
+    with pytest.raises(ValueError, match="Refit"):
+        restored.transform(snp, snps_subset=[2, 1, 0])
+    restored.fit(snp)
+    restored.transform(snps_subset=[0, 1, 2])
+    assert restored.samples_ == expected_ids
+
+
+def test_pickle_roundtrip_retains_fitted_variant_order():
+    import pickle
+
+    snp = SNPObject(genotypes=np.array([[0, 1], [1, 2], [2, 0]]), samples=["a", "b"])
+    model = PCA().fit(snp, snps_subset=[2, 0])
+    restored = pickle.loads(pickle.dumps(model))
+    with pytest.raises(ValueError, match="fitted variant order"):
+        restored.transform(snps_subset=[0, 2])
+    np.testing.assert_allclose(restored.transform(), model.transform())

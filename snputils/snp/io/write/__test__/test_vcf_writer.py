@@ -41,3 +41,28 @@ def test_vcf_writer_roundtrips_sampleless_annotation_only_vcf(tmp_path):
     np.testing.assert_allclose(observed.variants_qual, np.array([np.nan, 50.0], dtype=np.float32), equal_nan=True)
     np.testing.assert_array_equal(observed.variants_filter_pass, np.array([True, False]))
     np.testing.assert_array_equal(observed.variants_info.astype(str), snpobj.variants_info.astype(str))
+
+
+def test_vcf_writer_roundtrips_missing_genotypes(tmp_path):
+    path = tmp_path / "missing.vcf"
+    genotypes = np.array([[[0, 1], [-1, -1]], [[1, -1], [1, 1]]], dtype=np.int8)
+    snpobj = SNPObject(
+        genotypes=genotypes.copy(),
+        samples=np.array(["S1", "S2"], dtype=object),
+        variants_ref=np.array(["A", "C"], dtype=object),
+        variants_alt=np.array(["G", "T"], dtype=object),
+        variants_chrom=np.array(["1", "1"], dtype=object),
+        variants_id=np.array(["rs1", "rs2"], dtype=object),
+        variants_pos=np.array([100, 200]),
+    )
+
+    VCFWriter(snpobj, path, phased=True).write()
+
+    lines = path.read_text().splitlines()
+    assert lines[-2] == "1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|1\t.|."
+    assert lines[-1] == "1\t200\trs2\tC\tT\t.\tPASS\t.\tGT\t1|.\t1|1"
+    np.testing.assert_array_equal(snpobj.genotypes, genotypes)
+
+    observed = VCFReader(path).read(genotype_mode="phased")
+
+    np.testing.assert_array_equal(observed.genotypes, genotypes)

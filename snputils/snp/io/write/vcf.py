@@ -124,6 +124,9 @@ class VCFWriter:
                 When provided, a ##INFO header line for END is written if any value contains ``END=``.
         """
         self.__chrom_partition = chrom_partition
+        self.__rename_missing_values = rename_missing_values
+        self.__before = before
+        self.__after = after
 
         file_extensions = (".vcf", ".bcf")
         suffixes = self.__filename.suffixes
@@ -135,10 +138,6 @@ class VCFWriter:
             self.__filename = self.__filename.with_suffix('')
         else:
             self.__file_extension = ".vcf"
-
-        # Optionally rename potential missing values in `snpobj.genotypes` before writing
-        if rename_missing_values:
-            self.__snpobj.rename_missings(before=before, after=after, inplace=True)
 
         data = self.__snpobj
 
@@ -176,6 +175,9 @@ class VCFWriter:
             if genotypes.ndim != 3 or genotypes.shape[2] != 2:
                 raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
             validate_hardcall_values(genotypes)
+            # Rename after validation and on a copy, leaving `snpobj` untouched
+            if self.__rename_missing_values:
+                genotypes = np.where(genotypes == self.__before, self.__after, genotypes)
         elif genotypes.ndim not in (2, 3):
             raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 

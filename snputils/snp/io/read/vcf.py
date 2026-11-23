@@ -2750,6 +2750,9 @@ class VCFReaderPolars(SNPBaseReader):
             return snpobj
 
         except Exception as e:
+            # Auto mode handles this signal by retrying the Polars read in dosage mode.
+            if isinstance(e, ValueError) and str(e) == _UNPHASED_VCF_PHASED_ERROR:
+                raise
             log.warning(
                 "Polars VCF parsing failed (%s). Falling back to default VCF reader.",
                 e,

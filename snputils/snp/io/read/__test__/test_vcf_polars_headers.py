@@ -42,6 +42,23 @@ def test_polars_preserves_records_without_gt(tmp_path, streaming, mode, caplog):
     assert "Falling back to default VCF reader" not in caplog.text
 
 
+def test_polars_auto_retries_dosage_with_missing_gt_and_unphased_call(tmp_path, caplog):
+    path = tmp_path / "mixed_format.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+        "1\t10\t.\tA\tC\t.\tPASS\t.\tDP\t8\n"
+        "1\t20\t.\tG\tT\t.\tPASS\t.\tGT\t/0/1\n"
+    )
+    reader = VCFReaderPolars(path)
+    expected = [[-1], [1]]
+    np.testing.assert_array_equal(reader.read(genotype_mode="dosage").genotypes, expected)
+    np.testing.assert_array_equal(reader.read().genotypes, expected)
+    with pytest.raises(ValueError, match="unphased VCF genotypes"):
+        reader.read(genotype_mode="phased")
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
 @pytest.mark.parametrize("chrom_header", ["#CHROM", "CHROM"])
 def test_vcf_polars_reads_sample_names_for_both_chrom_headers(tmp_path: Path, chrom_header: str) -> None:
     vcf_path = tmp_path / f"tiny_{chrom_header.replace('#', 'hash_')}.vcf"

@@ -226,3 +226,38 @@ def test_embedding_dataframe_from_pca_after_transform_has_sample_ids():
 
     assert df["indID"].tolist() == ["s1", "s2", "s3"]
     assert ["PC1", "PC2"] == [c for c in df.columns if c.startswith("PC")]
+
+
+@pytest.mark.parametrize("order", [[2, 0, 1], [1, 0], 2])
+def test_transform_selects_cached_samples_and_preserves_ids(order):
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [1, 2, 0]]), samples=["A", "B", "C"])
+    pca = PCA(snpobj=snp)
+    rows = slice(order) if isinstance(order, int) else order
+    expected = pca.X_new_[rows].copy()
+    expected_ids = np.asarray(snp.samples)[rows].tolist()
+
+    np.testing.assert_allclose(pca.transform(samples_subset=order), expected, atol=1e-12)
+    assert pca.samples_ == expected_ids
+    np.testing.assert_allclose(pca.transform(), expected, atol=1e-12)
+    assert pca.samples_ == expected_ids
+
+
+def test_cached_projection_uses_last_object_and_preparation_options():
+    gt = np.random.default_rng(42).integers(0, 2, size=(6, 4, 2))
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"])
+    pca = PCA().fit(snp, snps_subset=[4, 1, 5])
+    reference = PCA().fit(snp, snps_subset=[4, 1, 5])
+    expected = reference.transform(snp, average_haplotypes=False, samples_subset=[3, 0], snps_subset=[4, 1, 5])
+
+    np.testing.assert_allclose(pca.transform(average_haplotypes=False, samples_subset=[3, 0]), expected)
+    assert pca.haplotypes_ == ["D|0", "D|1", "A|0", "A|1"]
+    other = SNPObject(genotypes=gt[:, ::-1], samples=["E", "F", "G", "H"])
+    expected = pca.transform(other, snps_subset=[4, 1, 5]).copy()
+    np.testing.assert_allclose(pca.transform(samples_subset=[2, 0]), expected[[2, 0]])
+    assert pca.samples_ == ["G", "E"]
+
+    # A failed projection must leave the last successful matrix and labels paired.
+    with pytest.raises(ValueError):
+        pca.transform(snps_subset=[0, 1])
+    np.testing.assert_allclose(pca.transform(), expected[[2, 0]])
+    assert pca.samples_ == ["G", "E"]

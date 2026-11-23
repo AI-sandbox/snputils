@@ -228,7 +228,10 @@ def test_embedding_dataframe_from_pca_after_transform_has_sample_ids():
     assert ["PC1", "PC2"] == [c for c in df.columns if c.startswith("PC")]
 
 
-@pytest.mark.parametrize("order", [[2, 0, 1], [1, 0], 2])
+@pytest.mark.parametrize("order", [
+    [2, 0, 1], [1, 0], 2, np.array([2, 0, 1]),
+    [True, True, True], np.array([True, False, True]),
+])
 def test_transform_selects_cached_samples_and_preserves_ids(order):
     snp = SNPObject(genotypes=np.array([[0, 1, 2], [1, 2, 0]]), samples=["A", "B", "C"])
     pca = PCA(snpobj=snp)
@@ -295,3 +298,21 @@ def test_pca_preserves_pipe_in_sample_ids(mode, tmp_path):
         assert exported["haplotype_id"].tolist() == haplotypes
     else:
         assert "haplotype_id" not in exported
+
+
+@pytest.mark.parametrize("subset", [[True, False], [[0, 1]], [1.5]])
+def test_pca_rejects_invalid_sample_subset(subset):
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [1, 2, 0]]), samples=["A", "B", "C"])
+    with pytest.raises(ValueError, match="subset|mask"):
+        PCA(snpobj=snp, samples_subset=subset)
+
+
+def test_pca_applies_snp_mask_to_genotypes_and_variant_metadata():
+    snp = SNPObject(
+        genotypes=np.array([[0, 1, 2], [1, 2, 1], [2, 1, 0]]),
+        samples=["A", "B", "C"],
+        variants_alt=["A", "C,G", "T"],
+    )
+    pca = PCA(snpobj=snp, samples_subset=np.array([2, 0]), snps_subset=np.array([True, False, True]))
+    np.testing.assert_array_equal(pca.X_, snp.genotypes[[0, 2]][:, [2, 0]].T)
+    assert pca.samples_ == ["C", "A"]

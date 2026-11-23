@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import copy
 import pathlib
-from typing import TYPE_CHECKING, Tuple, Optional, Union, List, NamedTuple
+from typing import TYPE_CHECKING, Tuple, Optional, Union, List, NamedTuple, Sequence
 from sklearn.decomposition import PCA as skPCA 
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -342,8 +342,8 @@ class TorchPCA:
 class _PCAInput(NamedTuple):
     snpobj: SNPObject
     average_haplotypes: bool
-    samples_subset: Optional[Union[int, List[int]]]
-    snps_subset: Optional[Union[int, List[int]]]
+    samples_subset: Optional[Union[int, Sequence[int], np.ndarray]]
+    snps_subset: Optional[Union[int, Sequence[int], np.ndarray]]
 
 
 class PCA:
@@ -376,8 +376,8 @@ class PCA:
         fitting: str = "exact",
         device: str = 'cpu',
         average_haplotypes: bool = True,
-        samples_subset: Optional[Union[int, List]] = None, 
-        snps_subset: Optional[Union[int, List]] = None,
+        samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
+        snps_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
         embedding_table_path: Optional[Union[str, pathlib.Path]] = None,
     ):
         """
@@ -403,12 +403,12 @@ class PCA:
             average_haplotypes (bool, default=True):
                 If True, average the two genotype haplotypes into one mean allele-count row
                 per sample. If False, treat each haplotype as a separate row.
-            samples_subset (int or list of int, optional): 
+            samples_subset (int or array-like, optional):
                 Samples to include before PCA. An integer selects the first
-                ``n`` samples; a list selects explicit sample indices.
-            snps_subset (int or list of int, optional): 
+                ``n`` samples. An array selects samples by index or boolean mask.
+            snps_subset (int or array-like, optional):
                 Variants to include before PCA. An integer selects the first
-                ``n`` variants; a list selects explicit variant indices.
+                ``n`` variants. An array selects variants by index or boolean mask.
             embedding_table_path (path, optional):
                 Optional TSV/CSV path written by :meth:`fit_transform` with row
                 identifiers and projected PC coordinates.
@@ -558,35 +558,35 @@ class PCA:
         self.__average_haplotypes = x
 
     @property
-    def samples_subset(self) -> Optional[Union[int, List[int]]]:
+    def samples_subset(self) -> Optional[Union[int, Sequence[int], np.ndarray]]:
         """
         Retrieve `samples_subset`.
 
         Returns:
             int or list of int: 
-                Subset of samples to include, as an integer for the first samples or a list of sample indices.
+                Subset of samples to include, as an integer for the first samples or an index array or boolean mask.
         """
         return self.__samples_subset
 
     @samples_subset.setter
-    def samples_subset(self, x: Optional[Union[int, List[int]]]) -> None:
+    def samples_subset(self, x: Optional[Union[int, Sequence[int], np.ndarray]]) -> None:
         """
         Update `samples_subset`.
         """
         self.__samples_subset = x
 
     @property
-    def snps_subset(self) -> Optional[Union[int, List[int]]]:
+    def snps_subset(self) -> Optional[Union[int, Sequence[int], np.ndarray]]:
         """
         Retrieve `snps_subset`.
 
         Returns:
-            int or list of int: Subset of SNPs to include, as an integer for the first SNPs or a list of SNP indices.
+            int or list of int: Subset of SNPs to include, as an integer for the first SNPs or an index array or boolean mask.
         """
         return self.__snps_subset
 
     @snps_subset.setter
-    def snps_subset(self, x: Optional[Union[int, List[int]]]) -> None:
+    def snps_subset(self, x: Optional[Union[int, Sequence[int], np.ndarray]]) -> None:
         """
         Update `snps_subset`.
         """
@@ -813,8 +813,8 @@ class PCA:
             self, 
             snpobj: Optional['SNPObject'] = None, 
             average_haplotypes: Optional[bool] = None,
-            samples_subset: Optional[Union[int, List]] = None, 
-            snps_subset: Optional[Union[int, List]] = None
+            samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
+            snps_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None
         ) -> Union[np.ndarray, torch.Tensor]:
         """
         Build the sample-by-variant matrix used for PCA.
@@ -831,13 +831,13 @@ class PCA:
             average_haplotypes (bool, optional):
                 Whether to average two-haplotype genotypes into one mean allele-count row per
                 sample. If None, defaults to ``self.average_haplotypes``.
-            samples_subset (int or list of int, optional): 
-                Samples to include. An integer selects the first ``n`` rows; a
-                list selects explicit sample indices. If None, defaults to
+            samples_subset (int or array-like, optional):
+                Samples to include. An integer selects the first ``n`` rows. An
+                array selects samples by index or boolean mask. If None, defaults to
                 ``self.samples_subset``.
-            snps_subset (int or list of int, optional): 
-                Variants to include. An integer selects the first ``n`` columns;
-                a list selects explicit variant indices. If None, defaults to
+            snps_subset (int or array-like, optional):
+                Variants to include. An integer selects the first ``n`` columns.
+                An array selects variants by index or boolean mask. If None, defaults to
                 ``self.snps_subset``.
 
             Returns:
@@ -862,16 +862,11 @@ class PCA:
         else:
             raise ValueError(f"Invalid shape for `genotypes`: expected a 2D or 3D array, but got {snpobj.genotypes.ndim}D array.")
 
-        # Handle sample and SNP subsets
-        if isinstance(samples_subset, int):
-            X = X[:samples_subset]
-        elif isinstance(samples_subset, list):
-            X = X[samples_subset]
+        from .dimred_tabular import _pca_subset_indexer
 
-        if isinstance(snps_subset, int):
-            X = X[:, :snps_subset]
-        elif isinstance(snps_subset, list):
-            X = X[:, snps_subset]
+        sample_index = _pca_subset_indexer(samples_subset, X.shape[0])
+        snp_index = _pca_subset_indexer(snps_subset, X.shape[1])
+        X = X[sample_index][:, snp_index]
 
         if np.any(~np.isfinite(X) | (X < 0)):
             raise ValueError("PCA does not support missing or non-finite genotype values.")
@@ -881,10 +876,7 @@ class PCA:
             if alternate_alleles.size:
                 if alternate_alleles.size != snpobj.genotypes.shape[0]:
                     raise ValueError("`variants_alt` must be aligned with the genotype variant axis.")
-                if isinstance(snps_subset, int):
-                    alternate_alleles = alternate_alleles[:snps_subset]
-                elif isinstance(snps_subset, list):
-                    alternate_alleles = alternate_alleles[snps_subset]
+                alternate_alleles = alternate_alleles[snp_index]
                 if any("," in str(alt) for alt in alternate_alleles if alt is not None):
                     raise ValueError("PCA currently supports only biallelic variants.")
 
@@ -909,8 +901,8 @@ class PCA:
             self, 
             snpobj: Optional['SNPObject'] = None, 
             average_haplotypes: Optional[bool] = None,
-            samples_subset: Optional[Union[int, List]] = None, 
-            snps_subset: Optional[Union[int, List]] = None
+            samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
+            snps_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None
         ) -> 'PCA':
         """
         Compute PCA eigenvectors from SNP genotype data.
@@ -929,13 +921,13 @@ class PCA:
             average_haplotypes (bool, optional):
                 Whether to average two-haplotype genotypes into one mean allele-count row per
                 sample. If None, defaults to ``self.average_haplotypes``.
-            samples_subset (int or list of int, optional): 
+            samples_subset (int or array-like, optional):
                 Samples to use when computing PCs. An integer selects the first
-                ``n`` samples; a list selects explicit sample indices. If None,
+                ``n`` samples. An array selects samples by index or boolean mask. If None,
                 defaults to ``self.samples_subset``.
-            snps_subset (int or list of int, optional): 
+            snps_subset (int or array-like, optional):
                 Variants to use when computing PCs. An integer selects the first
-                ``n`` variants; a list selects explicit variant indices. If
+                ``n`` variants. An array selects variants by index or boolean mask. If
                 None, defaults to ``self.snps_subset``.
 
         Returns:
@@ -961,8 +953,8 @@ class PCA:
             self, 
             snpobj: Optional['SNPObject'] = None, 
             average_haplotypes: Optional[bool] = None,
-            samples_subset: Optional[Union[int, List]] = None, 
-            snps_subset: Optional[Union[int, List]] = None
+            samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
+            snps_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None
         ):
         """
         Project SNP genotype data onto previously computed principal components.
@@ -982,10 +974,10 @@ class PCA:
             average_haplotypes (bool, optional):
                 Whether to average two-haplotype genotypes into one mean allele-count row per
                 sample.
-            samples_subset (int or list of int, optional): 
-                Samples to project. An integer selects the first ``n`` samples;
-                a list selects explicit sample indices.
-            snps_subset (int or list of int, optional): 
+            samples_subset (int or array-like, optional):
+                Samples to project. An integer selects the first ``n`` samples.
+                An array selects samples by index or boolean mask.
+            snps_subset (int or array-like, optional):
                 Variants to use for projection. This must match the variant set
                 used during fitting.
 
@@ -1011,7 +1003,7 @@ class PCA:
         return self.X_new_
 
     def fit_transform(self, snpobj: Optional['SNPObject'] = None, average_haplotypes: Optional[bool] = None,
-                      samples_subset: Optional[Union[int, List]] = None, snps_subset: Optional[Union[int, List]] = None):
+                      samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None, snps_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None):
         """
         Compute PCA eigenvectors and project the same data onto them.
 
@@ -1028,13 +1020,13 @@ class PCA:
             average_haplotypes (bool, optional):
                 Whether to average two-haplotype genotypes into one mean allele-count row per
                 sample. If None, defaults to ``self.average_haplotypes``.
-            samples_subset (int or list of int, optional): 
-                Samples to include. An integer selects the first ``n`` samples;
-                a list selects explicit sample indices. If None, defaults to
+            samples_subset (int or array-like, optional):
+                Samples to include. An integer selects the first ``n`` samples.
+                An array selects samples by index or boolean mask. If None, defaults to
                 ``self.samples_subset``.
-            snps_subset (int or list of int, optional): 
-                Variants to include. An integer selects the first ``n`` variants;
-                a list selects explicit variant indices. If None, defaults to
+            snps_subset (int or array-like, optional):
+                Variants to include. An integer selects the first ``n`` variants.
+                An array selects variants by index or boolean mask. If None, defaults to
                 ``self.snps_subset``.
 
         Returns:

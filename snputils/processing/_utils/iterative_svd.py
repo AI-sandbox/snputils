@@ -39,7 +39,9 @@ class IterativeSVD(Solver):
             init_fill_method="mean",
             min_value=None,
             max_value=None,
-            verbose=True):
+            verbose=True,
+            *,
+            symmetric=False):
         Solver.__init__(
             self,
             fill_method=init_fill_method,
@@ -54,6 +56,7 @@ class IterativeSVD(Solver):
         self.svd_algorithm = svd_algorithm
         self.convergence_threshold = convergence_threshold
         self.verbose = verbose
+        self.symmetric = symmetric
 
     def _converged(self, X_old, X_new, missing_mask):
         # check for convergence
@@ -71,6 +74,8 @@ class IterativeSVD(Solver):
 
     def create_validation_mask(self, X, missing_mask):
         observed_mask = ~missing_mask
+        if self.symmetric:
+            return self._covariance_validation_mask(observed_mask)
         idx = np.flatnonzero(observed_mask)
         if len(idx) < 2:
             raise ValueError("Rank cross-validation requires at least two observed entries.")
@@ -79,6 +84,37 @@ class IterativeSVD(Solver):
         validation_mask[sampling] = True
         validation_mask = validation_mask.reshape(observed_mask.shape)
         return validation_mask
+
+    @staticmethod
+    def _covariance_validation_mask(observed):
+        if observed.shape[0] != observed.shape[1]:
+            raise ValueError("Covariance rank validation requires a square matrix.")
+        known = observed | observed.T
+        candidates = np.flatnonzero(np.triu(known))
+        if candidates.size < 2:
+            raise ValueError("Covariance rank validation requires at least two observed sample pairs.")
+        np.fill_diagonal(known, False)
+        links = known.sum(axis=1)
+        holdout = np.zeros_like(observed)
+        remaining = max(1, candidates.size // 100)
+        for pair in np.random.permutation(candidates):
+            i, j = divmod(pair, len(observed))
+            if i == j:
+                if links[i] == 0:
+                    continue
+            else:
+                # Keep at least one observed cross-covariance for each sample.
+                if links[i] <= 1 or links[j] <= 1:
+                    continue
+                links[i] -= 1
+                links[j] -= 1
+            holdout[i, j] = holdout[j, i] = True
+            remaining -= 1
+            if remaining == 0:
+                break
+        if not holdout.any():
+            raise ValueError("Cannot hold out a covariance pair while retaining training data for every sample.")
+        return holdout
     
     def solve(self, X, missing_mask):
         if self.choose_best:
@@ -93,13 +129,17 @@ class IterativeSVD(Solver):
                 )
             observed_mask = ~missing_mask
             validation_mask = self.create_validation_mask(X, missing_mask)
-            net_missing_mask = missing_mask + validation_mask
+            net_missing_mask = missing_mask | validation_mask
             net_observed_mask = ~net_missing_mask
+            score_mask = np.triu(validation_mask) if self.symmetric else validation_mask
+            rows, cols = np.nonzero(score_mask)
+            targets = X[rows, cols]
+            if self.symmetric:
+                targets = np.where(missing_mask[rows, cols], X[cols, rows], targets)
             X_filled_init = copy.deepcopy(X)
             X_filled_init[net_missing_mask] = np.nan
             X_filled_init = super().fill(X=X_filled_init, missing_mask=net_missing_mask, fill_method=self.fill_method, inplace=True)
 
-            global cross_validation
             def cross_validation(curr_rank):
                 X_filled = copy.deepcopy(X_filled_init)
                 for i in range(self.max_iters):
@@ -122,10 +162,10 @@ class IterativeSVD(Solver):
                     X_filled[net_missing_mask] = X_reconstructed[net_missing_mask]
                     if converged:
                         break
-                cv_error = masked_mse(
-                    X_true=X,
-                    X_pred=X_reconstructed,
-                    mask=validation_mask)
+                predictions = X_reconstructed[rows, cols]
+                if self.symmetric:
+                    predictions = (predictions + X_reconstructed[cols, rows]) / 2
+                cv_error = np.mean((targets - predictions) ** 2)
                 if self.verbose:
                     logging.info(
                         "[IterativeSVD] Rank %d: Cross-validation MSE=%0.6f" % (

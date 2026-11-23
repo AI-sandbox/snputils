@@ -784,7 +784,10 @@ class mdPCA:
             rank = 5
             choose_best = True
             num_cores = 5
-            cov_complete = IterativeSVD(start_rank=start_rank, end_rank=end_rank, rank=rank, choose_best=choose_best, num_cores=num_cores).fit_transform(cov)
+            cov_complete = IterativeSVD(
+                start_rank=start_rank, end_rank=end_rank, rank=rank, choose_best=choose_best,
+                num_cores=num_cores, symmetric=True,
+            ).fit_transform(cov)
             # A missing pair gets one estimate. If its mirror was observed, use that value.
             mirror = cov.T[missing]
             pair_mean = (cov_complete[missing] + cov_complete.T[missing]) / 2

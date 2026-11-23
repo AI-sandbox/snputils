@@ -493,6 +493,14 @@ def _ascii_gt_to_int(values: np.ndarray) -> np.ndarray:
     return out
 
 
+# Streaming decodes one row at a time. Reuse the byte conversion for small arrays.
+_GT_BYTE_TO_ALLELE = _ascii_gt_to_int(np.arange(256, dtype=np.uint8))
+
+
+def _single_allele_byte(values: np.ndarray) -> np.ndarray:
+    return ((values >= ord("0")) & (values <= ord("9"))) | (values == ord(".")) | (values == ord("-"))
+
+
 def _parse_ascii_ints(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
     lengths = (ends - starts).astype(np.int64, copy=False)
     if lengths.size == 0:
@@ -502,7 +510,7 @@ def _parse_ascii_ints(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> 
     indexes = starts[:, None] + columns[None, :]
     mask = columns[None, :] < lengths[:, None]
     digits = np.where(mask, raw[indexes] - ord("0"), 0).astype(np.int64, copy=False)
-    powers = 10 ** (lengths[:, None] - columns[None, :] - 1)
+    powers = 10 ** np.maximum(lengths[:, None] - columns[None, :] - 1, 0)
     values = np.sum(np.where(mask, digits * powers, 0), axis=1, dtype=np.int64)
     return values.astype(np.int32, copy=False)
 
@@ -626,6 +634,17 @@ def _finalize_string_array(
     return np.full(n_records, value, dtype=f"<U{max(1, len(value))}")
 
 
+def _fixed_diploid_gt_row(samples: bytes, n_samples: int) -> bool:
+    if len(samples) != 4 * n_samples - 1:
+        return False
+    # Every expected boundary must be a tab, with no extra tabs inside a GT.
+    n_tabs = n_samples - 1
+    if samples[3::4].count(b"\t") != n_tabs or samples.count(b"\t") != n_tabs:
+        return False
+    separators = samples[1::4]
+    return separators.count(b"|") + separators.count(b"/") == n_samples
+
+
 def _parse_gt_sample_bytes(
     sample_bytes: bytes,
     *,
@@ -633,7 +652,6 @@ def _parse_gt_sample_bytes(
     n_samples_total: int,
     sample_idxs: np.ndarray,
     all_samples: bool,
-    single_digit_alleles: bool,
     return_dosage: bool,
     non_diploid_chromosome: Optional[bool] = None,
 ) -> np.ndarray:
@@ -642,40 +660,36 @@ def _parse_gt_sample_bytes(
     if n_selected == 0:
         return np.empty((0,), dtype=np.int8)
 
-    expected_gt_only_len = n_samples_total * 4 - 1
-    if single_digit_alleles and format_value in (None, b"GT") and len(sample_bytes) == expected_gt_only_len:
+    if format_value in (None, b"GT") and sample_bytes:
         raw = np.frombuffer(sample_bytes, dtype=np.uint8)
-        first_allele = raw[0::4]
-        separators = raw[1::4]
-        second_allele = raw[2::4]
-        if not all_samples:
-            first_allele = first_allele[sample_idxs]
-            separators = separators[sample_idxs]
-            second_allele = second_allele[sample_idxs]
-        if not return_dosage:
-            _raise_if_unphased_vcf_gt_separator(separators)
-        first_allele = _ascii_gt_to_int(first_allele)
-        second_allele = _ascii_gt_to_int(second_allele)
-        if return_dosage:
-            return sum_diploid_alleles(
-                first_allele,
-                second_allele,
-                missing_as_haploid=non_diploid_chromosome,
+        selection = slice(None) if all_samples else sample_idxs
+        if _fixed_diploid_gt_row(sample_bytes, n_samples_total):
+            if not return_dosage:
+                _raise_if_unphased_vcf_gt_separator(raw[1::4][selection])
+            first = _GT_BYTE_TO_ALLELE[raw[0::4][selection]]
+            second = _GT_BYTE_TO_ALLELE[raw[2::4][selection]]
+        else:
+            tabs = np.flatnonzero(raw == ord("\t"))
+            if tabs.size != n_samples_total - 1:
+                raise ValueError("VCF record does not have the expected number of samples.")
+            boundaries = np.empty(n_samples_total + 1, dtype=np.intp)
+            boundaries[0] = -1
+            boundaries[1:-1] = tabs
+            boundaries[-1] = raw.size
+            first, second = _decode_gt_fields(
+                raw, boundaries[:-1][selection] + 1, boundaries[1:][selection],
+                require_phase=not return_dosage,
             )
-        return np.stack((first_allele, second_allele), axis=1)
-
-    gt_index = 0 if format_value is None else _format_gt_index(format_value)
-    sample_fields = sample_bytes.split(b"\t")
-    genotype = _parse_gt_row(
-        (sample_fields[i] for i in sample_idxs), gt_index, require_phase=not return_dosage,
-    )
-    if return_dosage:
-        return sum_diploid_alleles(
-            genotype[:, 0],
-            genotype[:, 1],
-            missing_as_haploid=non_diploid_chromosome,
+    else:
+        gt_index = 0 if format_value is None else _format_gt_index(format_value)
+        sample_fields = sample_bytes.split(b"\t")
+        genotype = _parse_gt_row(
+            (sample_fields[i] for i in sample_idxs), gt_index, require_phase=not return_dosage,
         )
-    return genotype
+        first, second = genotype.T
+    if return_dosage:
+        return sum_diploid_alleles(first, second, missing_as_haploid=non_diploid_chromosome)
+    return np.stack((first, second), axis=-1)
 
 
 def _format_gt_index(format_value: Union[str, bytes]) -> int:
@@ -756,14 +770,15 @@ def _parse_gt_sample_matrix(
     simple = np.fromiter((_format_gt_is_first(value) for value in format_values), bool, count=height)
     diploid = (sep == ord("|")) | (sep == ord("/"))
     gt_end = (prefix[:, :, 3] == 0) | (prefix[:, :, 3] == ord(":"))
-    simple &= (diploid & gt_end).all(axis=1)
+    haploid = ((sep == 0) | (sep == ord(":"))) & _single_allele_byte(prefix[:, :, 0])
+    simple &= ((diploid & gt_end) | haploid).all(axis=1)
     genotype = np.empty((height, n_selected, 2), dtype=np.int8)
     if np.any(simple):
         fixed = prefix if simple.all() else prefix[simple]
         if not return_dosage:
             _raise_if_unphased_vcf_gt_separator(fixed[:, :, 1])
         genotype[simple, :, 0] = _ascii_gt_to_int(fixed[:, :, 0])
-        genotype[simple, :, 1] = _ascii_gt_to_int(fixed[:, :, 2])
+        genotype[simple, :, 1] = np.where(haploid[simple], -1, _ascii_gt_to_int(fixed[:, :, 2]))
     for row in np.flatnonzero(~simple):
         calls = _parse_gt_row(
             sample_values[row], _format_gt_index(format_values[row]), require_phase=not return_dosage,
@@ -778,6 +793,55 @@ def _parse_gt_sample_matrix(
     return genotype
 
 
+def _decode_gt_fields(
+    raw: np.ndarray, starts: np.ndarray, ends: np.ndarray, *, require_phase: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode GT-only fields using their actual, exclusive end offsets."""
+    widths = ends - starts
+    if np.all(widths == 3):
+        separators = raw[starts + 1]
+        if np.all((separators == ord("|")) | (separators == ord("/"))):
+            if require_phase:
+                _raise_if_unphased_vcf_gt_separator(separators)
+            return _ascii_gt_to_int(raw[starts]), _ascii_gt_to_int(raw[ends - 1])
+
+    last = ends - 1
+    separators = raw[np.minimum(starts + 1, last)]
+    if require_phase:
+        _raise_if_unphased_vcf_gt_separator(separators)
+    diploid = (widths == 3) & ((separators == ord("|")) | (separators == ord("/")))
+    first_bytes = raw[np.minimum(starts, last)]
+    first = _ascii_gt_to_int(first_bytes)
+    second = _ascii_gt_to_int(raw[last])
+    second[~diploid] = -1
+    # Single-byte haploids are complete. Parse complex GT tokens individually.
+    haploid = (widths == 1) & _single_allele_byte(first_bytes)
+    for idx in zip(*np.nonzero(~(diploid | haploid))):
+        a, b = _parse_gt_token(raw[starts[idx]:ends[idx]].tobytes(), require_phase=require_phase)
+        if max(a, b) > np.iinfo(first.dtype).max:
+            dtype = _allele_dtype(max(a, b))
+            first, second = first.astype(dtype), second.astype(dtype)
+        first[idx], second[idx] = a, b
+    return first, second
+
+
+def _sample_field_bounds(
+    tabs: np.ndarray, record_ends: np.ndarray, n_samples: int, sample_idxs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    if sample_idxs.size == n_samples and np.array_equal(sample_idxs, np.arange(n_samples)):
+        starts = tabs[:, 8:] + 1
+        ends = np.empty_like(starts)
+        ends[:, :-1] = tabs[:, 9:]
+        ends[:, -1] = record_ends
+        return starts, ends
+    starts = tabs[:, 8 + sample_idxs] + 1
+    last_sample = sample_idxs == n_samples - 1
+    ends = np.empty_like(starts)
+    ends[:, last_sample] = record_ends[:, None]
+    ends[:, ~last_sample] = tabs[:, 9 + sample_idxs[~last_sample]]
+    return starts, ends
+
+
 def _write_gt_block(
     raw: np.ndarray,
     tabs: np.ndarray,
@@ -788,45 +852,25 @@ def _write_gt_block(
     offset: int,
     return_dosage: bool,
     non_diploid_chromosomes: Optional[np.ndarray],
-    assume_biallelic: bool,
 ) -> np.ndarray:
     if not _field_matches_value(raw, tabs[:, 7] + 1, tabs[:, 8], "GT"):
         raise ValueError("The block fast path requires GT-only sample fields.")
 
-    starts = tabs[:, 8] + 1
-    fixed = ends - starts == n_samples * 4 - 1
-    if not return_dosage and not assume_biallelic:
-        # A haploid and a longer call can cancel out in the total row width.
-        # Ten ALT values need at least ten allele bytes and nine commas.
-        alt_starts = tabs[:, 3] + 1
-        alt_ends = tabs[:, 4]
-        for row in np.flatnonzero(fixed & (alt_ends - alt_starts >= 19)):
-            if raw[alt_starts[row]:alt_ends[row]].tobytes().count(b",") >= 9:
-                fixed[row] = False
-
-    for row in np.flatnonzero(~fixed):
-        fields = raw[starts[row]:ends[row]].tobytes().split(b"\t")
-        calls = _parse_gt_row((fields[i] for i in sample_idxs), 0, require_phase=not return_dosage)
+    # Bound the temporary arrays even for blocks containing millions of calls.
+    rows_per_batch = max(1, 131_072 // sample_idxs.size)
+    for lo in range(0, len(ends), rows_per_batch):
+        hi = min(lo + rows_per_batch, len(ends))
+        starts, field_ends = _sample_field_bounds(tabs[lo:hi], ends[lo:hi], n_samples, sample_idxs)
+        first, second = _decode_gt_fields(raw, starts, field_ends, require_phase=not return_dosage)
+        target = slice(offset + lo, offset + hi)
         if return_dosage:
-            non_diploid = None if non_diploid_chromosomes is None else non_diploid_chromosomes[row]
-            calls = sum_diploid_alleles(calls[:, 0], calls[:, 1], missing_as_haploid=non_diploid)
-        if calls.itemsize > out.itemsize:
-            out = _widen_gt_buffer(out, calls.dtype, offset + row)
-        out[offset + row] = calls
-
-    # Use ordinary slices on the common path, including for the output buffer.
-    rows = slice(None) if fixed.all() else fixed
-    offsets = starts[rows, None] + 4 * sample_idxs
-    first = _ascii_gt_to_int(raw[offsets])
-    second = _ascii_gt_to_int(raw[offsets + 2])
-    destination = out[offset:offset + len(starts)]
-    if return_dosage:
-        non_diploid = None if non_diploid_chromosomes is None else non_diploid_chromosomes[rows]
-        destination[rows] = sum_diploid_alleles(first, second, missing_as_haploid=non_diploid)
-    else:
-        _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
-        destination[rows, :, 0] = first
-        destination[rows, :, 1] = second
+            non_diploid = None if non_diploid_chromosomes is None else non_diploid_chromosomes[lo:hi]
+            out[target] = sum_diploid_alleles(first, second, missing_as_haploid=non_diploid)
+        else:
+            if first.itemsize > out.itemsize:
+                out = _widen_gt_buffer(out, first.dtype, offset + lo)
+            out[target, :, 0] = first
+            out[target, :, 1] = second
     return out
 
 
@@ -1044,7 +1088,7 @@ class VCFReader(SNPBaseReader):
                         )
                         genotypes = _write_gt_block(
                             raw, tabs, body_ends[lo:hi], n_samples_total, sample_idxs,
-                            genotypes, lo, return_dosage, non_diploid_chromosomes, assume_biallelic,
+                            genotypes, lo, return_dosage, non_diploid_chromosomes,
                         )
 
                     if "POS" in include:
@@ -1167,7 +1211,8 @@ class VCFReader(SNPBaseReader):
         include = set(field_columns)
         n_selected = len(sample_columns)
         tabs_per_record = 8 + n_samples_total
-        block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
+        # Wide blocks need a tab offset for every sample field.
+        block_size = (1 if n_samples_total > 128 else 8) * 1024 * 1024
 
         # For gzip inputs we do not know n_records without a second pass. Keep
         # one growable genotype buffer and fill it directly, instead of keeping
@@ -1224,10 +1269,7 @@ class VCFReader(SNPBaseReader):
                         content_ends[crlf] -= 1
                     height = int(line_ends.size)
 
-                    if n_samples_total > 128:
-                        # For fixed-width GT-only rows, selected sample offsets
-                        # are computed from the first sample column; we only
-                        # need the nine fixed-field tabs for wide files.
+                    if n_samples_total > 128 and not n_selected:
                         tabs = _first_tabs_by_line(block, line_starts, 9)
                     else:
                         tabs = np.flatnonzero(raw == ord("\t"))
@@ -1274,7 +1316,7 @@ class VCFReader(SNPBaseReader):
                         )
                         gt_buffer = _write_gt_block(
                             raw, tabs, content_ends, n_samples_total, sample_idxs,
-                            gt_buffer, gt_records, return_dosage, non_diploid_chromosomes, assume_biallelic,
+                            gt_buffer, gt_records, return_dosage, non_diploid_chromosomes,
                         )
                     gt_records += height
 
@@ -1453,11 +1495,9 @@ class VCFReader(SNPBaseReader):
                         else:
                             raise ValueError("The simple FORMAT fast path requires GT first or DP:GT FORMAT fields.")
 
-                        sample_starts = tabs[:, 8 + sample_idxs] + 1
-                        final_sample = sample_idxs == n_samples_total - 1
-                        sample_ends = np.empty_like(sample_starts)
-                        sample_ends[:, final_sample] = content_ends[:, None]
-                        sample_ends[:, ~final_sample] = tabs[:, 9 + sample_idxs[~final_sample]]
+                        sample_starts, sample_ends = _sample_field_bounds(
+                            tabs, content_ends, n_samples_total, sample_idxs,
+                        )
                         gt_ends = sample_starts + gt_offset + 3
                         if np.any(gt_ends > sample_ends):
                             raise ValueError("The simple FORMAT fast path requires diploid GT calls.")
@@ -1614,7 +1654,8 @@ class VCFReader(SNPBaseReader):
 
             row = 0
             remainder = first_line
-            block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
+            # Wide blocks need a tab offset for every sample field.
+            block_size = (1 if n_samples_total > 128 else 8) * 1024 * 1024
 
             while True:
                 chunk = file.read(block_size)
@@ -1647,7 +1688,7 @@ class VCFReader(SNPBaseReader):
                     if region_filter is None and row + height > n_records:
                         raise ValueError("VCF contains more records than counted.")
 
-                    if n_samples_total > 128:
+                    if n_samples_total > 128 and not n_selected:
                         tabs = _first_tabs_by_line(block, line_starts, 9)
                     else:
                         tabs = np.flatnonzero(raw == ord("\t"))
@@ -1692,7 +1733,7 @@ class VCFReader(SNPBaseReader):
                         )
                         genotypes = _write_gt_block(
                             raw, tabs, content_ends, n_samples_total, sample_idxs,
-                            genotypes, lo, return_dosage, non_diploid_chromosomes, assume_biallelic,
+                            genotypes, lo, return_dosage, non_diploid_chromosomes,
                         )
 
                     if "POS" in include:
@@ -2317,7 +2358,6 @@ class VCFReader(SNPBaseReader):
                                 n_samples_total=n_samples_total,
                                 sample_idxs=sample_indices,
                                 all_samples=all_samples,
-                                single_digit_alleles=(assume_biallelic or return_dosage or parts[4].count(b",") < 9),
                                 return_dosage=bool(return_dosage),
                                 non_diploid_chromosome=(
                                     (

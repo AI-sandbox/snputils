@@ -120,6 +120,51 @@ def test_multidigit_unphased_gt_obeys_genotype_mode(tmp_path, reader_cls):
         reader.read(fields=[], genotype_mode="auto")
 
 
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("padding", [0, 128])
+def test_gt_sample_boundaries_after_subsetting(tmp_path, compressed, padding):
+    path = tmp_path / ("mixed.vcf.gz" if compressed else "mixed.vcf")
+    samples = [f"pad{i}" for i in range(padding)] + ["hap", "skip1", "het", "skip2", "skip3", "skip4"]
+    # Total width matches six diploids. At the predicted offset for het,
+    # even the surrounding tabs look valid, but the call belongs to skip2.
+    calls = ["0|0"] * padding + ["1", "0", "1|0", "1|1", "0|1|0", "0|1|0"]
+    with (gzip.open(path, "wt") if compressed else path.open("w")) as out:
+        out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples) + "\n")
+        for chrom in ("X", "1"):
+            out.write(f"{chrom}\t1\t.\tA\tC\t.\tPASS\t.\tGT\t" + "\t".join(calls) + "\n")
+
+    reader = VCFReader(path)
+    for trusted in (False, True):
+        kwargs = dict(fields=[], samples=["hap", "het"], assume_biallelic=trusted)
+        for mode, expected in (("phased", [[[1, -1], [1, 0]]] * 2), ("dosage", [[2, 1], [-1, 1]])):
+            np.testing.assert_array_equal(reader.read(genotype_mode=mode, **kwargs).genotypes, expected)
+            chunks = reader.iter_read(genotype_mode=mode, chunk_size=1, **kwargs)
+            np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected)
+
+
+@pytest.mark.parametrize("fmt", ["GT", "GT:DP"])
+def test_single_digit_mixed_ploidy_stays_vectorized(tmp_path, monkeypatch, fmt):
+    from snputils.snp.io.read import vcf
+
+    path = tmp_path / "mixed.vcf.gz"
+    with gzip.open(path, "wt") as out:
+        out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\thap\tdip\tmissing\n")
+        for chrom, pos, calls in [("X", 9, ["1", "0/1", "."]), ("1", 10, ["1", "1|1", "."])]:
+            if fmt == "GT:DP":
+                calls = [call + ":20" for call in calls]
+            out.write(f"{chrom}\t{pos}\t.\tA\tC\t.\tPASS\t.\t{fmt}\t" + "\t".join(calls) + "\n")
+
+    def unexpected_fallback(*args, **kwargs):
+        pytest.fail("Single-digit haploid and diploid calls should be decoded in bulk")
+
+    monkeypatch.setattr(vcf, "_parse_gt_token", unexpected_fallback)
+    if fmt == "GT":
+        monkeypatch.setattr(VCFReader, "_read_simple_format_streaming", unexpected_fallback)
+    result = VCFReader(path).read(genotype_mode="dosage")
+    np.testing.assert_array_equal(result.variants_pos, [9, 10])
+    np.testing.assert_array_equal(result.genotypes, [[2, 1, -1], [-1, 2, -1]])
+
+
 @pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
 def test_assume_biallelic_preserves_format_phase_and_ploidy(tmp_path, reader_cls):
     path = tmp_path / "biallelic.vcf"

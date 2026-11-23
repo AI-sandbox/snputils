@@ -7,7 +7,7 @@ import pathlib
 from typing import TYPE_CHECKING, Tuple, Optional, Union, List, NamedTuple, Sequence
 from sklearn.decomposition import PCA as skPCA 
 
-from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.genobj.snpobj import SNPObject, _is_missing_variant_id
 
 if TYPE_CHECKING:
     import torch
@@ -354,6 +354,57 @@ class _PCAInput(NamedTuple):
     snps_subset: Optional[Union[int, Sequence[int], np.ndarray]]
 
 
+class _VariantOrder(NamedTuple):
+    indices: np.ndarray
+    metadata: dict
+
+    @classmethod
+    def from_input(cls, source: _PCAInput):
+        from .dimred_tabular import _pca_subset_indexer
+
+        size = source.snpobj.genotypes.shape[0]
+        index = _pca_subset_indexer(source.snps_subset, size)
+        indices = np.arange(size)[index]
+        metadata = {}
+        for field in ("variants_id", "variants_chrom", "variants_pos", "variants_ref", "variants_alt"):
+            values = getattr(source.snpobj, field)
+            if values is not None and len(values):
+                if len(values) != size:
+                    raise ValueError(f"{field} must be aligned with the genotype variant axis.")
+                metadata[field] = np.asarray(values)[indices]
+        return cls(indices, metadata)
+
+    def validate(self, other):
+        error = "Projection SNPs must match the fitted variant order."
+        common = self.metadata.keys() & other.metadata.keys()
+        for field in common:
+            left, right = self.metadata[field], other.metadata[field]
+            if not np.array_equal(left, right) and not np.array_equal(left.astype(str), right.astype(str)):
+                if field == "variants_id" and all(
+                    _is_missing_variant_id(a) or _is_missing_variant_id(b) or a == b
+                    for a, b in zip(left, right)
+                ):
+                    continue
+                raise ValueError(f"{error} Mismatch in {field}.")
+
+        if np.array_equal(self.indices, other.indices):
+            return
+        # Different files can store the same ordered variants at different offsets.
+        if "variants_id" in common:
+            ids = self.metadata["variants_id"]
+            other_ids = other.metadata["variants_id"]
+            if (not any(_is_missing_variant_id(v) for v in ids)
+                    and not any(_is_missing_variant_id(v) for v in other_ids)
+                    and len(set(ids)) == len(ids)):
+                return
+        if {"variants_chrom", "variants_pos"} <= common:
+            fields = [f for f in ("variants_chrom", "variants_pos", "variants_ref", "variants_alt") if f in common]
+            loci = zip(*(self.metadata[f] for f in fields))
+            if len(set(loci)) == len(self.indices):
+                return
+        raise ValueError(error)
+
+
 class PCA:
     """
     Principal Component Analysis (PCA) for SNP genotype matrices.
@@ -430,6 +481,7 @@ class PCA:
         self.__samples_subset = samples_subset
         self.__snps_subset = snps_subset
         self.__X_ = None
+        self._fitted_variant_order: Optional[_VariantOrder] = None
         self._cached_input: Optional[_PCAInput] = None
         self._cached_row_ids: Optional[Tuple[List[str], List[str]]] = None
         self.__X_new_ = None  # Store transformed SNP data
@@ -942,7 +994,9 @@ class PCA:
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
         matrix = self._prepare_matrix(source)
+        order = _VariantOrder.from_input(source)
         self.pca.fit(matrix)
+        self._fitted_variant_order = order
         self._cache_input(matrix, source)
         self.X_new_ = None
         self.haplotypes_ = None
@@ -984,7 +1038,8 @@ class PCA:
                 An array selects samples by index or boolean mask.
             snps_subset (int or array-like, optional):
                 Variants to use for projection. This must match the variant set
-                used during fitting.
+                and order used during fitting. Across inputs without variant identifiers
+                or genomic coordinates, the selected positions must match.
 
         Returns:
             tensor or array:
@@ -1003,6 +1058,8 @@ class PCA:
             matrix = self._prepare_matrix(source)
         if self.components_ is not None:
             _validate_projection_shape(matrix, self.components_)
+        if source is not None and self._fitted_variant_order is not None:
+            self._fitted_variant_order.validate(_VariantOrder.from_input(source))
         scores = self.pca.transform(matrix)
         if source is not None:
             self._cache_input(matrix, source)
@@ -1044,7 +1101,9 @@ class PCA:
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
         matrix = self._prepare_matrix(source)
+        order = _VariantOrder.from_input(source)
         self.X_new_ = self.pca.fit_transform(matrix)
+        self._fitted_variant_order = order
         self._cache_input(matrix, source)
 
         # Update attributes based on the fitted model

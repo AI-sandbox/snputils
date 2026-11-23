@@ -335,12 +335,13 @@ def test_cached_projection_keeps_its_selection_after_default_changes(axis):
     assert embedding_dataframe_from_model(pca)["indID"].tolist() == ["A", "B", "C"]
 
     # An explicit source uses the current model defaults.
-    pca.transform(snp)
     if axis == "samples":
+        pca.transform(snp)
         np.testing.assert_allclose(pca.X_new_, original[[2, 0, 1]], atol=1e-12)
         assert pca.samples_ == ["C", "A", "B"]
     else:
-        np.testing.assert_array_equal(pca.X_, gt[[3, 0, 2, 1]].T)
+        with pytest.raises(ValueError, match="fitted variant order"):
+            pca.transform(snp)
 
 
 @pytest.mark.parametrize("backend", ["sklearn", "pytorch"])
@@ -357,3 +358,44 @@ def test_projection_rejects_wrong_feature_count_without_changing_cache(backend):
     if backend == "pytorch":
         with pytest.raises(ValueError, match="1 feature.*expected 3"):
             model.pca.transform(model.X_[:, :1])
+
+
+@pytest.mark.parametrize("fit_method", ["fit", "fit_transform"])
+def test_projection_preserves_fitted_variant_selection(fit_method):
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0], [0, 0, 1]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"])
+    pca = PCA()
+    getattr(pca, fit_method)(snp, snps_subset=[0, 2, 3])
+    expected = pca.transform(snps_subset=[True, False, True, True], samples_subset=[2, 0]).copy()
+    for selection in ([3, 2, 0], [0, 1, 3]):
+        with pytest.raises(ValueError, match="fitted variant order"):
+            pca.transform(snps_subset=selection, samples_subset=[1, 2])
+        np.testing.assert_allclose(pca.transform(), expected)
+        assert pca.samples_ == ["C", "A"]
+
+
+def test_projection_checks_variant_ids_across_objects():
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"], variants_id=["a", "b", "c"])
+    pca = PCA().fit(snp, snps_subset=[2, 0])
+    expected = pca.transform().copy()
+    aligned = SNPObject(genotypes=gt[[2, 0]], samples=snp.samples, variants_id=["c", "a"])
+    np.testing.assert_allclose(pca.transform(aligned), expected)
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(aligned, snps_subset=[1, 0])
+    np.testing.assert_allclose(pca.transform(), expected)
+
+
+def test_projection_uses_fitted_coordinates_and_alleles_without_variant_ids():
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"], variants_chrom=[1, 1, 1],
+                    variants_pos=[10, 20, 30], variants_ref=["A", "C", "T"], variants_alt=["C", "G", "A"])
+    pca = PCA().fit(snp, snps_subset=[2, 0])
+    expected = pca.transform().copy()
+    aligned = SNPObject(genotypes=gt[[2, 0]], samples=snp.samples, variants_chrom=["1", "1"],
+                        variants_pos=[30, 10], variants_ref=["T", "A"], variants_alt=["A", "C"])
+    np.testing.assert_allclose(pca.transform(aligned), expected)
+    aligned.variants_ref = ["G", "A"]
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(aligned)
+    np.testing.assert_allclose(pca.transform(), expected)

@@ -97,6 +97,13 @@ def _svd_flip(u, v, u_based_decision=True):
     return u, v
 
 
+def _validate_projection_shape(matrix, components):
+    if matrix.ndim != 2:
+        raise ValueError("PCA projection requires a two-dimensional matrix.")
+    if matrix.shape[1] != components.shape[1]:
+        raise ValueError(f"PCA projection has {matrix.shape[1]} features, expected {components.shape[1]}.")
+
+
 class TorchPCA:
     """
     GPU-based Principal Component Analysis (PCA) using PyTorch tensors.
@@ -318,6 +325,7 @@ class TorchPCA:
             raise ValueError("The PCA model must be fitted before calling `transform`.")
 
         torch = _require_torch()
+        _validate_projection_shape(X, self.components_)
         self.X_new_ = torch.matmul(X - self.mean_, self.components_.T)
         return self.X_new_
 
@@ -984,6 +992,8 @@ class PCA:
                 one column per component. The coordinates are also stored in
                 ``X_new_``.
         """
+        matrix = self.X_
+        source = None
         options = (average_haplotypes, samples_subset, snps_subset)
         if self.X_ is None or snpobj is not None or any(option is not None for option in options):
             source = self._resolve_input(
@@ -991,10 +1001,11 @@ class PCA:
                 cached=self._cached_input if snpobj is None else None,
             )
             matrix = self._prepare_matrix(source)
-            scores = self.pca.transform(matrix)
+        if self.components_ is not None:
+            _validate_projection_shape(matrix, self.components_)
+        scores = self.pca.transform(matrix)
+        if source is not None:
             self._cache_input(matrix, source)
-        else:
-            scores = self.pca.transform(self.X_)
         self.X_new_ = scores
         self._set_projection_row_ids()
         return self.X_new_

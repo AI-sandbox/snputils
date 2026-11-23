@@ -341,3 +341,19 @@ def test_cached_projection_keeps_its_selection_after_default_changes(axis):
         assert pca.samples_ == ["C", "A", "B"]
     else:
         np.testing.assert_array_equal(pca.X_, gt[[3, 0, 2, 1]].T)
+
+
+@pytest.mark.parametrize("backend", ["sklearn", "pytorch"])
+def test_projection_rejects_wrong_feature_count_without_changing_cache(backend):
+    if backend == "pytorch":
+        pytest.importorskip("torch")
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [2, 1, 0], [1, 2, 0]]), samples=["A", "B", "C"])
+    model = PCA(snpobj=snp, backend=backend)
+    expected = np.asarray(model.X_new_).copy()
+    with pytest.raises(ValueError, match="1 feature.*expected 3"):
+        model.transform(snps_subset=[0])
+    np.testing.assert_allclose(model.transform(), expected, atol=1e-12)
+    assert model.samples_ == ["A", "B", "C"]
+    if backend == "pytorch":
+        with pytest.raises(ValueError, match="1 feature.*expected 3"):
+            model.pca.transform(model.X_[:, :1])

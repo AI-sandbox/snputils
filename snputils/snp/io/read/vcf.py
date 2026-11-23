@@ -763,16 +763,16 @@ def _parse_gt_sample_matrix(
     non_diploid_chromosomes: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     height, n_selected = sample_values.shape
-    # Inspect the fourth byte before using the three-byte diploid decoder.
-    # It must be the end of GT, even when another FORMAT subfield follows.
-    encoded = np.ascontiguousarray(sample_values.astype("S4"))
-    prefix = encoded.view(np.uint8).reshape(height, n_selected, 4)
+    # A fourth character distinguishes a complete GT from a multi-digit allele.
+    # Other FORMAT fields can contain Unicode, even in this four-character prefix.
+    text = np.ascontiguousarray(sample_values, dtype="U4")
+    prefix = text.view(np.uint32).reshape(height, n_selected, 4)
     sep = prefix[:, :, 1]
     simple = np.fromiter((_format_gt_is_first(value) for value in format_values), bool, count=height)
-    diploid = (sep == ord("|")) | (sep == ord("/"))
+    diploid = ((sep == ord("|")) | (sep == ord("/"))) & _single_allele_byte(prefix[:, :, 2])
     gt_end = (prefix[:, :, 3] == 0) | (prefix[:, :, 3] == ord(":"))
-    haploid = ((sep == 0) | (sep == ord(":"))) & _single_allele_byte(prefix[:, :, 0])
-    simple &= ((diploid & gt_end) | haploid).all(axis=1)
+    haploid = (sep == 0) | (sep == ord(":"))
+    simple &= (_single_allele_byte(prefix[:, :, 0]) & ((diploid & gt_end) | haploid)).all(axis=1)
     genotype = np.empty((height, n_selected, 2), dtype=np.int8)
     if np.any(simple):
         fixed = prefix if simple.all() else prefix[simple]

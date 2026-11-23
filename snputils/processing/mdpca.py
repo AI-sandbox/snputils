@@ -904,82 +904,48 @@ class mdPCA:
         T = _compute_projection_regularized_optimization_ils(X_incomplete, S, S_robust, n_components)
         return T
 
-    def _cov_matrix_imputation(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
+    def _complete_covariance(self, X_incomplete, percent_vals_masked):
         start_time = time.time()
-        X_incomplete = np.ma.array(X_incomplete, mask=np.isnan(X_incomplete))
-        S, strength_vec, strength_mat = self._cov(X_incomplete)
-        logging.info("Covariance Matrix --- %s seconds ---" % (time.time() - start_time))
-        S_masked = self._create_cov_mask(S, strength_mat, percent_vals_masked)
-        S = self._iterative_svd_matrix_completion(S_masked)
-        weights = np.ones(len(strength_vec))
-        weights_normalized = weights / weights.sum()
-        S = self._demean(S, weights_normalized)
-        W = np.diag(weights)
-        WSW = np.matmul(np.matmul(np.sqrt(W), S), np.sqrt(W))
+        masked = np.ma.masked_invalid(X_incomplete)
+        observed, _, strength = self._cov(masked)
+        logging.info("Covariance Matrix --- %s seconds ---", time.time() - start_time)
+        to_impute = self._create_cov_mask(observed, strength, percent_vals_masked)
+        completed = self._iterative_svd_matrix_completion(to_impute)
+        return observed, completed, strength
+
+    def _fit_completed_covariance(self, completed, covariance_matrix_file, n_components):
+        weights = np.full(len(completed), 1 / len(completed))
+        centered = self._demean(completed, weights)
         if covariance_matrix_file:
-            np.save(covariance_matrix_file, S.data)
+            np.save(covariance_matrix_file, centered)
         svd = TruncatedSVD(n_components, algorithm="arpack")
-        svd.fit(WSW)
-        U = np.matmul(svd.components_, np.linalg.inv(np.sqrt(W))).T
-        D = np.diag(np.sqrt(svd.singular_values_))
-        T = np.matmul(U, D)
-        total_var = np.trace(S)
+        svd.fit(centered.astype(np.float64, copy=False))
+        total_var = np.trace(centered)
         for i in range(n_components):
             pc_percentvar = 100 * svd.singular_values_[i] / total_var
             logging.info("Percent variance explained by the principal component %d: %s", i + 1, pc_percentvar)
-        return T
+        return svd.components_.T * np.sqrt(svd.singular_values_)
+
+    def _cov_matrix_imputation(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
+        _, completed, _ = self._complete_covariance(X_incomplete, percent_vals_masked)
+        return self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
 
     def _cov_matrix_imputation_ils(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
-        
-        def run_cov_matrix_cov_matrix_imputation_ils(X_incomplete, covariance_matrix_file):
-            start_time = time.time()
-            X_incomplete = np.ma.array(X_incomplete, mask=np.isnan(X_incomplete))
-            S, strength_vec, strength_mat = self._cov(X_incomplete)
-            logging.info("Covariance Matrix --- %s seconds ---" % (time.time() - start_time))
-            S_masked = self._create_cov_mask(S, strength_mat, percent_vals_masked)
-            S = self._iterative_svd_matrix_completion(S_masked)
-            weights = np.ones(len(strength_vec))
-            weights_normalized = weights / weights.sum()
-            S = self._demean(S, weights_normalized)
-            W = np.diag(weights)
-            if covariance_matrix_file:
-                np.save(covariance_matrix_file, S.data)
-            return S, W
+        missing_counts = np.isnan(X_incomplete).sum(axis=1)
+        fitted = np.flatnonzero(missing_counts == 0)
 
-        def compute_projection_cov_matrix_imputation_ils(X_incomplete, S, W, n_components):
-            S, _, strength_mat = self._cov(np.ma.array(X_incomplete, mask=np.isnan(X_incomplete)))
-            S = self._demean(S, np.ones(S.shape[0]) / S.shape[0])
-            nonmissing = np.flatnonzero(np.isnan(X_incomplete).sum(axis=1) == 0)
-            missing = np.flatnonzero(np.isnan(X_incomplete).sum(axis=1) > 0)
-            missing_sorted = sorted(missing, key=lambda x: (~np.isnan(X_incomplete[x])).sum(), reverse=True)
-            svd = TruncatedSVD(n_components, algorithm="arpack")
-            WSW = np.matmul(np.matmul(np.sqrt(W), S), np.sqrt(W))
-            svd.fit(WSW)
-            U = np.matmul(svd.components_, np.linalg.inv(np.sqrt(W))).T
-            U_nonmissing = U[nonmissing]
-            D_nonmissing = np.diag(np.sqrt(svd.singular_values_))
-            T = np.zeros((X_incomplete.shape[0], n_components))
-            T_filled = np.matmul(U_nonmissing, D_nonmissing)
-            i_filled = nonmissing
-            T[nonmissing] = T_filled
-            for i in missing_sorted:
-                S_i = S[i][i_filled]
-                W_i = np.diag(strength_mat[i][i_filled])
-                A = np.matmul(W_i, T_filled)
-                b = np.matmul(W_i, S_i)
-                t = np.linalg.lstsq(A, b, rcond=None)[0]
-                T[i] = t
-                i_filled = np.append(i_filled, i)
-                T_filled = np.append(T_filled, [t], axis=0)
-            total_var = np.trace(S)
-            for i in range(n_components):
-                pc_percentvar = 100 * svd.singular_values_[i] / total_var
-                logging.info("Percent variance explained by the principal component %d: %s", i + 1, pc_percentvar)
-            return T
-        
-        S, W = run_cov_matrix_cov_matrix_imputation_ils(X_incomplete, covariance_matrix_file)
-        T = compute_projection_cov_matrix_imputation_ils(X_incomplete, S, W, n_components)
-        return T
+        observed, completed, strength = self._complete_covariance(X_incomplete, percent_vals_masked)
+        self._demean(observed, np.full(len(observed), 1 / len(observed)))
+
+        scores = self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
+        missing = np.flatnonzero(missing_counts)
+        for i in missing[np.argsort(missing_counts[missing], kind="stable")]:
+            weights = strength[i, fitted]
+            scores[i] = np.linalg.lstsq(
+                scores[fitted] * weights[:, None], observed[i, fitted] * weights, rcond=None
+            )[0]
+            fitted = np.append(fitted, i)
+        return scores
 
     def _nonmissing_pca_ils(self, X_incomplete, covariance_matrix_file, n_components):
     

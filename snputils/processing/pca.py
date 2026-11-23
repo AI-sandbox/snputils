@@ -357,9 +357,11 @@ class _PCAInput(NamedTuple):
 class _VariantOrder(NamedTuple):
     indices: np.ndarray
     metadata: dict
+    # Older pickles stored only the selected metadata and cannot establish global uniqueness.
+    full_axis: bool = False
 
     @classmethod
-    def from_input(cls, source: _PCAInput):
+    def from_input(cls, source: _PCAInput, *, snapshot=False):
         from .dimred_tabular import _pca_subset_indexer
 
         size = source.snpobj.genotypes.shape[0]
@@ -371,14 +373,33 @@ class _VariantOrder(NamedTuple):
             if values is not None and len(values):
                 if len(values) != size:
                     raise ValueError(f"{field} must be aligned with the genotype variant axis.")
-                metadata[field] = np.asarray(values)[indices]
-        return cls(indices, metadata)
+                array = np.asarray(values)
+                metadata[field] = array.copy() if snapshot else array
+        return cls(indices, metadata, full_axis=True)
+
+    def _unique_at(self, fields, rows):
+        """Identify selected keys that occur exactly once on the entire input axis."""
+        if not self.full_axis:
+            return np.zeros(len(rows), dtype=bool)
+        columns = [self.metadata[field] for field in fields]
+        offsets = self.indices[rows]
+        valid = [all(not _is_missing_variant_id(column[i]) for column in columns) for i in offsets]
+        columns = [column.astype(str, copy=False) for column in columns]
+        keys = list(zip(*(column[offsets] for column in columns)))
+        counts = dict.fromkeys(keys, 0)
+        for key in zip(*columns):
+            if key in counts:
+                counts[key] += 1
+        return np.array([ok and counts[key] == 1 for ok, key in zip(valid, keys)], dtype=bool)
 
     def validate(self, other):
         error = "Projection SNPs must match the fitted variant order."
         common = self.metadata.keys() & other.metadata.keys()
         for field in common:
-            left, right = self.metadata[field], other.metadata[field]
+            left = self.metadata[field]
+            if self.full_axis:
+                left = left[self.indices]
+            right = other.metadata[field][other.indices]
             if not np.array_equal(left, right) and not np.array_equal(left.astype(str), right.astype(str)):
                 if field == "variants_id" and all(
                     _is_missing_variant_id(a) or _is_missing_variant_id(b) or a == b
@@ -389,18 +410,17 @@ class _VariantOrder(NamedTuple):
 
         if np.array_equal(self.indices, other.indices):
             return
-        # Different files can store the same ordered variants at different offsets.
+        # Once offsets differ, verify identity for the entire selection. A duplicate
+        # from a larger file can occupy the same offset by chance in a smaller file.
+        unresolved = np.arange(len(self.indices))
         if "variants_id" in common:
-            ids = self.metadata["variants_id"]
-            other_ids = other.metadata["variants_id"]
-            if (not any(_is_missing_variant_id(v) for v in ids)
-                    and not any(_is_missing_variant_id(v) for v in other_ids)
-                    and len(set(ids)) == len(ids)):
+            matched = self._unique_at(["variants_id"], unresolved) & other._unique_at(["variants_id"], unresolved)
+            unresolved = unresolved[~matched]
+            if not unresolved.size:
                 return
         if {"variants_chrom", "variants_pos"} <= common:
             fields = [f for f in ("variants_chrom", "variants_pos", "variants_ref", "variants_alt") if f in common]
-            loci = zip(*(self.metadata[f] for f in fields))
-            if len(set(loci)) == len(self.indices):
+            if np.all(self._unique_at(fields, unresolved) & other._unique_at(fields, unresolved)):
                 return
         raise ValueError(error)
 
@@ -1029,7 +1049,7 @@ class PCA:
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
         matrix = self._prepare_matrix(source)
-        order = _VariantOrder.from_input(source)
+        order = _VariantOrder.from_input(source, snapshot=True)
         self.pca.fit(matrix)
         self._fitted_variant_order = order
         self._cache_input(matrix, source)
@@ -1073,10 +1093,10 @@ class PCA:
                 An array selects samples by index or boolean mask.
             snps_subset (int or array-like, optional):
                 Variants to use for projection. This must match the variant set
-                and order used during fitting. Across inputs without variant identifiers
-                or genomic coordinates, the selected positions must match. For models
-                saved before fitted variant order was recorded, refit before applying
-                a SNP selection. The saved matrix can still be projected directly.
+                and order used during fitting. If row positions differ, each SNP must
+                be identifiable by a unique ID or genomic locus in both full inputs.
+                For models saved before fitted variant order was recorded, refit before
+                applying a SNP selection. The saved matrix can still be projected directly.
 
         Returns:
             tensor or array:
@@ -1141,7 +1161,7 @@ class PCA:
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
         matrix = self._prepare_matrix(source)
-        order = _VariantOrder.from_input(source)
+        order = _VariantOrder.from_input(source, snapshot=True)
         self.X_new_ = self.pca.fit_transform(matrix)
         self._fitted_variant_order = order
         self._cache_input(matrix, source)

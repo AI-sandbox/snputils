@@ -440,3 +440,46 @@ def test_pickle_roundtrip_retains_fitted_variant_order():
     with pytest.raises(ValueError, match="fitted variant order"):
         restored.transform(snps_subset=[0, 2])
     np.testing.assert_allclose(restored.transform(), model.transform())
+
+
+@pytest.mark.parametrize("metadata", [
+    {"variants_id": ["dup", "dup", "unique"]},
+    {"variants_chrom": ["1", "1", "1"], "variants_pos": [10, 10, 20]},
+])
+def test_projection_rejects_substitution_of_duplicate_variant(metadata):
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], **metadata)
+    pca = PCA().fit(snp, snps_subset=[0, 2])
+    expected = pca.transform().copy()
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(snps_subset=[1, 2])
+    np.testing.assert_allclose(pca.transform(), expected)
+    np.testing.assert_allclose(pca.transform(snps_subset=[0, 2]), expected)
+
+
+@pytest.mark.parametrize("duplicate_in_fit", [True, False])
+@pytest.mark.parametrize("selected", [[1, 2], [0, 2]])
+def test_shifted_projection_requires_unique_ids_in_both_inputs(duplicate_in_fit, selected):
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    full = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], variants_id=["dup", "dup", "unique"])
+    small = SNPObject(genotypes=gt[[1, 2]], samples=full.samples, variants_id=["dup", "unique"])
+    if duplicate_in_fit:
+        model = PCA().fit(full, snps_subset=selected)
+        with pytest.raises(ValueError, match="fitted variant order"):
+            model.transform(small)
+    else:
+        model = PCA().fit(small)
+        with pytest.raises(ValueError, match="fitted variant order"):
+            model.transform(full, snps_subset=selected)
+
+
+def test_projection_disambiguates_duplicate_ids_with_coordinates():
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    full = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], variants_id=["dup", "dup", "unique"])
+    small = SNPObject(genotypes=gt[[1, 2]], samples=full.samples, variants_id=["dup", "unique"])
+    full.variants_chrom = ["1", "1", "1"]
+    full.variants_pos = [10, 11, 20]
+    small.variants_chrom = ["1", "1"]
+    small.variants_pos = [11, 20]
+    model = PCA().fit(full, snps_subset=[1, 2])
+    np.testing.assert_allclose(model.transform(small), model.pca.transform(gt[[1, 2]].T))

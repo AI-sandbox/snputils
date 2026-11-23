@@ -103,3 +103,30 @@ def test_vcf_polars_rejects_nonpositive_threads(threads: int) -> None:
 def test_vcf_polars_rejects_noninteger_threads() -> None:
     with pytest.raises(TypeError, match="threads must be an integer or None"):
         VCFReaderPolars("unused.vcf").read(threads=1.5)
+
+
+def test_assume_biallelic_empty_projection_keeps_variant_count(tmp_path: Path) -> None:
+    path = tmp_path / "empty_projection.vcf"
+    _write_tiny_vcf(path, "#CHROM")
+    reader = VCFReaderPolars(path)
+    kwargs = dict(fields=[], samples=[], chromosome_ploidy="autosomal",
+                  genotype_mode="dosage", assume_biallelic=True)
+    assert reader.read(**kwargs).genotypes.shape == (2, 0)
+    assert [chunk.genotypes.shape for chunk in reader.iter_read(**kwargs)] == [(2, 0)]
+
+
+@pytest.mark.parametrize(("trusted", "fields", "reads_alt"), [
+    (False, [], True), (True, [], False), (True, ["ALT"], True),
+])
+def test_polars_projects_alt_only_when_needed(tmp_path, monkeypatch, trusted, fields, reads_alt):
+    path = tmp_path / "projection.vcf"
+    _write_tiny_vcf(path, "#CHROM")
+    read_csv = Mock(wraps=pl.read_csv)
+    monkeypatch.setattr(pl, "read_csv", read_csv)
+    result = VCFReaderPolars(path).read(
+        fields=fields, genotype_mode="dosage", assume_biallelic=trusted,
+    )
+    options = read_csv.call_args.kwargs
+    alt_index = list(options["schema_overrides"]).index("ALT")
+    assert (alt_index in options["columns"]) == reads_alt
+    np.testing.assert_array_equal(result.variants_alt, ["G", "T"] if fields else [])

@@ -73,7 +73,7 @@ class mdPCA:
                 - `'cov_matrix_imputation_ils'`: 
                     The method of 'cov_matrix_imputation', but where afterwards missing samples are re-projected onto the space 
                     given by 'cov_matrix_imputation' using the same iterative method on the original covariance matrix just 
-                    as done in 'regularized_optimization_ils'.
+                    as done in 'regularized_optimization_ils'. At least one sample must have all SNPs observed.
                 - `'nonmissing_pca_ils'`: 
                     The method of 'weighted_cov_pca' on the non-missing samples, followed by the projection of missing samples onto 
                     the space given by 'weighted_cov_pca' using the same iterative method on the original covariance matrix just as 
@@ -933,6 +933,8 @@ class mdPCA:
     def _cov_matrix_imputation_ils(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
         missing_counts = np.isnan(X_incomplete).sum(axis=1)
         fitted = np.flatnonzero(missing_counts == 0)
+        if not fitted.size:
+            raise ValueError("cov_matrix_imputation_ils requires at least one fully observed sample.")
 
         observed, completed, strength = self._complete_covariance(X_incomplete, percent_vals_masked)
         self._demean(observed, np.full(len(observed), 1 / len(observed)))

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from snputils.processing.mdpca import mdPCA
 
@@ -28,3 +29,10 @@ def test_ils_fits_completed_covariance_and_projects_observed_covariances(tmp_pat
 
     # Component signs may differ between SVD implementations.
     np.testing.assert_allclose(scores @ scores.T, expected @ expected.T, rtol=1e-4, atol=1e-6)
+
+
+def test_ils_requires_a_complete_sample():
+    genotypes = np.array([[0, 1, np.nan], [np.nan, 1, 2], [1, np.nan, 0]])
+    model = mdPCA(method="cov_matrix_imputation_ils", n_components=1)
+    with pytest.raises(ValueError, match="at least one fully observed"):
+        model._run_cov_matrix(genotypes, np.ones(3))

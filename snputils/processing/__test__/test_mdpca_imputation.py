@@ -36,3 +36,36 @@ def test_ils_requires_a_complete_sample():
     model = mdPCA(method="cov_matrix_imputation_ils", n_components=1)
     with pytest.raises(ValueError, match="at least one fully observed"):
         model._run_cov_matrix(genotypes, np.ones(3))
+
+
+@pytest.mark.parametrize("method", ["cov_matrix_imputation", "cov_matrix_imputation_ils"])
+def test_imputation_receives_only_undefined_covariances_as_missing(method, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    genotypes = np.array([
+        [0, 1, 1, 2, 0, 2], [1, 0, 1, 0, 2, 0], [1, 1, 0, 2, 0, 1],
+        [0, 0, 2, np.nan, np.nan, np.nan], [np.nan, np.nan, np.nan, 1, 1, 0],
+        [np.nan, np.nan, 1, 1, 1, np.nan],
+    ])
+    model = mdPCA(method=method, n_components=2, covariance_matrix_file=tmp_path / "cov.npy")
+    impute = model._iterative_svd_matrix_completion
+
+    def check_and_impute(cov):
+        called = np.isfinite(genotypes).astype(int)
+        np.testing.assert_array_equal(np.isnan(cov), (called @ called.T) < 2)
+        assert cov[1, 4] == 1  # three shared SNPs
+        assert cov[2, 3] == 0  # a defined zero stays observed
+        return impute(cov)
+
+    monkeypatch.setattr(model, "_iterative_svd_matrix_completion", check_and_impute)
+    scores = model._run_cov_matrix(genotypes, np.ones(6))
+    assert scores.shape == (6, 2)
+    assert np.isfinite(scores).all()
+    if method == "cov_matrix_imputation_ils":
+        # Sample 5 shares just one SNP with sample 3. Its other predecessors have defined covariances.
+        neighbors = [0, 1, 2, 4]
+        counts = np.array([3, 3, 3, 2])
+        centered = np.load(tmp_path / "cov.npy")
+        expected = np.linalg.lstsq(
+            scores[neighbors] * counts[:, None], centered[5, neighbors] * counts, rcond=None
+        )[0]
+        np.testing.assert_allclose(scores[5], expected, rtol=1e-5, atol=1e-6)

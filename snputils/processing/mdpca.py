@@ -74,6 +74,7 @@ class mdPCA:
                     The method of 'cov_matrix_imputation', but where afterwards missing samples are re-projected onto the space 
                     given by 'cov_matrix_imputation' using the same iterative method on the original covariance matrix just 
                     as done in 'regularized_optimization_ils'. At least one sample must have all SNPs observed.
+                    A pair of samples needs at least two shared SNPs to contribute to the projection.
                 - `'nonmissing_pca_ils'`: 
                     The method of 'weighted_cov_pca' on the non-missing samples, followed by the projection of missing samples onto 
                     the space given by 'weighted_cov_pca' using the same iterative method on the original covariance matrix just as 
@@ -747,7 +748,7 @@ class mdPCA:
         strength_matrix /= X.shape[1]
         return strength_matrix
 
-    def _cov(self, x):
+    def _cov(self, x, *, preserve_undefined=False):
         ddof = 1
         x = np.ma.array(x, ndmin=2, copy=True, dtype=np.float32)
         xmask = np.ma.getmaskarray(x)
@@ -755,11 +756,12 @@ class mdPCA:
         fact = np.dot(xnotmask, xnotmask.T) * 1. - ddof
         del xnotmask
         gc.collect()
-        result = (np.ma.dot(x, x.T, strict=False) / fact).squeeze()
+        result = np.ma.dot(x, x.T, strict=False) / fact
         x = x.data
         strength_vec = self._compute_strength_vector(x)
         strength_mat = self._compute_strength_matrix(x)
-        return result.data, strength_vec, strength_mat
+        covariance = result.filled(np.nan) if preserve_undefined else result.data.squeeze()
+        return covariance, strength_vec, strength_mat
 
     @staticmethod
     def _demean(S, w):
@@ -907,7 +909,7 @@ class mdPCA:
     def _complete_covariance(self, X_incomplete, percent_vals_masked):
         start_time = time.time()
         masked = np.ma.masked_invalid(X_incomplete)
-        observed, _, strength = self._cov(masked)
+        observed, _, strength = self._cov(masked, preserve_undefined=True)
         logging.info("Covariance Matrix --- %s seconds ---", time.time() - start_time)
         to_impute = self._create_cov_mask(observed, strength, percent_vals_masked)
         completed = self._iterative_svd_matrix_completion(to_impute)
@@ -937,14 +939,23 @@ class mdPCA:
             raise ValueError("cov_matrix_imputation_ils requires at least one fully observed sample.")
 
         observed, completed, strength = self._complete_covariance(X_incomplete, percent_vals_masked)
+        # Use imputed entries to compute centering offsets for incomplete rows.
+        # Only defined, originally observed covariances enter the least-squares fit.
+        undefined = np.isnan(observed)
+        observed[undefined] = completed[undefined]
         self._demean(observed, np.full(len(observed), 1 / len(observed)))
+        observed[undefined] = np.nan
 
         scores = self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
         missing = np.flatnonzero(missing_counts)
         for i in missing[np.argsort(missing_counts[missing], kind="stable")]:
-            weights = strength[i, fitted]
+            neighbors = fitted[np.isfinite(observed[i, fitted])]
+            if not neighbors.size:
+                raise ValueError(f"Cannot project sample at index {i}: no previously fitted sample "
+                                 "shares at least two observed SNPs with it.")
+            weights = strength[i, neighbors]
             scores[i] = np.linalg.lstsq(
-                scores[fitted] * weights[:, None], observed[i, fitted] * weights, rcond=None
+                scores[neighbors] * weights[:, None], observed[i, neighbors] * weights, rcond=None
             )[0]
             fitted = np.append(fitted, i)
         return scores

@@ -210,6 +210,21 @@ def _vcf_region_matches(
     return True
 
 
+def _polars_region_expr(
+    region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
+    columns: Iterable[str],
+) -> Optional[pl.Expr]:
+    if region_filter is None:
+        return None
+    chrom, start, end = region_filter
+    predicate = pl.col("#CHROM" if "#CHROM" in columns else "CHROM") == chrom
+    if start is not None:
+        predicate = predicate & (pl.col("POS") >= start)
+    if end is not None:
+        predicate = predicate & (pl.col("POS") <= end)
+    return predicate
+
+
 def _region_mask_from_raw(
     raw: np.ndarray,
     chrom_starts: np.ndarray,
@@ -2515,8 +2530,8 @@ class VCFReaderPolars(SNPBaseReader):
         return_dosage: bool,
         non_diploid_chromosomes: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        if not sample_columns:
-            return _empty_genotype_array(vcf.height, 0, return_dosage)
+        if not sample_columns or vcf.is_empty():
+            return _empty_genotype_array(vcf.height, len(sample_columns), return_dosage)
 
         gt = vcf.select(sample_columns)
         formats = vcf["FORMAT"].unique().to_list()
@@ -2625,9 +2640,8 @@ class VCFReaderPolars(SNPBaseReader):
             exclude_fields: Fields to exclude for use in combination with fields='*'.
                 Available options include 'CHROM'/'#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL',
                 'FILTER', 'INFO', and 'FORMAT'.
-            region: Genomic region to extract variants for. If provided, it should be a
-                tabix-style region string, specifying a chromosome name and optionally
-                beginning and end coordinates (e.g., '2L:100000-200000'). TODO
+            region: Select records by chromosome and 1-based inclusive POS, for
+                example ``"22"``, ``"22:100000"``, or ``"22:100000-200000"``.
             samples: Selection of samples to extract calldata for. If provided, should be
                 a list of strings giving sample identifiers. May also be a list of
                 integers giving indices of selected samples.  If an empty list is provided,
@@ -2695,6 +2709,7 @@ class VCFReaderPolars(SNPBaseReader):
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
 
+        region_filter = _parse_vcf_region(region)
         log.info(f"Reading {self._filename}")
 
         try:
@@ -2704,6 +2719,11 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 separator=separator,
             )
+            region_expr = _polars_region_expr(region_filter, col_dtypes)
+            if region_expr is not None:
+                columns = list(col_dtypes)
+                region_idxs = [columns.index(col) for col in region_expr.meta.root_names()]
+                selected_column_idxs = sorted(set(selected_column_idxs + region_idxs))
             if sample_columns and "FORMAT" not in field_columns:
                 selected_column_idxs = sorted(set(selected_column_idxs + [list(col_dtypes).index("FORMAT")]))
             if return_dosage and not assume_biallelic and "ALT" not in field_columns:
@@ -2734,6 +2754,8 @@ class VCFReaderPolars(SNPBaseReader):
                 schema_overrides=col_dtypes,
                 **thread_options,
             )
+            if region_expr is not None:
+                vcf = vcf.filter(region_expr)
 
             log.debug("vcf polars read")
             snpobj = self._dataframe_to_snpobject(
@@ -2796,6 +2818,8 @@ class VCFReaderPolars(SNPBaseReader):
 
         Streaming parallelism uses Polars' process-wide thread pool.
 
+        region: Select records by chromosome and 1-based inclusive POS, as in
+            ``read()``. Variant indexes refer to rows in the original VCF.
         assume_biallelic: Skip ALT checks for a VCF known to contain at most one
             ALT allele per record. A wrong assumption can produce incorrect genotypes.
         chromosome_ploidy:
@@ -2811,8 +2835,7 @@ class VCFReaderPolars(SNPBaseReader):
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
-        if region is not None:
-            raise NotImplementedError("VCFReaderPolars.iter_read does not support `region` yet.")
+        region_filter = _parse_vcf_region(region)
         if samples is not None and (sample_ids is not None or sample_idxs is not None):
             raise ValueError("Only one of samples, sample_ids, and sample_idxs can be specified.")
         if sample_idxs is not None and sample_ids is not None:
@@ -2836,6 +2859,9 @@ class VCFReaderPolars(SNPBaseReader):
 
         selected_columns = field_columns + sample_columns
         filter_columns = ["FORMAT"] if sample_columns else []
+        region_expr = _polars_region_expr(region_filter, col_dtypes)
+        if region_expr is not None:
+            filter_columns.extend(region_expr.meta.root_names())
         chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
         if detect_non_diploid and chrom_column is not None:
             filter_columns.append(chrom_column)
@@ -2873,6 +2899,8 @@ class VCFReaderPolars(SNPBaseReader):
                 batch = batch.filter(np.isin(row_idxs, wanted_variant_idxs))
             row_offset += original_height
 
+            if region_expr is not None:
+                batch = batch.filter(region_expr)
             if wanted_variant_ids is not None and batch.height > 0:
                 id_expr = pl.col("ID").cast(pl.Utf8).is_in(wanted_variant_ids)
                 if chrom_column is not None and all(col in batch.columns for col in (chrom_column, "POS", "REF", "ALT")):

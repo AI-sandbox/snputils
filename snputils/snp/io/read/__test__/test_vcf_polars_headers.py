@@ -60,6 +60,46 @@ def test_polars_auto_retries_dosage_with_missing_gt_and_unphased_call(tmp_path, 
 
 
 @pytest.mark.parametrize("chrom_header", ["#CHROM", "CHROM"])
+def test_polars_region_filters_before_decoding(tmp_path, chrom_header, caplog):
+    path = tmp_path / "regions.vcf"
+    _write_tiny_vcf(path, chrom_header)
+    with path.open("a") as out:
+        out.write("2\t200\trs3\tG\tA,C\t.\tPASS\t.\tGT\t0/2\t0/1\n")
+    reader = VCFReaderPolars(path)
+    kwargs = dict(region="1:200-200", fields=["ID"], samples=["HG00096"])
+
+    eager = reader.read(**kwargs)
+    streamed, = reader.iter_read(chunk_size=1, **kwargs)
+    for result in (eager, streamed):
+        np.testing.assert_array_equal(result.variants_id, ["rs2"])
+        np.testing.assert_array_equal(result.genotypes, [[[1, 1]]])
+        assert result.variants_chrom.size == result.variants_pos.size == 0
+    np.testing.assert_array_equal(reader.read(genotype_mode="dosage", **kwargs).genotypes, [[2]])
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
+def test_polars_region_with_no_matches(tmp_path, caplog):
+    path = tmp_path / "regions.vcf"
+    _write_tiny_vcf(path, "#CHROM")
+    reader = VCFReaderPolars(path)
+
+    assert reader.read(region="X").genotypes.shape == (0, 2, 2)
+    assert reader.read(region="X", genotype_mode="dosage").genotypes.shape == (0, 2)
+    assert list(reader.iter_read(region="X")) == []
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
+def test_polars_region_intersects_original_variant_indexes(tmp_path):
+    path = tmp_path / "regions.vcf"
+    _write_tiny_vcf(path, "#CHROM")
+    reader = VCFReaderPolars(path)
+
+    chunk, = reader.iter_read(region="1:200-", variant_idxs=[1], chunk_size=1)
+    np.testing.assert_array_equal(chunk.variants_id, ["rs2"])
+    assert list(reader.iter_read(region="1:200-", variant_idxs=[0], chunk_size=1)) == []
+
+
+@pytest.mark.parametrize("chrom_header", ["#CHROM", "CHROM"])
 def test_vcf_polars_reads_sample_names_for_both_chrom_headers(tmp_path: Path, chrom_header: str) -> None:
     vcf_path = tmp_path / f"tiny_{chrom_header.replace('#', 'hash_')}.vcf"
     _write_tiny_vcf(vcf_path, chrom_header)

@@ -849,7 +849,10 @@ class mdPCA:
             return masked
 
         rows, cols = np.triu_indices_from(cov)
-        order = np.argsort(strength_mat[rows, cols], kind="stable")[:budget]
+        # At a given overlap, visit disjoint pairs first. Within each round
+        # a sample i has just one partner j with (i + j) % n equal to that round.
+        pair_round = (rows + cols) % len(cov)
+        order = np.lexsort((pair_round, strength_mat[rows, cols]))[:budget]
         pair_sizes = np.where(rows[order] == cols[order], 1, 2)
         selected = order[np.cumsum(pair_sizes) <= budget]
         i, j = rows[selected], cols[selected]
@@ -926,6 +929,14 @@ class mdPCA:
         observed, _, strength = self._cov(masked, preserve_undefined=True)
         logging.info("Covariance Matrix --- %s seconds ---", time.time() - start_time)
         to_impute = self._create_cov_mask(observed, strength, percent_vals_masked)
+        cross_covariances = np.isfinite(to_impute)
+        np.fill_diagonal(cross_covariances, False)
+        isolated = np.flatnonzero(~cross_covariances.any(axis=1))
+        if isolated.size:
+            raise ValueError(
+                f"Sample at index {isolated[0]} has no observed covariance with another sample "
+                "after masking. Check SNP overlap or reduce percent_vals_masked."
+            )
         completed = self._iterative_svd_matrix_completion(to_impute)
         return observed, completed, strength
 

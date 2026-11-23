@@ -4,6 +4,25 @@ import pytest
 from snputils.processing.mdpca import mdPCA
 
 
+def test_tied_covariance_mask_spreads_across_samples():
+    cov = np.eye(12)
+    masked = np.isnan(mdPCA._create_cov_mask(cov, np.ones_like(cov), 20))
+
+    np.testing.assert_array_equal(masked, masked.T)
+    assert masked.sum() in (27, 28)
+    assert np.ptp(masked.sum(axis=1)) <= 1
+
+
+@pytest.mark.parametrize(("percent", "partial"), [
+    (0, [np.nan, np.nan, np.nan, 1]),
+    (50, [np.nan, np.nan, 0, 1]),
+])
+def test_imputation_rejects_sample_without_observed_cross_covariance(percent, partial):
+    genotypes = np.array([[1, 0, 1, 0], [0, 1, 1, 0], [1, 0, 0, 1], partial])
+    with pytest.raises(ValueError, match="index 3 has no observed covariance with another sample"):
+        mdPCA()._complete_covariance(genotypes, percent)
+
+
 def test_imputed_covariance_stays_symmetric_with_tied_overlap(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     genotypes = np.random.default_rng(182).binomial(1, 0.3, size=(12, 60)).astype(float)

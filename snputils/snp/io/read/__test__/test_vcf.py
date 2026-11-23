@@ -8,6 +8,43 @@ from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
 
 
 @pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+@pytest.mark.parametrize("streaming", [False, True], ids=["eager", "streaming"])
+def test_vcf44_leading_phase_marker(tmp_path, reader_cls, streaming, caplog):
+    path = tmp_path / "leading_phase.vcf"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 21))
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        f"X\t1\t.\tA\t{alts}\t.\tPASS\t.\tGT\t|0|20\t|20\n"
+        f"X\t2\t.\tA\t{alts}\t.\tPASS\t.\tGT:DP\t|.|20:9\t|0|1:6\n"
+    )
+    reader = reader_cls(path)
+    if streaming:
+        calls = np.concatenate([chunk.genotypes for chunk in reader.iter_read(chunk_size=1)])
+    else:
+        calls = reader.read(genotype_mode="phased").genotypes
+    np.testing.assert_array_equal(calls, [[[0, 20], [20, -1]], [[-1, 20], [0, 1]]])
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_vcf44_leading_unphased_marker_obeys_genotype_mode(tmp_path, reader_cls):
+    path = tmp_path / "leading_unphased.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t/0|1\t/1/1\n"
+    )
+    reader = reader_cls(path)
+    with pytest.raises(ValueError, match="unphased"):
+        reader.read(samples=["s1"], genotype_mode="phased")
+    with pytest.raises(ValueError, match="unphased"):
+        next(reader.iter_read(samples=["s1"], genotype_mode="phased"))
+    np.testing.assert_array_equal(reader.read(genotype_mode="auto").genotypes, [[1, 2]])
+    np.testing.assert_array_equal(next(reader.iter_read(genotype_mode="dosage")).genotypes, [[1, 2]])
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
 @pytest.mark.parametrize("compressed", [False, True])
 def test_multidigit_gt_eager_and_streaming(tmp_path, reader_cls, compressed, caplog):
     path = tmp_path / ("wide.vcf.gz" if compressed else "wide.vcf")
@@ -88,6 +125,23 @@ def test_gt_subfield_preserves_final_multidigit_allele(tmp_path, fmt, call):
     result = VCFReader(path).read(fields=["ALT"])
     np.testing.assert_array_equal(result.genotypes, [[[0, 20]]])
     np.testing.assert_array_equal(result.variants_alt, [alts])
+
+
+def test_vcf_reader_preserves_gt_with_utf8_phase_set_names(tmp_path):
+    path = tmp_path / "family.vcf"
+    repeat_alleles = ",".join("AC" * copies for copies in range(2, 22))
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tdaughter\tson\n"
+        f"X\t100\t.\tAC\t{repeat_alleles}\t.\tPASS\t.\tGT:PSL\t0|20:mère,père\t1:mère\n"
+        "X\t200\t.\tG\tA\t.\tPASS\t.\tGT:PSL\t0|1:mère,père\t1:mère\n",
+        encoding="utf-8",
+    )
+
+    result = VCFReader(path).read(genotype_mode="phased")
+    np.testing.assert_array_equal(result.genotypes, [[[0, 20], [1, -1]], [[0, 1], [1, -1]]])
 
 
 @pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])

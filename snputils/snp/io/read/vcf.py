@@ -726,7 +726,8 @@ def _parse_gt_token(value: Union[str, bytes], *, require_phase: bool) -> tuple[i
         if require_phase:
             raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
         gt = gt.replace("/", "|")
-    first, _, second = gt.partition("|")
+    # VCF 4.4 allows an explicit phase indicator before the first allele.
+    first, _, second = gt.removeprefix("|").partition("|")
     missing = ("", ".", "-", "-1")
     first_allele = -1 if first in missing else int(first)
     second_allele = -1 if second in missing else int(second)
@@ -2529,8 +2530,8 @@ class VCFReaderPolars(SNPBaseReader):
             raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
         token = pl.all()
         if return_dosage:
-            token = token.str.replace("/", "|", literal=True)
-        pairs = gt.select(token.str.splitn("|", 2))
+            token = token.str.replace_all("/", "|", literal=True)
+        pairs = gt.select(token.str.strip_prefix("|").str.splitn("|", 2))
         alleles = []
         for field in ("field_0", "field_1"):
             values = pl.all().struct.field(field).replace([".", "-", ""], "-1").fill_null("-1")

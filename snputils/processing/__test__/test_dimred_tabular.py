@@ -316,3 +316,28 @@ def test_pca_applies_snp_mask_to_genotypes_and_variant_metadata():
     pca = PCA(snpobj=snp, samples_subset=np.array([2, 0]), snps_subset=np.array([True, False, True]))
     np.testing.assert_array_equal(pca.X_, snp.genotypes[[0, 2]][:, [2, 0]].T)
     assert pca.samples_ == ["C", "A"]
+
+
+@pytest.mark.parametrize("axis", ["samples", "variants"])
+def test_cached_projection_keeps_its_selection_after_default_changes(axis):
+    gt = np.array([[0, 1, 2], [1, 2, 0], [0, 0, 2], [2, 0, 1]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"])
+    pca = PCA(snpobj=snp)
+    original = pca.X_new_.copy()
+    if axis == "samples":
+        pca.samples_subset = [2, 0, 1]
+        scores = pca.transform(snps_subset=[0, 1, 2, 3])
+    else:
+        pca.snps_subset = [3, 0, 2, 1]
+        scores = pca.transform(samples_subset=[0, 1, 2])
+
+    np.testing.assert_allclose(scores, original, atol=1e-12)
+    assert embedding_dataframe_from_model(pca)["indID"].tolist() == ["A", "B", "C"]
+
+    # An explicit source uses the current model defaults.
+    pca.transform(snp)
+    if axis == "samples":
+        np.testing.assert_allclose(pca.X_new_, original[[2, 0, 1]], atol=1e-12)
+        assert pca.samples_ == ["C", "A", "B"]
+    else:
+        np.testing.assert_array_equal(pca.X_, gt[[3, 0, 2, 1]].T)

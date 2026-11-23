@@ -846,15 +846,12 @@ class PCA:
                     haplotypes and columns representing variants. For the PyTorch
                     backend, the matrix is returned as a tensor on ``device``.
         """
-        if snpobj is None:
-            snpobj = self.snpobj
-        if average_haplotypes is None:
-            average_haplotypes = self.average_haplotypes
-        if samples_subset is None:
-            samples_subset = self.samples_subset
-        if snps_subset is None:
-            snps_subset = self.snps_subset
-            
+        source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
+        return self._prepare_matrix(source)
+
+    def _prepare_matrix(self, source: _PCAInput) -> Union[np.ndarray, torch.Tensor]:
+        """Build the sample-by-variant matrix using the resolved selection."""
+        snpobj, average_haplotypes, samples_subset, snps_subset = source
         if snpobj.genotypes.ndim == 2:
             X = np.transpose(snpobj.genotypes.astype(float), (1,0))
         elif snpobj.genotypes.ndim == 3:
@@ -936,7 +933,7 @@ class PCA:
                 ``components_``, and ``mean_`` populated.
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
-        matrix = self._get_data_from_snpobj(*source)
+        matrix = self._prepare_matrix(source)
         self.pca.fit(matrix)
         self._cache_input(matrix, source)
         self.X_new_ = None
@@ -993,7 +990,7 @@ class PCA:
                 snpobj, average_haplotypes, samples_subset, snps_subset,
                 cached=self._cached_input if snpobj is None else None,
             )
-            matrix = self._get_data_from_snpobj(*source)
+            matrix = self._prepare_matrix(source)
             scores = self.pca.transform(matrix)
             self._cache_input(matrix, source)
         else:
@@ -1035,7 +1032,7 @@ class PCA:
                 per component.
         """
         source = self._resolve_input(snpobj, average_haplotypes, samples_subset, snps_subset)
-        matrix = self._get_data_from_snpobj(*source)
+        matrix = self._prepare_matrix(source)
         self.X_new_ = self.pca.fit_transform(matrix)
         self._cache_input(matrix, source)
 

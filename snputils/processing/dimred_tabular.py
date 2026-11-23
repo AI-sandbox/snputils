@@ -57,11 +57,21 @@ def pca_row_haplotype_ids(
 
     Each string uniquely identifies one row of the projection (one haplotype row when
     ``average_haplotypes`` is False). Format uses ``\"indID|haplotype\"`` with haplotype ``0`` or ``1``
-    when two haplotypes are expanded; use :func:`pca_row_individual_ids` for sample IDs alone.
+    when two haplotypes are expanded.
 
     Raises:
         ValueError: If ``snpobj.samples`` is missing while IDs are required for export.
     """
+    _, row_ids = _pca_row_ids(snpobj, average_haplotypes, samples_subset)
+    return row_ids
+
+
+def _pca_row_ids(
+    snpobj: SNPObject,
+    average_haplotypes: bool,
+    samples_subset: Optional[Union[int, Sequence[int]]],
+) -> tuple[List[str], List[str]]:
+    """Return the original sample ID and the haplotype label for each projection row."""
     if snpobj.samples is None:
         raise ValueError(
             "Cannot derive PCA row IDs: snpobj.samples is None. "
@@ -80,22 +90,18 @@ def pca_row_haplotype_ids(
     elif samples_subset is not None:
         s = s[np.asarray(samples_subset, dtype=int)]
 
-    if gt.ndim == 2:
-        return [str(x) for x in s.tolist()]
-    if gt.ndim == 3:
-        if average_haplotypes:
-            return [str(x) for x in s.tolist()]
-        return [
-            f"{sample}|{haplotype}"
-            for sample in s
-            for haplotype in range(gt.shape[2])
-        ]
-    raise AssertionError(gt.ndim)
+    samples = s.tolist()
+    if gt.ndim == 2 or average_haplotypes:
+        return samples, samples
+    ploidy = gt.shape[2]
+    sample_ids = [sample for sample in samples for _ in range(ploidy)]
+    haplotype_ids = [f"{sample}|{i}" for sample in samples for i in range(ploidy)]
+    return sample_ids, haplotype_ids
 
 
 def pca_row_individual_ids(haplotype_row_ids: Sequence[str]) -> List[str]:
-    """Map haplotype-level row IDs to individual IDs (part before ``|`` when present)."""
-    return [h.split("|", 1)[0] if "|" in h else str(h) for h in haplotype_row_ids]
+    """Remove the final haplotype suffix from expanded row labels."""
+    return [str(h).rsplit("|", 1)[0] for h in haplotype_row_ids]
 
 
 def build_embedding_dataframe(

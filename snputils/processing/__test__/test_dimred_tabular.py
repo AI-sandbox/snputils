@@ -261,3 +261,37 @@ def test_cached_projection_uses_last_object_and_preparation_options():
         pca.transform(snps_subset=[0, 1])
     np.testing.assert_allclose(pca.transform(), expected[[2, 0]])
     assert pca.samples_ == ["G", "E"]
+
+
+@pytest.mark.parametrize("mode", ["dosage", "averaged", "expanded"])
+def test_pca_preserves_pipe_in_sample_ids(mode, tmp_path):
+    gt = np.random.default_rng(42).integers(0, 2, size=(4, 3, 2))
+    if mode == "dosage":
+        gt = gt.sum(axis=2)
+    samples = ["family|A", "family|B", "family|0"]
+    snp = SNPObject(genotypes=gt, samples=samples)
+    pca = PCA(snpobj=snp, average_haplotypes=mode == "averaged")
+    assert pca.samples_ == (np.repeat(samples, 2).tolist() if mode == "expanded" else samples)
+    pca.transform(samples_subset=[2, 0])
+    pca.transform()
+
+    expected = ["family|0", "family|A"]
+    if mode == "expanded":
+        haplotypes = [f"{sample}|{i}" for sample in expected for i in range(2)]
+        expected = [sample for sample in expected for _ in range(2)]
+    else:
+        haplotypes = expected
+    assert pca.samples_ == expected
+    assert pca.haplotypes_ == haplotypes
+
+    metadata = pd.DataFrame({"sample": samples, "batch": [1, 2, 3]})
+    frame = embedding_dataframe_from_model(pca, metadata=metadata, require_metadata_match=True)
+    assert frame["batch"].tolist() == ([3, 3, 1, 1] if mode == "expanded" else [3, 1])
+    path = tmp_path / "projection.tsv"
+    save_embedding_table_from_model(pca, path)
+    exported = pd.read_csv(path, sep="\t")
+    assert exported["indID"].tolist() == expected
+    if mode == "expanded":
+        assert exported["haplotype_id"].tolist() == haplotypes
+    else:
+        assert "haplotype_id" not in exported

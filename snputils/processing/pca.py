@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import copy
 import pathlib
-from typing import TYPE_CHECKING, Tuple, Optional, Union, List, Sequence, NamedTuple
+from typing import TYPE_CHECKING, Tuple, Optional, Union, List, NamedTuple
 from sklearn.decomposition import PCA as skPCA 
 
 from snputils.snp.genobj.snpobj import SNPObject
@@ -423,7 +423,7 @@ class PCA:
         self.__snps_subset = snps_subset
         self.__X_ = None
         self._cached_input: Optional[_PCAInput] = None
-        self._cached_row_ids: Optional[List[str]] = None
+        self._cached_row_ids: Optional[Tuple[List[str], List[str]]] = None
         self.__X_new_ = None  # Store transformed SNP data
         self.__n_components_ = None
         self.__components_ = None
@@ -431,6 +431,7 @@ class PCA:
         self.__embedding_table_path = (
             pathlib.Path(embedding_table_path) if embedding_table_path is not None else None
         )
+        self.__sample_row_ids: Optional[List[str]] = None
         self.__haplotype_row_ids: Optional[List[str]] = None
 
         # Initialize PCA backend
@@ -705,6 +706,7 @@ class PCA:
 
     @haplotypes_.setter
     def haplotypes_(self, x: Optional[Union[List[str], np.ndarray]]) -> None:
+        self.__sample_row_ids = None
         if x is None:
             self.__haplotype_row_ids = None
             return
@@ -718,21 +720,24 @@ class PCA:
         """
         Sample identifiers per projection row (same length as ``X_new_`` when set).
 
-        With expanded haplotypes, entries repeat per sample (derived from :attr:`haplotypes_`).
+        With expanded haplotypes, the original sample ID repeats for each haplotype.
         """
         if self.__haplotype_row_ids is None:
             return None
-        return self._haplotype_rows_to_individual_ids(self.__haplotype_row_ids)
+        if self.__sample_row_ids is not None:
+            return self.__sample_row_ids.copy()
 
-    @staticmethod
-    def _haplotype_rows_to_individual_ids(haplotypes: Sequence[str]) -> List[str]:
-        out: List[str] = []
-        for h in haplotypes:
-            if "|" in h:
-                out.append(h.split("|", 1)[0])
-            else:
-                out.append(str(h))
-        return out
+        # Row labels assigned manually have no source sample IDs.
+        from .dimred_tabular import pca_row_individual_ids
+        return pca_row_individual_ids(self.__haplotype_row_ids)
+
+    def _set_projection_row_ids(self) -> None:
+        if self._cached_row_ids is None:
+            self.haplotypes_ = None
+        else:
+            sample_ids, haplotype_ids = self._cached_row_ids
+            self.__sample_row_ids = sample_ids
+            self.__haplotype_row_ids = haplotype_ids.copy()
 
     def copy(self) -> 'PCA':
         """
@@ -792,15 +797,15 @@ class PCA:
         )
 
     def _cache_input(self, matrix, source: _PCAInput) -> None:
-        from .dimred_tabular import pca_row_haplotype_ids
+        from .dimred_tabular import _pca_row_ids
 
         self.X_ = matrix
         self._cached_input = source
         try:
-            row_ids = pca_row_haplotype_ids(source.snpobj, source.average_haplotypes, source.samples_subset)
-            if len(row_ids) != matrix.shape[0]:
-                raise ValueError(f"Got {len(row_ids)} row IDs for {matrix.shape[0]} projection rows.")
-            self._cached_row_ids = row_ids
+            samples, haplotypes = _pca_row_ids(source.snpobj, source.average_haplotypes, source.samples_subset)
+            if len(samples) != matrix.shape[0]:
+                raise ValueError(f"Got {len(samples)} row IDs for {matrix.shape[0]} projection rows.")
+            self._cached_row_ids = samples, haplotypes
         except ValueError as exc:
             warnings.warn(f"Could not derive per-row sample IDs for PCA: {exc}", UserWarning, stacklevel=2)
 
@@ -1002,7 +1007,7 @@ class PCA:
         else:
             scores = self.pca.transform(self.X_)
         self.X_new_ = scores
-        self.haplotypes_ = self._cached_row_ids
+        self._set_projection_row_ids()
         return self.X_new_
 
     def fit_transform(self, snpobj: Optional['SNPObject'] = None, average_haplotypes: Optional[bool] = None,
@@ -1047,7 +1052,7 @@ class PCA:
         self.components_ = self.pca.components_
         self.mean_ = self.pca.mean_
 
-        self.haplotypes_ = self._cached_row_ids
+        self._set_projection_row_ids()
 
         sobj = snpobj if snpobj is not None else self.snpobj
         if sobj is not None:

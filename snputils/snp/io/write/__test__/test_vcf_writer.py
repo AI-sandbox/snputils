@@ -92,6 +92,19 @@ def test_vcf_writer_writes_byte_string_alleles(tmp_path):
     np.testing.assert_array_equal(snpobj.genotypes, alleles.reshape(1, 1, 2))
 
 
+@pytest.mark.parametrize("dtype", [bool, object])
+def test_vcf_writer_writes_boolean_alleles_as_indexes(tmp_path, dtype):
+    path = tmp_path / "boolean.vcf"
+    alleles = np.array([False, np.bool_(True)], dtype=dtype)
+    snpobj = _single_sample_snpobj(alleles)
+
+    VCFWriter(snpobj, path).write(after=0)
+
+    assert path.read_text().splitlines()[-1].split("\t")[-1] == "0/1"
+    assert snpobj.genotypes.dtype == alleles.dtype
+    np.testing.assert_array_equal(snpobj.genotypes, alleles.reshape(1, 1, 2))
+
+
 @pytest.mark.parametrize("after", ["oops", 0.5, -1, np.nan, np.inf])
 def test_vcf_writer_rejects_invalid_missing_replacement(tmp_path, after):
     path = tmp_path / "invalid.vcf"

@@ -12,6 +12,8 @@ log = logging.getLogger(__name__)
 
 
 def _vcf_allele_index(value: object, field: str = "GT") -> int:
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
     if isinstance(value, (float, np.floating)) and value.is_integer():
         value = int(value)
     token = str(value)
@@ -27,6 +29,8 @@ def _encode_vcf_genotypes(
 ) -> np.ndarray:
     if genotypes.dtype.kind == "S":
         genotypes = np.char.decode(genotypes, "ascii")
+    elif genotypes.dtype == np.bool_:
+        genotypes = genotypes.astype(np.uint8)
     if replacement is None:
         missing = False
     elif isinstance(before, (float, np.floating)) and np.isnan(before):

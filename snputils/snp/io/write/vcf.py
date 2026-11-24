@@ -11,6 +11,10 @@ from snputils.snp.genobj import SNPObject
 log = logging.getLogger(__name__)
 
 
+def _decode_vcf_bytes(value: object) -> object:
+    return value.decode("ascii") if isinstance(value, bytes) else value
+
+
 def _vcf_allele_index(value: object, field: str = "GT") -> int:
     if isinstance(value, (bool, np.bool_)):
         return int(value)
@@ -29,6 +33,8 @@ def _encode_vcf_genotypes(
 ) -> np.ndarray:
     if genotypes.dtype.kind == "S":
         genotypes = np.char.decode(genotypes, "ascii")
+    elif genotypes.dtype == object:
+        genotypes = np.frompyfunc(_decode_vcf_bytes, 1, 1)(genotypes)
     elif genotypes.dtype == np.bool_:
         genotypes = genotypes.astype(np.uint8)
     if replacement is None:
@@ -39,7 +45,7 @@ def _encode_vcf_genotypes(
         # Phased PGEN reads use -9 for the same missing allele that VCF reads encode as -1.
         if before == -1 and genotypes.dtype.kind in "ifO" and np.any(genotypes == -9):
             genotypes = np.where(genotypes == -9, -1, genotypes)
-        missing = genotypes == before
+        missing = genotypes == _decode_vcf_bytes(before)
 
     native_integers = genotypes.dtype.kind in "iu"
     if native_integers:
@@ -49,7 +55,8 @@ def _encode_vcf_genotypes(
         if before == replacement or not np.any(missing):
             return genotypes
 
-    indices = genotypes.astype(object)
+    # Decoding already created a private buffer for object arrays.
+    indices = genotypes.astype(object, copy=False)
     if not native_integers:
         np.frompyfunc(_vcf_allele_index, 1, 1)(indices, where=np.logical_not(missing), out=indices)
     indices[missing] = replacement
@@ -57,8 +64,7 @@ def _encode_vcf_genotypes(
 
 
 def _vcf_alt_text(alt: object) -> str:
-    if isinstance(alt, bytes):
-        alt = alt.decode("ascii")
+    alt = _decode_vcf_bytes(alt)
     return "." if alt is None or alt == "" else str(alt)
 
 

@@ -81,9 +81,10 @@ def _single_sample_snpobj(alleles):
     )
 
 
-def test_vcf_writer_writes_byte_string_alleles(tmp_path):
+@pytest.mark.parametrize("dtype", ["S1", object])
+def test_vcf_writer_writes_byte_string_alleles(tmp_path, dtype):
     path = tmp_path / "bytes.vcf"
-    alleles = np.array([b"0", b"1"], dtype="S1")
+    alleles = np.array([b"0", b"1"], dtype=dtype)
     snpobj = _single_sample_snpobj(alleles)
 
     VCFWriter(snpobj, path).write()
@@ -132,6 +133,7 @@ def test_vcf_writer_rejects_unmatched_negative_alleles(tmp_path, allele, options
     [
         (["1", "."], ".", "0", "1/0"),
         ([b"1", b"."], ".", "0", "1/0"),
+        (np.array([1, b"."], dtype=object), ".", "0", "1/0"),
         (["1", "NA"], "NA", ".", "1/."),
         ([1, -9], -9, 0.0, "1/0"),
         ([-1, -9], -1, 0, "0/0"),

@@ -83,8 +83,9 @@ def test_simulator_writes_phased_bcf_and_snpobject_pickle(tmp_path):
 
 
 @pytest.mark.parametrize("output_format", ["vcf", "vcf.gz"])
-def test_simulator_roundtrips_partially_missing_phased_genotypes(tmp_path, output_format):
-    simulated = np.array([[[0, -1]], [[-1, 1]]], dtype=np.int8)
+@pytest.mark.parametrize("missing", [-1, -9])
+def test_simulator_roundtrips_partially_missing_phased_genotypes(tmp_path, output_format, missing):
+    simulated = np.array([[[0, missing]], [[missing, 1]]], dtype=np.int8)
     samples = np.array(["SIM1"])
     path = _write_genotypes_like_input(
         _source_snpobject(), simulated, samples, tmp_path / "cohort", output_format
@@ -96,7 +97,7 @@ def test_simulator_roundtrips_partially_missing_phased_genotypes(tmp_path, outpu
     assert calls == ["0|.", ".|1"]
 
     observed = VCFReader(path).read(genotype_mode="phased")
-    np.testing.assert_array_equal(observed.genotypes, simulated)
+    np.testing.assert_array_equal(observed.genotypes, [[[0, -1]], [[-1, 1]]])
     np.testing.assert_array_equal(observed.samples, samples)
 
 

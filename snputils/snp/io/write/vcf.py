@@ -32,6 +32,9 @@ def _encode_vcf_genotypes(
     elif isinstance(before, (float, np.floating)) and np.isnan(before):
         missing = np.not_equal(genotypes, genotypes)
     else:
+        # Phased PGEN reads use -9 for the same missing allele that VCF reads encode as -1.
+        if before == -1 and genotypes.dtype.kind in "ifO" and np.any(genotypes == -9):
+            genotypes = np.where(genotypes == -9, -1, genotypes)
         missing = genotypes == before
 
     native_integers = genotypes.dtype.kind in "iu"
@@ -172,8 +175,8 @@ class VCFWriter:
                 If True, renames potential missing values in `snpobj.genotypes` before writing.
                 Defaults to True.
             before (int, float, or str, default=-1):
-                The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
-                Default is -1.
+                The input missing allele marker. The default recognizes both numeric -1 and
+                the -9 returned by phased PGEN reads. Custom markers can include '.' or NaN.
             after (int, float, or str, default='.'):
                 The value to write for `before`, either '.' or an allele index defined at each
                 record where the replacement is used.

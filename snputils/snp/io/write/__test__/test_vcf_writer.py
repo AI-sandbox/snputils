@@ -105,12 +105,23 @@ def test_vcf_writer_rejects_invalid_missing_replacement(tmp_path, after):
 
 
 @pytest.mark.parametrize(
+    ("allele", "options"),
+    [(-2, {}), (-9, {"rename_missing_values": False}), (-9, {"before": -2})],
+)
+def test_vcf_writer_rejects_unmatched_negative_alleles(tmp_path, allele, options):
+    snpobj = _single_sample_snpobj([0, allele])
+    with pytest.raises(ValueError, match="nonnegative integer allele indexes"):
+        VCFWriter(snpobj, tmp_path / "invalid.vcf").write(**options)
+
+
+@pytest.mark.parametrize(
     ("alleles", "before", "after", "expected"),
     [
         (["1", "."], ".", "0", "1/0"),
         ([b"1", b"."], ".", "0", "1/0"),
         (["1", "NA"], "NA", ".", "1/."),
         ([1, -9], -9, 0.0, "1/0"),
+        ([-1, -9], -1, 0, "0/0"),
         ([1.0, np.nan], np.nan, ".", "1/."),
     ],
 )

@@ -195,7 +195,6 @@ def _write_genotypes_like_input(
         from snputils.snp.io.write.vcf import VCFWriter
 
         VCFWriter(snpobj=snpobj, filename=str(output_path), phased=True).write(
-            rename_missing_values=False,
             variants_info=snpobj.variants_info,
         )
     elif output_format == "bgen":

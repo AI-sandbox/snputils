@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import pickle
 import sys
 import types
@@ -16,6 +17,7 @@ from snputils.simulation.simulator_cli import (
 )
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.bcf import BCFReader
+from snputils.snp.io.read.vcf import VCFReader
 
 
 def _source_snpobject() -> SNPObject:
@@ -78,6 +80,25 @@ def test_simulator_writes_phased_bcf_and_snpobject_pickle(tmp_path):
         observed_pickle = pickle.load(handle)
     np.testing.assert_array_equal(observed_pickle.genotypes, simulated)
     np.testing.assert_array_equal(observed_pickle.samples, samples)
+
+
+@pytest.mark.parametrize("output_format", ["vcf", "vcf.gz"])
+@pytest.mark.parametrize("missing", [-1, -9])
+def test_simulator_roundtrips_partially_missing_phased_genotypes(tmp_path, output_format, missing):
+    simulated = np.array([[[0, missing]], [[missing, 1]]], dtype=np.int8)
+    samples = np.array(["SIM1"])
+    path = _write_genotypes_like_input(
+        _source_snpobject(), simulated, samples, tmp_path / "cohort", output_format
+    )
+
+    open_vcf = gzip.open if output_format == "vcf.gz" else open
+    with open_vcf(path, "rt") as handle:
+        calls = [line.rstrip().split("\t")[-1] for line in handle if not line.startswith("#")]
+    assert calls == ["0|.", ".|1"]
+
+    observed = VCFReader(path).read(genotype_mode="phased")
+    np.testing.assert_array_equal(observed.genotypes, [[[0, -1]], [[-1, 1]]])
+    np.testing.assert_array_equal(observed.samples, samples)
 
 
 def test_batch_output_layout_and_truth_sidecar(tmp_path):

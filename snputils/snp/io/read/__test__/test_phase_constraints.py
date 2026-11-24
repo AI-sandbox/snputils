@@ -203,6 +203,23 @@ def test_pgen_dosage_preserves_negative_missing_sentinel(tmp_path: Path):
     np.testing.assert_array_equal(observed.genotypes[1, 1], genotypes[1, 1])
 
 
+def test_save_vcf_preserves_missing_genotypes_from_phased_pgen(tmp_path: Path):
+    prefix = tmp_path / "phased"
+    source = _toy_snpobj(np.array([[[0, 1], [-1, -1]], [[1, 0], [1, 1]]], dtype=np.int8))
+    source.save_pgen(prefix)
+    loaded = PGENReader(prefix).read(genotype_mode="phased")
+    original = loaded.genotypes.copy()
+
+    path = tmp_path / "converted.vcf"
+    loaded.save_vcf(path)
+
+    records = [line.split("\t")[9:] for line in path.read_text().splitlines() if not line.startswith("#")]
+    assert records == [["0/1", "./."], ["1/0", "1/1"]]
+    observed = VCFReader(path).read(genotype_mode="dosage")
+    np.testing.assert_array_equal(observed.genotypes, [[1, -1], [1, 2]])
+    np.testing.assert_array_equal(loaded.genotypes, original)
+
+
 def test_pgen_parallel_dosage_matches_serial(tmp_path: Path):
     prefix = tmp_path / "parallel"
     genotypes = np.array(

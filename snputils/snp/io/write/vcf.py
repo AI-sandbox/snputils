@@ -1,41 +1,71 @@
 import logging
 import gzip
+from copy import copy
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import numpy as np
 
 from snputils.snp.genobj import SNPObject
-from snputils.snp.io.write._genotype_encoding import validate_hardcall_values
 
 log = logging.getLogger(__name__)
 
 
-def _vcf_allele_token(value: object, field: str = "GT") -> str:
+def _vcf_allele_index(value: object, field: str = "GT") -> int:
     if isinstance(value, (float, np.floating)) and value.is_integer():
         value = int(value)
     token = str(value)
-    if token != "." and not (token.isascii() and token.isdecimal()):
+    if token == ".":
+        return -1
+    if not (token.isascii() and token.isdecimal()):
         raise ValueError(f"VCF {field} requires '.' or nonnegative integer allele indexes, got {value!r}.")
-    return token
+    return int(token)
 
 
 def _encode_vcf_genotypes(
-    genotypes: np.ndarray, before: Union[int, float, str], replacement: str,
+    genotypes: np.ndarray, before: Union[int, float, str], replacement: Optional[int],
 ) -> np.ndarray:
-    if isinstance(before, (float, np.floating)) and np.isnan(before):
+    if genotypes.dtype.kind == "S":
+        genotypes = np.char.decode(genotypes, "ascii")
+    if replacement is None:
+        missing = False
+    elif isinstance(before, (float, np.floating)) and np.isnan(before):
         missing = np.not_equal(genotypes, genotypes)
     else:
         missing = genotypes == before
 
-    # Native integer calls already have the required VCF representation.
-    if genotypes.dtype.kind in "iu" and np.all((genotypes >= 0) | missing):
-        return np.where(missing, replacement, genotypes) if np.any(missing) else genotypes
+    native_integers = genotypes.dtype.kind in "iu"
+    if native_integers:
+        if np.any((genotypes < 0) & np.logical_not(missing)):
+            raise ValueError("VCF GT requires '.' or nonnegative integer allele indexes.")
+        # The default -1 missing marker already has the internal encoding for '.'.
+        if before == replacement or not np.any(missing):
+            return genotypes
 
-    tokens = genotypes.astype(object)
-    tokens[missing] = replacement
-    np.frompyfunc(_vcf_allele_token, 1, 1)(tokens, out=tokens)
-    return tokens
+    indices = genotypes.astype(object)
+    if not native_integers:
+        np.frompyfunc(_vcf_allele_index, 1, 1)(indices, where=np.logical_not(missing), out=indices)
+    indices[missing] = replacement
+    return indices
+
+
+def _vcf_alt_text(alt: object) -> str:
+    if isinstance(alt, bytes):
+        alt = alt.decode("ascii")
+    return "." if alt is None or alt == "" else str(alt)
+
+
+def _validate_vcf_allele_bounds(data: SNPObject) -> None:
+    # An allele index is local to its record. Zero is REF and ALT entries start at one.
+    max_indices = data.genotypes.max(axis=(1, 2), initial=0)
+    for i, max_index in enumerate(max_indices):
+        alt = _vcf_alt_text(data.variants_alt[i])
+        n_alt = 0 if alt == "." else alt.count(",") + 1
+        if max_index > n_alt:
+            raise ValueError(
+                f"VCF allele index {max_index} at {data.variants_chrom[i]}:{data.variants_pos[i]} "
+                f"is out of range for ALT={alt} (expected 0 to {n_alt} or '.')."
+            )
 
 
 def _normalize_info_values(
@@ -145,14 +175,22 @@ class VCFWriter:
                 The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'):
-                The value to write for `before`, either '.' or a nonnegative integer allele index.
+                The value to write for `before`, either '.' or an allele index defined at each
+                record where the replacement is used.
             variants_info (sequence of str, optional):
                 Per-variant INFO column values (e.g. ``["END=2000", "END=3000"]``). Length must match variant count.
                 When provided, a ##INFO header line for END is written if any value contains ``END=``.
         """
-        self.__chrom_partition = chrom_partition
-        self.__before = before
-        self.__replacement = _vcf_allele_token(after, "after") if rename_missing_values else None
+        replacement = _vcf_allele_index(after, "after") if rename_missing_values else None
+        data = copy(self.__snpobj)
+        genotypes = np.asarray(data.genotypes)
+        if data.n_samples:
+            if genotypes.ndim != 3 or genotypes.shape[2] != 2:
+                raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
+            data.genotypes = _encode_vcf_genotypes(genotypes, before, replacement)
+            _validate_vcf_allele_bounds(data)
+        elif genotypes.ndim not in (2, 3):
+            raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 
         file_extensions = (".vcf", ".bcf")
         suffixes = self.__filename.suffixes
@@ -165,9 +203,7 @@ class VCFWriter:
         else:
             self.__file_extension = ".vcf"
 
-        data = self.__snpobj
-
-        if self.__chrom_partition:
+        if chrom_partition:
             chroms = data.unique_chrom
 
             for chrom in chroms:
@@ -197,17 +233,6 @@ class VCFWriter:
         n_windows = data_chrom.n_snps
         n_samples = data_chrom.n_samples
         has_samples = n_samples > 0
-        if has_samples:
-            if genotypes.ndim != 3 or genotypes.shape[2] != 2:
-                raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
-            if genotypes.dtype.kind == "S":
-                genotypes = np.char.decode(genotypes, "ascii")
-            if self.__replacement is None:
-                validate_hardcall_values(genotypes)
-            else:
-                genotypes = _encode_vcf_genotypes(genotypes, self.__before, self.__replacement)
-        elif genotypes.ndim not in (2, 3):
-            raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 
         info_values = _normalize_info_values(data_chrom, variants_info)
         qual_values = _normalize_qual_values(data_chrom)
@@ -240,19 +265,22 @@ class VCFWriter:
             pos = data_chrom.variants_pos[i]
             vid = data_chrom.variants_id[i]
             ref = data_chrom.variants_ref[i]
-            alt = data_chrom.variants_alt[i]
+            alt = _vcf_alt_text(data_chrom.variants_alt[i])
             fields = [
                 str(chrom_val),
                 str(pos),
                 str(vid),
                 str(ref),
-                str(alt),
+                alt,
                 str(qual_values[i]),
                 str(filter_values[i]),
                 str(info_values[i]),
             ]
             if has_samples:
                 row = genotypes[i]
+                missing = row == -1
+                if np.any(missing):
+                    row = np.where(missing, ".", row)
                 sample_fields = [
                     f"{row[s,0]}{sep}{row[s,1]}"
                     for s in range(n_samples)

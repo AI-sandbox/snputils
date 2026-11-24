@@ -123,3 +123,46 @@ def test_vcf_writer_encodes_custom_missing_marker(tmp_path, alleles, before, aft
 
     assert path.read_text().splitlines()[-1].split("\t")[-1] == expected
     np.testing.assert_array_equal(snpobj.genotypes, original)
+
+
+@pytest.mark.parametrize(
+    ("alleles", "options"),
+    [
+        ([0, -1], {"after": 2}),
+        ([0, 2], {}),
+        (["0", "2"], {"rename_missing_values": False}),
+    ],
+)
+def test_vcf_writer_rejects_undefined_allele(tmp_path, alleles, options):
+    path = tmp_path / "invalid.vcf"
+    snpobj = _single_sample_snpobj(alleles)
+    path.write_text("previous output\n")
+
+    with pytest.raises(ValueError, match=r"allele index 2.*1:100.*ALT=G"):
+        VCFWriter(snpobj, path).write(**options)
+
+    assert path.read_text() == "previous output\n"
+
+
+def test_vcf_writer_checks_only_alleles_emitted_at_each_record(tmp_path):
+    path = tmp_path / "mixed.vcf"
+    snpobj = SNPObject(
+        genotypes=np.array([[[0, -1]], [[0, 1]], [[0, 0]]], dtype=np.int8),
+        samples=np.array(["S1"]),
+        variants_ref=np.array(["A", "A", "A"]),
+        variants_alt=np.array(["G,T", "G", "."]),
+        variants_chrom=np.array(["1", "1", "2"]),
+        variants_id=np.array(["v1", "v2", "v3"]),
+        variants_pos=np.array([100, 200, 300]),
+    )
+
+    VCFWriter(snpobj, path).write(after=2)
+
+    records = [line.split("\t") for line in path.read_text().splitlines() if not line.startswith("#")]
+    assert [(record[4], record[-1]) for record in records] == [("G,T", "0/2"), ("G", "0/1"), (".", "0/0")]
+
+    snpobj.genotypes[2, 0, 1] = 1
+    with pytest.raises(ValueError, match=r"allele index 1.*2:300.*ALT=\."):
+        VCFWriter(snpobj, path).write(after=2, chrom_partition=True)
+    assert not (tmp_path / "mixed_1.vcf").exists()
+    assert not (tmp_path / "mixed_2.vcf").exists()

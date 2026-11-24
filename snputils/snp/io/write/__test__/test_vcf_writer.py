@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read.vcf import VCFReader
@@ -66,3 +67,47 @@ def test_vcf_writer_roundtrips_missing_genotypes(tmp_path):
     observed = VCFReader(path).read(genotype_mode="phased")
 
     np.testing.assert_array_equal(observed.genotypes, genotypes)
+
+
+def _single_sample_snpobj(alleles):
+    return SNPObject(
+        genotypes=np.array([[alleles]]),
+        samples=np.array(["S1"]),
+        variants_ref=np.array(["A"]),
+        variants_alt=np.array(["G"]),
+        variants_chrom=np.array(["1"]),
+        variants_id=np.array(["rs1"]),
+        variants_pos=np.array([100]),
+    )
+
+
+@pytest.mark.parametrize("after", ["oops", 0.5, -1, np.nan, np.inf])
+def test_vcf_writer_rejects_invalid_missing_replacement(tmp_path, after):
+    path = tmp_path / "invalid.vcf"
+    snpobj = _single_sample_snpobj([0, -1])
+
+    with pytest.raises(ValueError, match="after"):
+        VCFWriter(snpobj, path).write(after=after)
+
+    assert not path.exists()
+    np.testing.assert_array_equal(snpobj.genotypes, [[[0, -1]]])
+
+
+@pytest.mark.parametrize(
+    ("alleles", "before", "after", "expected"),
+    [
+        (["1", "."], ".", "0", "1/0"),
+        (["1", "NA"], "NA", ".", "1/."),
+        ([1, -9], -9, 0.0, "1/0"),
+        ([1.0, np.nan], np.nan, ".", "1/."),
+    ],
+)
+def test_vcf_writer_encodes_custom_missing_marker(tmp_path, alleles, before, after, expected):
+    path = tmp_path / "custom.vcf"
+    snpobj = _single_sample_snpobj(alleles)
+    original = snpobj.genotypes.copy()
+
+    VCFWriter(snpobj, path).write(before=before, after=after)
+
+    assert path.read_text().splitlines()[-1].split("\t")[-1] == expected
+    np.testing.assert_array_equal(snpobj.genotypes, original)

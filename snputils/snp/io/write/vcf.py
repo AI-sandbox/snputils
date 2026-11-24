@@ -11,6 +11,33 @@ from snputils.snp.io.write._genotype_encoding import validate_hardcall_values
 log = logging.getLogger(__name__)
 
 
+def _vcf_allele_token(value: object, field: str = "GT") -> str:
+    if isinstance(value, (float, np.floating)) and value.is_integer():
+        value = int(value)
+    token = str(value)
+    if token != "." and not (token.isascii() and token.isdecimal()):
+        raise ValueError(f"VCF {field} requires '.' or nonnegative integer allele indexes, got {value!r}.")
+    return token
+
+
+def _encode_vcf_genotypes(
+    genotypes: np.ndarray, before: Union[int, float, str], replacement: str,
+) -> np.ndarray:
+    if isinstance(before, (float, np.floating)) and np.isnan(before):
+        missing = np.not_equal(genotypes, genotypes)
+    else:
+        missing = genotypes == before
+
+    # Native integer calls already have the required VCF representation.
+    if genotypes.dtype.kind in "iu" and np.all((genotypes >= 0) | missing):
+        return np.where(missing, replacement, genotypes) if np.any(missing) else genotypes
+
+    tokens = genotypes.astype(object)
+    tokens[missing] = replacement
+    np.frompyfunc(_vcf_allele_token, 1, 1)(tokens, out=tokens)
+    return tokens
+
+
 def _normalize_info_values(
     data: SNPObject,
     variants_info: Optional[Sequence[str]],
@@ -118,15 +145,14 @@ class VCFWriter:
                 The current representation of missing values in `genotypes`. Common values might be -1, '.', or NaN.
                 Default is -1.
             after (int, float, or str, default='.'):
-                The value that will replace `before`. Default is '.'.
+                The value to write for `before`, either '.' or a nonnegative integer allele index.
             variants_info (sequence of str, optional):
                 Per-variant INFO column values (e.g. ``["END=2000", "END=3000"]``). Length must match variant count.
                 When provided, a ##INFO header line for END is written if any value contains ``END=``.
         """
         self.__chrom_partition = chrom_partition
-        self.__rename_missing_values = rename_missing_values
         self.__before = before
-        self.__after = after
+        self.__replacement = _vcf_allele_token(after, "after") if rename_missing_values else None
 
         file_extensions = (".vcf", ".bcf")
         suffixes = self.__filename.suffixes
@@ -174,10 +200,10 @@ class VCFWriter:
         if has_samples:
             if genotypes.ndim != 3 or genotypes.shape[2] != 2:
                 raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
-            validate_hardcall_values(genotypes)
-            # Rename after validation and on a copy, leaving `snpobj` untouched
-            if self.__rename_missing_values:
-                genotypes = np.where(genotypes == self.__before, self.__after, genotypes)
+            if self.__replacement is None:
+                validate_hardcall_values(genotypes)
+            else:
+                genotypes = _encode_vcf_genotypes(genotypes, self.__before, self.__replacement)
         elif genotypes.ndim not in (2, 3):
             raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 

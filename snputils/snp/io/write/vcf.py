@@ -200,6 +200,8 @@ class VCFWriter:
         if has_samples:
             if genotypes.ndim != 3 or genotypes.shape[2] != 2:
                 raise ValueError("VCFWriter requires diploid genotype arrays with shape (n_variants, n_samples, 2).")
+            if genotypes.dtype.kind == "S":
+                genotypes = np.char.decode(genotypes, "ascii")
             if self.__replacement is None:
                 validate_hardcall_values(genotypes)
             else:

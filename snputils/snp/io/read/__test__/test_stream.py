@@ -12,8 +12,9 @@ MAX_VARIANTS = 10_000
 
 @pytest.mark.parametrize("reader_cls", [BEDReader, PGENReader, VCFReader])
 def test_iter_read_preserves_positional_chunk_size(reader_cls):
-    parameters = list(inspect.signature(reader_cls.iter_read).parameters)
-    assert parameters[-2:] == ["chunk_size", "threads"]
+    parameters = inspect.signature(reader_cls.iter_read).parameters.values()
+    positional = [p.name for p in parameters if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    assert positional[-2:] == ["chunk_size", "threads"]
 
 
 def _concat_chunks(chunks):

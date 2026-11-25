@@ -2,8 +2,258 @@ import gzip
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+@pytest.mark.parametrize("streaming", [False, True], ids=["eager", "streaming"])
+def test_vcf44_leading_phase_marker(tmp_path, reader_cls, streaming, caplog):
+    path = tmp_path / "leading_phase.vcf"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 21))
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        f"X\t1\t.\tA\t{alts}\t.\tPASS\t.\tGT\t|0|20\t|20\n"
+        f"X\t2\t.\tA\t{alts}\t.\tPASS\t.\tGT:DP\t|.|20:9\t|0|1:6\n"
+    )
+    reader = reader_cls(path)
+    if streaming:
+        calls = np.concatenate([chunk.genotypes for chunk in reader.iter_read(chunk_size=1)])
+    else:
+        calls = reader.read(genotype_mode="phased").genotypes
+    np.testing.assert_array_equal(calls, [[[0, 20], [20, -1]], [[-1, 20], [0, 1]]])
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_vcf44_leading_unphased_marker_obeys_genotype_mode(tmp_path, reader_cls):
+    path = tmp_path / "leading_unphased.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t/0|1\t/1/1\n"
+    )
+    reader = reader_cls(path)
+    with pytest.raises(ValueError, match="unphased"):
+        reader.read(samples=["s1"], genotype_mode="phased")
+    with pytest.raises(ValueError, match="unphased"):
+        next(reader.iter_read(samples=["s1"], genotype_mode="phased"))
+    np.testing.assert_array_equal(reader.read(genotype_mode="auto").genotypes, [[1, 2]])
+    np.testing.assert_array_equal(next(reader.iter_read(genotype_mode="dosage")).genotypes, [[1, 2]])
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_multidigit_gt_eager_and_streaming(tmp_path, reader_cls, compressed, caplog):
+    path = tmp_path / ("wide.vcf.gz" if compressed else "wide.vcf")
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 131))
+    with (gzip.open(path, "wt") if compressed else path.open("w")) as out:
+        out.write(
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+            "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0|1\t1|0\n"
+            f"1\t2\t.\tA\t{alts}\t.\tPASS\t.\tGT\t0|10\t0|20\n"
+            f"1\t3\t.\tA\t{alts}\t.\tPASS\t.\tGT:DP\t20|.:4\t.|10:25\n"
+            f"1\t4\t.\tA\t{alts}\t.\tPASS\t.\tDP:GT\t21:130|10\t2:20\n"
+        )
+
+    expected = np.array([[[0, 1], [1, 0]], [[0, 10], [0, 20]],
+                         [[20, -1], [-1, 10]], [[130, 10], [20, -1]]])
+    reader = reader_cls(path)
+    eager = reader.read(fields=[], genotype_mode="phased")
+    np.testing.assert_array_equal(eager.genotypes, expected)
+    assert eager.genotypes.dtype == np.int16
+    assert eager.variants_alt.size == 0
+    chunks = list(reader.iter_read(fields=[], chunk_size=2, genotype_mode="phased"))
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected)
+    assert [chunk.genotypes.dtype for chunk in chunks] == [np.int8, np.int16]
+    assert "Falling back to default VCF reader" not in caplog.text
+
+
+def test_compressed_gt_and_alt_widen_across_blocks(tmp_path, monkeypatch):
+    from snputils.snp.io.read import vcf
+
+    path = tmp_path / "blocks.vcf.gz"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 129))
+    with gzip.open(path, "wt") as out:
+        out.write(
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+            "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0|1\n"
+            f"1\t2\t.\tA\t{alts}\t.\tPASS\t.\tGT\t128|0\n"
+            "1\t3\t.\tG\tA\t.\tPASS\t.\tGT\t1|0\n"
+        )
+
+    # Yield one record per block and force the output to grow after promotion.
+    read = gzip.GzipFile.read
+
+    def read_one_record(self, size=-1):
+        return self.readline() if size > 0 else read(self, size)
+
+    monkeypatch.setattr(gzip.GzipFile, "read", read_one_record)
+    monkeypatch.setattr(vcf, "_initial_stream_capacity", lambda _: 1)
+    result = VCFReader(path).read(fields=["ALT"])
+    np.testing.assert_array_equal(result.genotypes, [[[0, 1]], [[128, 0]], [[1, 0]]])
+    assert result.genotypes.dtype == np.int16
+    np.testing.assert_array_equal(result.variants_alt, ["C", alts, "A"])
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_compressed_empty_projection_counts_selected_variants(tmp_path, trusted):
+    path = tmp_path / "region.vcf.gz"
+    with gzip.open(path, "wt") as out:
+        out.write(
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+            "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0|1\n"
+            "1\t2\t.\tG\tA\t.\tPASS\t.\tGT\t1|0\n"
+        )
+    reader = VCFReader(path)
+    kwargs = dict(fields=[], samples=[], region="1:2-2", genotype_mode="dosage", assume_biallelic=trusted)
+    assert reader.read(**kwargs).genotypes.shape == (1, 0)
+    assert [chunk.genotypes.shape for chunk in reader.iter_read(**kwargs)] == [(1, 0)]
+
+
+@pytest.mark.parametrize("fmt,call", [("GT:DP", "0|20:9"), ("DP:GT", "9:0|20")])
+def test_gt_subfield_preserves_final_multidigit_allele(tmp_path, fmt, call):
+    path = tmp_path / "subfield.vcf"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 21))
+    path.write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+        f"1\t1\t.\tA\t{alts}\t.\tPASS\t.\t{fmt}\t{call}\n"
+    )
+    result = VCFReader(path).read(fields=["ALT"])
+    np.testing.assert_array_equal(result.genotypes, [[[0, 20]]])
+    np.testing.assert_array_equal(result.variants_alt, [alts])
+
+
+def test_vcf_reader_preserves_gt_with_utf8_phase_set_names(tmp_path):
+    path = tmp_path / "family.vcf"
+    repeat_alleles = ",".join("AC" * copies for copies in range(2, 22))
+    path.write_text(
+        "##fileformat=VCFv4.4\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tdaughter\tson\n"
+        f"X\t100\t.\tAC\t{repeat_alleles}\t.\tPASS\t.\tGT:PSL\t0|20:mère,père\t1:mère\n"
+        "X\t200\t.\tG\tA\t.\tPASS\t.\tGT:PSL\t0|1:mère,père\t1:mère\n",
+        encoding="utf-8",
+    )
+
+    result = VCFReader(path).read(genotype_mode="phased")
+    np.testing.assert_array_equal(result.genotypes, [[[0, 20], [1, -1]], [[0, 1], [1, -1]]])
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_gt_widths_can_cancel_within_a_row(tmp_path, reader_cls):
+    path = tmp_path / "balanced.vcf"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 101))
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        f"1\t1\t.\tA\t{alts}\t.\tPASS\t.\tGT\t1\t100|0\n"
+    )
+    reader = reader_cls(path)
+    for result in (reader.read(fields=[], samples=["s2"]),
+                   next(reader.iter_read(fields=[], samples=["s2"]))):
+        np.testing.assert_array_equal(result.genotypes, [[[100, 0]]])
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_multidigit_unphased_gt_obeys_genotype_mode(tmp_path, reader_cls):
+    path = tmp_path / "unphased.vcf"
+    alts = ",".join(f"<ALT{i}>" for i in range(1, 11))
+    path.write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+        f"1\t1\t.\tA\t{alts}\t.\tPASS\t.\tGT\t10/0\n"
+    )
+    reader = reader_cls(path)
+    with pytest.raises(ValueError, match="unphased"):
+        reader.read(fields=[], genotype_mode="phased")
+    with pytest.raises(ValueError, match="biallelic"):
+        reader.read(fields=[], genotype_mode="auto")
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("padding", [0, 128])
+def test_gt_sample_boundaries_after_subsetting(tmp_path, compressed, padding):
+    path = tmp_path / ("mixed.vcf.gz" if compressed else "mixed.vcf")
+    samples = [f"pad{i}" for i in range(padding)] + ["hap", "skip1", "het", "skip2", "skip3", "skip4"]
+    # Total width matches six diploids. At the predicted offset for het,
+    # even the surrounding tabs look valid, but the call belongs to skip2.
+    calls = ["0|0"] * padding + ["1", "0", "1|0", "1|1", "0|1|0", "0|1|0"]
+    with (gzip.open(path, "wt") if compressed else path.open("w")) as out:
+        out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(samples) + "\n")
+        for chrom in ("X", "1"):
+            out.write(f"{chrom}\t1\t.\tA\tC\t.\tPASS\t.\tGT\t" + "\t".join(calls) + "\n")
+
+    reader = VCFReader(path)
+    for trusted in (False, True):
+        kwargs = dict(fields=[], samples=["hap", "het"], assume_biallelic=trusted)
+        for mode, expected in (("phased", [[[1, -1], [1, 0]]] * 2), ("dosage", [[2, 1], [-1, 1]])):
+            np.testing.assert_array_equal(reader.read(genotype_mode=mode, **kwargs).genotypes, expected)
+            chunks = reader.iter_read(genotype_mode=mode, chunk_size=1, **kwargs)
+            np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected)
+
+
+@pytest.mark.parametrize("fmt", ["GT", "GT:DP"])
+def test_single_digit_mixed_ploidy_stays_vectorized(tmp_path, monkeypatch, fmt):
+    from snputils.snp.io.read import vcf
+
+    path = tmp_path / "mixed.vcf.gz"
+    with gzip.open(path, "wt") as out:
+        out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\thap\tdip\tmissing\n")
+        for chrom, pos, calls in [("X", 9, ["1", "0/1", "."]), ("1", 10, ["1", "1|1", "."])]:
+            if fmt == "GT:DP":
+                calls = [call + ":20" for call in calls]
+            out.write(f"{chrom}\t{pos}\t.\tA\tC\t.\tPASS\t.\t{fmt}\t" + "\t".join(calls) + "\n")
+
+    def unexpected_fallback(*args, **kwargs):
+        pytest.fail("Single-digit haploid and diploid calls should be decoded in bulk")
+
+    monkeypatch.setattr(vcf, "_parse_gt_token", unexpected_fallback)
+    if fmt == "GT":
+        monkeypatch.setattr(VCFReader, "_read_simple_format_streaming", unexpected_fallback)
+    result = VCFReader(path).read(genotype_mode="dosage")
+    np.testing.assert_array_equal(result.variants_pos, [9, 10])
+    np.testing.assert_array_equal(result.genotypes, [[2, 1, -1], [-1, 2, -1]])
+
+
+@pytest.mark.parametrize("reader_cls", [VCFReader, VCFReaderPolars])
+def test_assume_biallelic_preserves_format_phase_and_ploidy(tmp_path, reader_cls):
+    path = tmp_path / "biallelic.vcf"
+    path.write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "1\t1\t.\tA\tC\t.\tPASS\t.\tGT:PS\t0|1:1\t.|1:1\n"
+        "X\t2\t.\tG\tA\t.\tPASS\t.\tDP:GT\t15:1\t22:0/1\n"
+    )
+    reader = reader_cls(path)
+    for trusted in (False, True):
+        kwargs = dict(fields=[], assume_biallelic=trusted)
+        expected = [[1, -1], [2, 1]]
+        result = reader.read(genotype_mode="auto", **kwargs)
+        np.testing.assert_array_equal(result.genotypes, expected)
+        chunks = reader.iter_read(chunk_size=1, genotype_mode="dosage", **kwargs)
+        np.testing.assert_array_equal(np.concatenate([c.genotypes for c in chunks]), expected)
+        with pytest.raises(ValueError, match="unphased"):
+            reader.read(genotype_mode="phased", **kwargs)
+    with pytest.raises(TypeError, match="boolean"):
+        reader.read(assume_biallelic="False")
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_assume_biallelic_native_dosage(tmp_path, trusted):
+    path = tmp_path / "native.vcf.gz"
+    with gzip.open(path, "wt") as out:
+        out.write(
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+            "1\t1\t.\tA\tC\t.\tPASS\t.\tGT\t0/1\n"
+        )
+    kwargs = dict(fields=[], genotype_mode="dosage", chromosome_ploidy="autosomal",
+                  threads=2, assume_biallelic=trusted)
+    reader = VCFReader(path)
+    np.testing.assert_array_equal(reader.read(**kwargs).genotypes, [[1]])
+    np.testing.assert_array_equal(next(reader.iter_read(**kwargs)).genotypes, [[1]])
 
 
 def test_vcf_reader_matches_polars_for_core_fields(data_path):

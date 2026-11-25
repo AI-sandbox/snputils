@@ -1,21 +1,29 @@
-import pytest
-import numpy as np
-from pathlib import Path
-import os
 import gzip
+import os
+from functools import partial
+from pathlib import Path
+
+import numpy as np
+import pytest
+
 from .utils import create_benchmark_test
 
 
-def read_vcf_snputils(path, genotype_mode="dosage"):
+def read_vcf_snputils(path, genotype_mode="dosage", *, assume_biallelic=False):
     """Read VCF file using snputils"""
     import snputils
-    return snputils.read_vcf(path, genotype_mode=genotype_mode, chromosome_ploidy="autosomal").genotypes
+    return snputils.read_vcf(
+        path, genotype_mode=genotype_mode, chromosome_ploidy="autosomal",
+        assume_biallelic=assume_biallelic,
+    ).genotypes
 
 
-def read_vcf_snputils_polars(path, genotype_mode="dosage"):
+def read_vcf_snputils_polars(path, genotype_mode="dosage", *, assume_biallelic=False):
     """Read VCF file using snputils and polars"""
     from snputils.snp.io.read.vcf import VCFReaderPolars
-    return VCFReaderPolars(path).read(fields=[], genotype_mode=genotype_mode).genotypes
+    return VCFReaderPolars(path).read(
+        fields=[], genotype_mode=genotype_mode, assume_biallelic=assume_biallelic,
+    ).genotypes
 
 
 def read_vcf_scikit_allel(path, genotype_mode="dosage"):
@@ -113,7 +121,9 @@ READERS = [
 
 @pytest.mark.benchmark(group="VCF-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
-def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode):
+def test_vcf_readers(
+    benchmark, reader, name, path, memory_profile, reader_name, genotype_mode, assume_biallelic,
+):
     """Benchmark readers and verify output"""
     if reader_name is not None and name != reader_name:
         pytest.skip(f"Skipping {name}; --reader-name={reader_name} requested")
@@ -123,6 +133,9 @@ def test_vcf_readers(benchmark, reader, name, path, memory_profile, reader_name,
         gz_path = Path(str(path) + ".vcf.gz")
         path = gz_path if gz_path.exists() else Path(str(path) + ".vcf")
     ref_array = None if memory_profile else read_vcf_snputils(path, genotype_mode=genotype_mode)
+    if reader in (read_vcf_snputils, read_vcf_snputils_polars):
+        reader = partial(reader, assume_biallelic=assume_biallelic)
+        benchmark.extra_info["assume_biallelic"] = assume_biallelic
     create_benchmark_test(
         benchmark,
         reader,

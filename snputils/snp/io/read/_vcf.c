@@ -113,17 +113,19 @@ decode_gt(PyObject *self, PyObject *args)
     int all_samples;
     int return_dosage;
     int threads;
+    int assume_biallelic = 0;
 
     data_view.buf = NULL;
     if (!PyArg_ParseTuple(
             args,
-            "OnnOpi",
+            "OnnOpi|p",
             &data_obj,
             &body_offset,
             &n_samples,
             &sample_indices_obj,
             &return_dosage,
-            &threads)) {
+            &threads,
+            &assume_biallelic)) {
         return NULL;
     }
     if (n_samples < 1) {
@@ -249,7 +251,7 @@ decode_gt(PyObject *self, PyObject *args)
                 goto error;
             }
         }
-        if (return_dosage) {
+        if (return_dosage && !assume_biallelic) {
             for (Py_ssize_t position = tabs[3] + 1; position < tabs[4]; position++) {
                 if (data[position] != ',') {
                     continue;

@@ -1,6 +1,6 @@
 import inspect
 import logging
-from typing import Optional, List, Any, Union, Iterator, Tuple, Dict, Sequence
+from typing import Optional, List, Any, Union, Iterable, Iterator, Tuple, Dict, Sequence
 from pathlib import Path
 import gzip
 import csv
@@ -56,6 +56,11 @@ def _non_diploid_chromosome_mask_or_none(chromosomes: np.ndarray) -> Optional[np
         count=len(chromosomes),
     )
     return mask if np.any(mask) else None
+
+
+def _check_assume_biallelic(value: bool) -> None:
+    if not isinstance(value, (bool, np.bool_)):
+        raise TypeError("assume_biallelic must be a boolean.")
 
 
 def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
@@ -205,6 +210,21 @@ def _vcf_region_matches(
     return True
 
 
+def _polars_region_expr(
+    region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
+    columns: Iterable[str],
+) -> Optional[pl.Expr]:
+    if region_filter is None:
+        return None
+    chrom, start, end = region_filter
+    predicate = pl.col("#CHROM" if "#CHROM" in columns else "CHROM") == chrom
+    if start is not None:
+        predicate = predicate & (pl.col("POS") >= start)
+    if end is not None:
+        predicate = predicate & (pl.col("POS") <= end)
+    return predicate
+
+
 def _region_mask_from_raw(
     raw: np.ndarray,
     chrom_starts: np.ndarray,
@@ -336,7 +356,7 @@ def _concat_axis0_releasing(chunks: list[np.ndarray]) -> np.ndarray:
     # chunk into the final array and release that chunk reference immediately.
     shape = list(chunks[0].shape)
     shape[0] = sum(chunk.shape[0] for chunk in chunks)
-    out = np.empty(tuple(shape), dtype=chunks[0].dtype)
+    out = np.empty(tuple(shape), dtype=np.result_type(*(chunk.dtype for chunk in chunks)))
     offset = 0
     for idx, chunk in enumerate(chunks):
         height = chunk.shape[0]
@@ -375,7 +395,7 @@ def _ensure_axis0_capacity(
         return array
 
     capacity = max(required, array.shape[0] * 2)
-    grown = np.empty((capacity,) + tail_shape, dtype=dtype)
+    grown = np.empty((capacity,) + tail_shape, dtype=array.dtype)
     grown[:used] = array[:used]
     return grown
 
@@ -488,6 +508,14 @@ def _ascii_gt_to_int(values: np.ndarray) -> np.ndarray:
     return out
 
 
+# Streaming decodes one row at a time. Reuse the byte conversion for small arrays.
+_GT_BYTE_TO_ALLELE = _ascii_gt_to_int(np.arange(256, dtype=np.uint8))
+
+
+def _single_allele_byte(values: np.ndarray) -> np.ndarray:
+    return ((values >= ord("0")) & (values <= ord("9"))) | (values == ord(".")) | (values == ord("-"))
+
+
 def _parse_ascii_ints(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
     lengths = (ends - starts).astype(np.int64, copy=False)
     if lengths.size == 0:
@@ -497,7 +525,7 @@ def _parse_ascii_ints(raw: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> 
     indexes = starts[:, None] + columns[None, :]
     mask = columns[None, :] < lengths[:, None]
     digits = np.where(mask, raw[indexes] - ord("0"), 0).astype(np.int64, copy=False)
-    powers = 10 ** (lengths[:, None] - columns[None, :] - 1)
+    powers = 10 ** np.maximum(lengths[:, None] - columns[None, :] - 1, 0)
     values = np.sum(np.where(mask, digits * powers, 0), axis=1, dtype=np.int64)
     return values.astype(np.int32, copy=False)
 
@@ -621,12 +649,24 @@ def _finalize_string_array(
     return np.full(n_records, value, dtype=f"<U{max(1, len(value))}")
 
 
+def _fixed_diploid_gt_row(samples: bytes, n_samples: int) -> bool:
+    if len(samples) != 4 * n_samples - 1:
+        return False
+    # Every expected boundary must be a tab, with no extra tabs inside a GT.
+    n_tabs = n_samples - 1
+    if samples[3::4].count(b"\t") != n_tabs or samples.count(b"\t") != n_tabs:
+        return False
+    separators = samples[1::4]
+    return separators.count(b"|") + separators.count(b"/") == n_samples
+
+
 def _parse_gt_sample_bytes(
     sample_bytes: bytes,
     *,
     format_value: Optional[bytes] = None,
     n_samples_total: int,
     sample_idxs: np.ndarray,
+    all_samples: bool,
     return_dosage: bool,
     non_diploid_chromosome: Optional[bool] = None,
 ) -> np.ndarray:
@@ -635,41 +675,36 @@ def _parse_gt_sample_bytes(
     if n_selected == 0:
         return np.empty((0,), dtype=np.int8)
 
-    expected_gt_only_len = n_samples_total * 4 - 1
-    if (format_value is None or format_value == b"GT") and len(sample_bytes) == expected_gt_only_len:
+    if format_value in (None, b"GT") and sample_bytes:
         raw = np.frombuffer(sample_bytes, dtype=np.uint8)
-        first_allele = raw[0::4]
-        separators = raw[1::4]
-        second_allele = raw[2::4]
-        if sample_idxs.size != n_samples_total:
-            first_allele = first_allele[sample_idxs]
-            separators = separators[sample_idxs]
-            second_allele = second_allele[sample_idxs]
-        if not return_dosage:
-            _raise_if_unphased_vcf_gt_separator(separators)
-        first_allele = _ascii_gt_to_int(first_allele)
-        second_allele = _ascii_gt_to_int(second_allele)
-        if return_dosage:
-            return sum_diploid_alleles(
-                first_allele,
-                second_allele,
-                missing_as_haploid=non_diploid_chromosome,
+        selection = slice(None) if all_samples else sample_idxs
+        if _fixed_diploid_gt_row(sample_bytes, n_samples_total):
+            if not return_dosage:
+                _raise_if_unphased_vcf_gt_separator(raw[1::4][selection])
+            first = _GT_BYTE_TO_ALLELE[raw[0::4][selection]]
+            second = _GT_BYTE_TO_ALLELE[raw[2::4][selection]]
+        else:
+            tabs = np.flatnonzero(raw == ord("\t"))
+            if tabs.size != n_samples_total - 1:
+                raise ValueError("VCF record does not have the expected number of samples.")
+            boundaries = np.empty(n_samples_total + 1, dtype=np.intp)
+            boundaries[0] = -1
+            boundaries[1:-1] = tabs
+            boundaries[-1] = raw.size
+            first, second = _decode_gt_fields(
+                raw, boundaries[:-1][selection] + 1, boundaries[1:][selection],
+                require_phase=not return_dosage,
             )
-        return np.stack((first_allele, second_allele), axis=1)
-
-    gt_index = 0 if format_value is None else _format_gt_index(format_value)
-    sample_fields = sample_bytes.split(b"\t")
-    genotype = np.empty((n_selected, 2), dtype=np.int8)
-    for out_idx, sample_idx in enumerate(sample_idxs):
-        value = _sample_gt_token(sample_fields[int(sample_idx)], gt_index)
-        genotype[out_idx] = _parse_simple_gt_token(value, require_phase=not return_dosage)
-    if return_dosage:
-        return sum_diploid_alleles(
-            genotype[:, 0],
-            genotype[:, 1],
-            missing_as_haploid=non_diploid_chromosome,
+    else:
+        gt_index = 0 if format_value is None else _format_gt_index(format_value)
+        sample_fields = sample_bytes.split(b"\t")
+        genotype = _parse_gt_row(
+            (sample_fields[i] for i in sample_idxs), gt_index, require_phase=not return_dosage,
         )
-    return genotype
+        first, second = genotype.T
+    if return_dosage:
+        return sum_diploid_alleles(first, second, missing_as_haploid=non_diploid_chromosome)
+    return np.stack((first, second), axis=-1)
 
 
 def _format_gt_index(format_value: Union[str, bytes]) -> int:
@@ -700,32 +735,39 @@ def _sample_gt_token(sample_field: Union[str, bytes], gt_index: int) -> Union[st
     return fields[gt_index]
 
 
-def _parse_simple_gt_token(value: Union[str, bytes], *, require_phase: bool = False) -> tuple[int, int]:
-    if isinstance(value, bytes):
-        if require_phase and len(value) > 1 and value[1] == ord("/"):
+def _parse_gt_token(value: Union[str, bytes], *, require_phase: bool) -> tuple[int, int]:
+    gt = _vcf_value_to_str(value)
+    if "/" in gt:
+        if require_phase:
             raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
-        if len(value) == 0 or value[0] in b".-":
-            first = -1
-        else:
-            first = int(value[0] - ord("0"))
-        if len(value) > 2 and value[2] not in b".-":
-            second = int(value[2] - ord("0"))
-        else:
-            second = -1
-        return first, second
+        gt = gt.replace("/", "|")
+    # VCF 4.4 allows an explicit phase indicator before the first allele.
+    first, _, second = gt.removeprefix("|").partition("|")
+    missing = ("", ".", "-", "-1")
+    first_allele = -1 if first in missing else int(first)
+    second_allele = -1 if second in missing else int(second)
+    return first_allele, second_allele
 
-    value = str(value)
-    if require_phase and len(value) > 1 and value[1] == "/":
-        raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
-    if len(value) == 0 or value[0] in ".-":
-        first = -1
-    else:
-        first = int(value[0])
-    if len(value) > 2 and value[2] not in ".-":
-        second = int(value[2])
-    else:
-        second = -1
-    return first, second
+
+def _parse_gt_row(sample_fields: Iterable[Union[str, bytes]], gt_index: int, *, require_phase: bool) -> np.ndarray:
+    calls = np.asarray([
+        _parse_gt_token(_sample_gt_token(field, gt_index), require_phase=require_phase)
+        for field in sample_fields
+    ], dtype=np.int64)
+    return calls.astype(_allele_dtype(int(calls.max())), copy=False)
+
+
+def _allele_dtype(max_allele: int) -> np.dtype:
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        if max_allele <= np.iinfo(dtype).max:
+            return np.dtype(dtype)
+    raise OverflowError("VCF allele index exceeds signed 64-bit range.")
+
+
+def _widen_gt_buffer(buffer: np.ndarray, dtype: np.dtype, used: int) -> np.ndarray:
+    widened = np.empty(buffer.shape, dtype=dtype)
+    widened[:used] = buffer[:used]
+    return widened
 
 
 def _parse_gt_sample_matrix(
@@ -736,39 +778,116 @@ def _parse_gt_sample_matrix(
     non_diploid_chromosomes: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     height, n_selected = sample_values.shape
-    if all(_format_gt_is_first(value) for value in format_values):
-        encoded = np.ascontiguousarray(sample_values.astype("S3", copy=False))
-        raw_gt = encoded.view(np.uint8).reshape(height, n_selected, 3)
-        first_allele = _ascii_gt_to_int(raw_gt[:, :, 0])
-        second_allele = _ascii_gt_to_int(raw_gt[:, :, 2])
-        second_allele[(raw_gt[:, :, 1] == ord(":")) | (raw_gt[:, :, 1] == 0)] = -1
-        if return_dosage:
-            return sum_diploid_alleles(
-                first_allele,
-                second_allele,
-                missing_as_haploid=non_diploid_chromosomes,
-            )
-        _raise_if_unphased_vcf_gt_separator(raw_gt[:, :, 1])
-        genotype = np.empty((height, n_selected, 2), dtype=np.int8)
-        genotype[:, :, 0] = first_allele
-        genotype[:, :, 1] = second_allele
-        return genotype
-
+    # A fourth character distinguishes a complete GT from a multi-digit allele.
+    # Other FORMAT fields can contain Unicode, even in this four-character prefix.
+    text = np.ascontiguousarray(sample_values, dtype="U4")
+    prefix = text.view(np.uint32).reshape(height, n_selected, 4)
+    sep = prefix[:, :, 1]
+    simple = np.fromiter((_format_gt_is_first(value) for value in format_values), bool, count=height)
+    diploid = ((sep == ord("|")) | (sep == ord("/"))) & _single_allele_byte(prefix[:, :, 2])
+    gt_end = (prefix[:, :, 3] == 0) | (prefix[:, :, 3] == ord(":"))
+    haploid = (sep == 0) | (sep == ord(":"))
+    simple &= (_single_allele_byte(prefix[:, :, 0]) & ((diploid & gt_end) | haploid)).all(axis=1)
     genotype = np.empty((height, n_selected, 2), dtype=np.int8)
-    for row_idx, format_value in enumerate(format_values):
-        gt_index = _format_gt_index(format_value)
-        for col_idx, sample_field in enumerate(sample_values[row_idx]):
-            genotype[row_idx, col_idx] = _parse_simple_gt_token(
-                _sample_gt_token(sample_field, gt_index),
-                require_phase=not return_dosage,
-            )
+    if np.any(simple):
+        fixed = prefix if simple.all() else prefix[simple]
+        if not return_dosage:
+            _raise_if_unphased_vcf_gt_separator(fixed[:, :, 1])
+        genotype[simple, :, 0] = _ascii_gt_to_int(fixed[:, :, 0])
+        genotype[simple, :, 1] = np.where(haploid[simple], -1, _ascii_gt_to_int(fixed[:, :, 2]))
+    for row in np.flatnonzero(~simple):
+        calls = _parse_gt_row(
+            sample_values[row], _format_gt_index(format_values[row]), require_phase=not return_dosage,
+        )
+        if calls.itemsize > genotype.itemsize:
+            genotype = genotype.astype(calls.dtype)
+        genotype[row] = calls
     if return_dosage:
         return sum_diploid_alleles(
-            genotype[:, :, 0],
-            genotype[:, :, 1],
-            missing_as_haploid=non_diploid_chromosomes,
+            genotype[:, :, 0], genotype[:, :, 1], missing_as_haploid=non_diploid_chromosomes,
         )
     return genotype
+
+
+def _decode_gt_fields(
+    raw: np.ndarray, starts: np.ndarray, ends: np.ndarray, *, require_phase: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode GT-only fields using their actual, exclusive end offsets."""
+    widths = ends - starts
+    if np.all(widths == 3):
+        separators = raw[starts + 1]
+        if np.all((separators == ord("|")) | (separators == ord("/"))):
+            if require_phase:
+                _raise_if_unphased_vcf_gt_separator(separators)
+            return _ascii_gt_to_int(raw[starts]), _ascii_gt_to_int(raw[ends - 1])
+
+    last = ends - 1
+    separators = raw[np.minimum(starts + 1, last)]
+    if require_phase:
+        _raise_if_unphased_vcf_gt_separator(separators)
+    diploid = (widths == 3) & ((separators == ord("|")) | (separators == ord("/")))
+    first_bytes = raw[np.minimum(starts, last)]
+    first = _ascii_gt_to_int(first_bytes)
+    second = _ascii_gt_to_int(raw[last])
+    second[~diploid] = -1
+    # Single-byte haploids are complete. Parse complex GT tokens individually.
+    haploid = (widths == 1) & _single_allele_byte(first_bytes)
+    for idx in zip(*np.nonzero(~(diploid | haploid))):
+        a, b = _parse_gt_token(raw[starts[idx]:ends[idx]].tobytes(), require_phase=require_phase)
+        if max(a, b) > np.iinfo(first.dtype).max:
+            dtype = _allele_dtype(max(a, b))
+            first, second = first.astype(dtype), second.astype(dtype)
+        first[idx], second[idx] = a, b
+    return first, second
+
+
+def _sample_field_bounds(
+    tabs: np.ndarray, record_ends: np.ndarray, n_samples: int, sample_idxs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    if sample_idxs.size == n_samples and np.array_equal(sample_idxs, np.arange(n_samples)):
+        starts = tabs[:, 8:] + 1
+        ends = np.empty_like(starts)
+        ends[:, :-1] = tabs[:, 9:]
+        ends[:, -1] = record_ends
+        return starts, ends
+    starts = tabs[:, 8 + sample_idxs] + 1
+    last_sample = sample_idxs == n_samples - 1
+    ends = np.empty_like(starts)
+    ends[:, last_sample] = record_ends[:, None]
+    ends[:, ~last_sample] = tabs[:, 9 + sample_idxs[~last_sample]]
+    return starts, ends
+
+
+def _write_gt_block(
+    raw: np.ndarray,
+    tabs: np.ndarray,
+    ends: np.ndarray,
+    n_samples: int,
+    sample_idxs: np.ndarray,
+    out: np.ndarray,
+    offset: int,
+    return_dosage: bool,
+    non_diploid_chromosomes: Optional[np.ndarray],
+) -> np.ndarray:
+    if not _field_matches_value(raw, tabs[:, 7] + 1, tabs[:, 8], "GT"):
+        raise ValueError("The block fast path requires GT-only sample fields.")
+
+    # Bound the temporary arrays even for blocks containing millions of calls.
+    rows_per_batch = max(1, 131_072 // sample_idxs.size)
+    for lo in range(0, len(ends), rows_per_batch):
+        hi = min(lo + rows_per_batch, len(ends))
+        starts, field_ends = _sample_field_bounds(tabs[lo:hi], ends[lo:hi], n_samples, sample_idxs)
+        first, second = _decode_gt_fields(raw, starts, field_ends, require_phase=not return_dosage)
+        target = slice(offset + lo, offset + hi)
+        if return_dosage:
+            non_diploid = None if non_diploid_chromosomes is None else non_diploid_chromosomes[lo:hi]
+            out[target] = sum_diploid_alleles(first, second, missing_as_haploid=non_diploid)
+        else:
+            if first.itemsize > out.itemsize:
+                out = _widen_gt_buffer(out, first.dtype, offset + lo)
+            out[target, :, 0] = first
+            out[target, :, 1] = second
+    return out
 
 
 def _variant_id_matches(parts: list[bytes], wanted_variant_ids: set[str]) -> bool:
@@ -841,6 +960,7 @@ class VCFReader(SNPBaseReader):
         sample_columns: list[str],
         sample_idxs: np.ndarray,
         return_dosage: bool,
+        assume_biallelic: bool,
         threads: int,
     ) -> SNPObject:
         from snputils.snp.io.read import _vcf
@@ -858,6 +978,8 @@ class VCFReader(SNPBaseReader):
             if tabs.size != n_records * tabs_per_record:
                 raise ValueError("VCF records do not have the expected number of tab-delimited columns.")
             tabs = tabs.reshape(n_records, tabs_per_record)
+            if return_dosage and not assume_biallelic:
+                _raise_if_multiallelic_alt_bytes(raw, tabs[:, 3] + 1, tabs[:, 4])
             arrays = {}
             if "POS" in field_columns:
                 arrays["POS"] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
@@ -879,6 +1001,7 @@ class VCFReader(SNPBaseReader):
             sample_arg,
             return_dosage,
             threads,
+            assume_biallelic,
         )
         genotypes = np.frombuffer(gt_buffer, dtype=np.int8)
         if return_dosage:
@@ -903,6 +1026,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         return_dosage: bool,
         detect_non_diploid: bool,
+        assume_biallelic: bool = False,
     ) -> SNPObject:
         if Path(self._filename).suffix != ".vcf":
             raise ValueError("The memory-mapped fast path only supports uncompressed .vcf files.")
@@ -930,8 +1054,7 @@ class VCFReader(SNPBaseReader):
                 if first_tabs.size != tabs_per_record:
                     raise ValueError("VCF records do not have the expected number of tab-delimited columns.")
                 format_value = _decode_vcf_slice(raw, first_tabs[7] + 1, first_tabs[8])
-                sample_bytes_len = int(body_ends[0] - first_tabs[8] - 1)
-                if sample_columns and (format_value != "GT" or sample_bytes_len != n_samples_total * 4 - 1):
+                if sample_columns and format_value != "GT":
                     raise ValueError("The memory-mapped fast path requires GT-only sample fields.")
 
                 n_selected = len(sample_columns)
@@ -958,7 +1081,6 @@ class VCFReader(SNPBaseReader):
                 if "POS" in include:
                     arrays["POS"] = np.empty(n_records, dtype=np.int32)
 
-                sample_offsets = sample_idxs.astype(np.int64, copy=False) * 4
                 chunk_size = max(1, min(100_000, 2_000_000 // max(1, tabs_per_record)))
 
                 for lo in range(0, n_records, chunk_size):
@@ -970,6 +1092,8 @@ class VCFReader(SNPBaseReader):
                         raise ValueError("VCF records do not all have the expected number of tab-delimited columns.")
                     tabs = tabs.reshape(hi - lo, tabs_per_record)
 
+                    if return_dosage and not assume_biallelic:
+                        _raise_if_multiallelic_alt_bytes(raw, tabs[:, 3] + 1, tabs[:, 4])
                     if n_selected:
                         non_diploid_chromosomes = (
                             _non_diploid_chromosome_mask_or_none(
@@ -978,20 +1102,10 @@ class VCFReader(SNPBaseReader):
                             if detect_non_diploid
                             else None
                         )
-                        sample_starts = tabs[:, 8] + 1
-                        offsets = sample_starts[:, None] + sample_offsets[None, :]
-                        first_allele = _ascii_gt_to_int(raw[offsets])
-                        second_allele = _ascii_gt_to_int(raw[offsets + 2])
-                        if return_dosage:
-                            genotypes[lo:hi] = sum_diploid_alleles(
-                                first_allele,
-                                second_allele,
-                                missing_as_haploid=non_diploid_chromosomes,
-                            )
-                        else:
-                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
-                            genotypes[lo:hi, :, 0] = first_allele
-                            genotypes[lo:hi, :, 1] = second_allele
+                        genotypes = _write_gt_block(
+                            raw, tabs, body_ends[lo:hi], n_samples_total, sample_idxs,
+                            genotypes, lo, return_dosage, non_diploid_chromosomes,
+                        )
 
                     if "POS" in include:
                         arrays["POS"][lo:hi] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
@@ -1103,6 +1217,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         return_dosage: bool,
+        assume_biallelic: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
@@ -1112,8 +1227,8 @@ class VCFReader(SNPBaseReader):
         include = set(field_columns)
         n_selected = len(sample_columns)
         tabs_per_record = 8 + n_samples_total
-        sample_offsets = sample_idxs.astype(np.int64, copy=False) * 4
-        block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
+        # Wide blocks need a tab offset for every sample field.
+        block_size = (1 if n_samples_total > 128 else 8) * 1024 * 1024
 
         # For gzip inputs we do not know n_records without a second pass. Keep
         # one growable genotype buffer and fill it directly, instead of keeping
@@ -1170,10 +1285,7 @@ class VCFReader(SNPBaseReader):
                         content_ends[crlf] -= 1
                     height = int(line_ends.size)
 
-                    if n_samples_total > 128:
-                        # For fixed-width GT-only rows, selected sample offsets
-                        # are computed from the first sample column; we only
-                        # need the nine fixed-field tabs for wide files.
+                    if n_samples_total > 128 and not n_selected:
                         tabs = _first_tabs_by_line(block, line_starts, 9)
                     else:
                         tabs = np.flatnonzero(raw == ord("\t"))
@@ -1199,7 +1311,7 @@ class VCFReader(SNPBaseReader):
                         content_ends = content_ends[keep]
                         height = int(tabs.shape[0])
 
-                    if return_dosage:
+                    if return_dosage and not assume_biallelic:
                         _raise_if_multiallelic_alt_bytes(
                             raw,
                             tabs[:, 3] + 1,
@@ -1214,46 +1326,15 @@ class VCFReader(SNPBaseReader):
                             if detect_non_diploid
                             else None
                         )
-                        # This fast path is deliberately strict: every retained
-                        # row must be FORMAT=GT with fixed-width diploid calls.
-                        # If a block violates that, read() falls back to the
-                        # more general simple-FORMAT or pandas parser.
-                        sample_starts = tabs[:, 8] + 1
-                        if not _field_matches_value(raw, tabs[:, 7] + 1, tabs[:, 8], "GT"):
-                            raise ValueError("The block fast path requires GT-only sample fields.")
-                        expected_sample_bytes = n_samples_total * 4 - 1
-                        if not np.all((content_ends - sample_starts) == expected_sample_bytes):
-                            raise ValueError("The block fast path requires fixed-width diploid GT sample fields.")
-                        offsets = sample_starts[:, None] + sample_offsets[None, :]
-                        first_allele = _ascii_gt_to_int(raw[offsets])
-                        second_allele = _ascii_gt_to_int(raw[offsets + 2])
-                        if return_dosage:
-                            gt_buffer = _ensure_axis0_capacity(
-                                gt_buffer,
-                                gt_records,
-                                height,
-                                (n_selected,),
-                                np.int8,
-                                initial_gt_capacity,
-                            )
-                            gt_buffer[gt_records:gt_records + height] = sum_diploid_alleles(
-                                first_allele,
-                                second_allele,
-                                missing_as_haploid=non_diploid_chromosomes,
-                            )
-                        else:
-                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
-                            gt_buffer = _ensure_axis0_capacity(
-                                gt_buffer,
-                                gt_records,
-                                height,
-                                (n_selected, 2),
-                                np.int8,
-                                initial_gt_capacity,
-                            )
-                            gt_buffer[gt_records:gt_records + height, :, 0] = first_allele
-                            gt_buffer[gt_records:gt_records + height, :, 1] = second_allele
-                        gt_records += height
+                        tail_shape = (n_selected,) if return_dosage else (n_selected, 2)
+                        gt_buffer = _ensure_axis0_capacity(
+                            gt_buffer, gt_records, height, tail_shape, np.int8, initial_gt_capacity,
+                        )
+                        gt_buffer = _write_gt_block(
+                            raw, tabs, content_ends, n_samples_total, sample_idxs,
+                            gt_buffer, gt_records, return_dosage, non_diploid_chromosomes,
+                        )
+                    gt_records += height
 
                     if "POS" in include:
                         array_chunks["POS"].append(_parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1]))
@@ -1276,18 +1357,10 @@ class VCFReader(SNPBaseReader):
                 if not chunk:
                     break
 
-        if n_selected == 0:
-            first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
-            n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
-            genotypes = _empty_genotype_array(n_records, 0, return_dosage)
-        elif gt_buffer is not None:
-            # Return only populated rows; slicing keeps a normal ndarray view and
-            # avoids copying the output matrix after streaming.
-            genotypes = gt_buffer[:gt_records]
-        elif return_dosage:
-            genotypes = np.empty((0, n_selected), dtype=np.int8)
+        if gt_buffer is None:
+            genotypes = _empty_genotype_array(gt_records, n_selected, return_dosage)
         else:
-            genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
+            genotypes = gt_buffer[:gt_records]
 
         arrays = {
             field: _concat_axis0_releasing(chunks)
@@ -1309,6 +1382,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         return_dosage: bool,
+        assume_biallelic: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
@@ -1411,7 +1485,7 @@ class VCFReader(SNPBaseReader):
                         content_ends = content_ends[keep]
                         height = int(tabs.shape[0])
 
-                    if return_dosage:
+                    if return_dosage and not assume_biallelic:
                         _raise_if_multiallelic_alt_bytes(
                             raw,
                             tabs[:, 3] + 1,
@@ -1437,17 +1511,17 @@ class VCFReader(SNPBaseReader):
                         else:
                             raise ValueError("The simple FORMAT fast path requires GT first or DP:GT FORMAT fields.")
 
-                        sample_starts = tabs[:, 8 + sample_idxs] + 1
-                        if gt_offset:
-                            sample_ends = np.empty_like(sample_starts)
-                            for out_idx, sample_idx in enumerate(sample_idxs):
-                                sample_idx = int(sample_idx)
-                                if sample_idx == n_samples_total - 1:
-                                    sample_ends[:, out_idx] = content_ends
-                                else:
-                                    sample_ends[:, out_idx] = tabs[:, 9 + sample_idx]
-                            if not np.all(sample_ends - sample_starts >= gt_offset + 3):
-                                raise ValueError("Sample fields are too short for the requested GT offset.")
+                        sample_starts, sample_ends = _sample_field_bounds(
+                            tabs, content_ends, n_samples_total, sample_idxs,
+                        )
+                        gt_ends = sample_starts + gt_offset + 3
+                        if np.any(gt_ends > sample_ends):
+                            raise ValueError("The simple FORMAT fast path requires diploid GT calls.")
+                        if gt_offset and not np.all(raw[sample_starts + gt_offset - 1] == ord(":")):
+                            raise ValueError("The simple FORMAT fast path requires a fixed GT offset.")
+                        has_suffix = gt_ends < sample_ends
+                        if not np.all(raw[gt_ends[has_suffix]] == ord(":")):
+                            raise ValueError("The simple FORMAT fast path requires single-digit GT alleles.")
 
                         sep = raw[sample_starts + gt_offset + 1]
                         if not np.all((sep == ord("|")) | (sep == ord("/"))):
@@ -1481,7 +1555,7 @@ class VCFReader(SNPBaseReader):
                             )
                             gt_buffer[gt_records:gt_records + height, :, 0] = first_allele
                             gt_buffer[gt_records:gt_records + height, :, 1] = second_allele
-                        gt_records += height
+                    gt_records += height
 
                     if "POS" in include:
                         array_chunks["POS"].append(_parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1]))
@@ -1504,17 +1578,10 @@ class VCFReader(SNPBaseReader):
                 if not chunk:
                     break
 
-        if n_selected == 0:
-            first_chunk_list = next((chunks for chunks in array_chunks.values() if chunks), None)
-            n_records = int(sum(chunk.shape[0] for chunk in first_chunk_list)) if first_chunk_list is not None else 0
-            genotypes = _empty_genotype_array(n_records, 0, return_dosage)
-        elif gt_buffer is not None:
-            # Trim unused capacity without copying.
-            genotypes = gt_buffer[:gt_records]
-        elif return_dosage:
-            genotypes = np.empty((0, n_selected), dtype=np.int8)
+        if gt_buffer is None:
+            genotypes = _empty_genotype_array(gt_records, n_selected, return_dosage)
         else:
-            genotypes = np.empty((0, n_selected, 2), dtype=np.int8)
+            genotypes = gt_buffer[:gt_records]
 
         arrays = {
             field: _concat_axis0_releasing(chunks)
@@ -1536,6 +1603,7 @@ class VCFReader(SNPBaseReader):
         sample_idxs: np.ndarray,
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         return_dosage: bool,
+        assume_biallelic: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
         n_samples_total = len(names) - 9
@@ -1576,8 +1644,7 @@ class VCFReader(SNPBaseReader):
             if first_tabs.size != tabs_per_record:
                 raise ValueError("VCF records do not have the expected number of tab-delimited columns.")
             format_value = _decode_vcf_slice(first_raw, first_tabs[7] + 1, first_tabs[8])
-            sample_bytes_len = int(first_raw.size - first_tabs[8] - 1)
-            if sample_columns and (format_value != "GT" or sample_bytes_len != n_samples_total * 4 - 1):
+            if sample_columns and format_value != "GT":
                 raise ValueError("The block fast path requires GT-only sample fields.")
 
             arrays: dict[str, np.ndarray] = {}
@@ -1601,10 +1668,10 @@ class VCFReader(SNPBaseReader):
             if "POS" in include:
                 arrays["POS"] = np.empty(n_records, dtype=np.int32)
 
-            sample_offsets = sample_idxs.astype(np.int64, copy=False) * 4
             row = 0
             remainder = first_line
-            block_size = (1 if n_samples_total > 128 and n_selected <= 16 else 8) * 1024 * 1024
+            # Wide blocks need a tab offset for every sample field.
+            block_size = (1 if n_samples_total > 128 else 8) * 1024 * 1024
 
             while True:
                 chunk = file.read(block_size)
@@ -1637,7 +1704,7 @@ class VCFReader(SNPBaseReader):
                     if region_filter is None and row + height > n_records:
                         raise ValueError("VCF contains more records than counted.")
 
-                    if n_samples_total > 128:
+                    if n_samples_total > 128 and not n_selected:
                         tabs = _first_tabs_by_line(block, line_starts, 9)
                     else:
                         tabs = np.flatnonzero(raw == ord("\t"))
@@ -1665,7 +1732,7 @@ class VCFReader(SNPBaseReader):
                     if hi > n_records:
                         raise ValueError("VCF contains more matching records than counted.")
 
-                    if return_dosage:
+                    if return_dosage and not assume_biallelic:
                         _raise_if_multiallelic_alt_bytes(
                             raw,
                             tabs[:, 3] + 1,
@@ -1680,25 +1747,10 @@ class VCFReader(SNPBaseReader):
                             if detect_non_diploid
                             else None
                         )
-                        sample_starts = tabs[:, 8] + 1
-                        if not _field_matches_value(raw, tabs[:, 7] + 1, tabs[:, 8], "GT"):
-                            raise ValueError("The block fast path requires GT-only sample fields.")
-                        expected_sample_bytes = n_samples_total * 4 - 1
-                        if not np.all((content_ends - sample_starts) == expected_sample_bytes):
-                            raise ValueError("The block fast path requires fixed-width diploid GT sample fields.")
-                        offsets = sample_starts[:, None] + sample_offsets[None, :]
-                        first_allele = _ascii_gt_to_int(raw[offsets])
-                        second_allele = _ascii_gt_to_int(raw[offsets + 2])
-                        if return_dosage:
-                            genotypes[lo:hi] = sum_diploid_alleles(
-                                first_allele,
-                                second_allele,
-                                missing_as_haploid=non_diploid_chromosomes,
-                            )
-                        else:
-                            _raise_if_unphased_vcf_gt_separator(raw[offsets + 1])
-                            genotypes[lo:hi, :, 0] = first_allele
-                            genotypes[lo:hi, :, 1] = second_allele
+                        genotypes = _write_gt_block(
+                            raw, tabs, content_ends, n_samples_total, sample_idxs,
+                            genotypes, lo, return_dosage, non_diploid_chromosomes,
+                        )
 
                     if "POS" in include:
                         arrays["POS"][lo:hi] = _parse_ascii_ints(raw, tabs[:, 0] + 1, tabs[:, 1])
@@ -1810,6 +1862,7 @@ class VCFReader(SNPBaseReader):
         sample_columns: list[str],
         region_filter: Optional[tuple[str, Optional[int], Optional[int]]],
         return_dosage: bool,
+        assume_biallelic: bool,
         detect_non_diploid: bool,
         separator: str,
     ) -> SNPObject:
@@ -1840,7 +1893,7 @@ class VCFReader(SNPBaseReader):
             filter_columns = [] if chrom_column is None else [chrom_column]
 
         parsing_columns = ["FORMAT"] if n_selected else []
-        if return_dosage:
+        if return_dosage and not assume_biallelic:
             parsing_columns.append("ALT")
         usecols = list(dict.fromkeys(field_columns + sample_columns + filter_columns + parsing_columns))
         offset = 0
@@ -1868,7 +1921,7 @@ class VCFReader(SNPBaseReader):
             height = len(frame)
             if height == 0:
                 continue
-            if return_dosage and frame["ALT"].str.contains(",", regex=False).any():
+            if return_dosage and not assume_biallelic and frame["ALT"].str.contains(",", regex=False).any():
                 raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
             if n_selected:
                 non_diploid_chromosomes = None
@@ -1877,12 +1930,15 @@ class VCFReader(SNPBaseReader):
                     non_diploid_chromosomes = _non_diploid_chromosome_mask_or_none(
                         frame[chrom_column].to_numpy(dtype=object)
                     )
-                genotypes[offset:offset + height] = _parse_gt_sample_matrix(
+                calls = _parse_gt_sample_matrix(
                     frame[sample_columns].to_numpy(dtype=object),
                     frame["FORMAT"].to_numpy(dtype=object),
                     return_dosage=bool(return_dosage),
                     non_diploid_chromosomes=non_diploid_chromosomes,
                 )
+                if calls.itemsize > genotypes.itemsize:
+                    genotypes = _widen_gt_buffer(genotypes, calls.dtype, offset)
+                genotypes[offset:offset + height] = calls
 
             for field in field_columns:
                 if field == "FORMAT":
@@ -1912,6 +1968,8 @@ class VCFReader(SNPBaseReader):
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         threads: int = 1,
+        *,
+        assume_biallelic: bool = False,
     ) -> SNPObject:
         """
         Read a VCF file into an :class:`~snputils.snp.genobj.snpobj.SNPObject`.
@@ -1919,7 +1977,8 @@ class VCFReader(SNPBaseReader):
         By default, the reader loads the core VCF variant columns ``CHROM``,
         ``POS``, ``ID``, ``REF``, ``ALT``, ``QUAL``, and ``FILTER``, plus all
         sample genotype columns. Genotypes are read from the ``GT`` FORMAT
-        field and returned as an ``int8`` array. By default
+        field and returned as an ``int8`` array, widened to a signed integer type
+        when a phased allele index exceeds 127. By default
         (``genotype_mode="auto"``), phased genotypes are kept separate with shape
         ``(n_variants, n_samples, 2)`` and unphased GT calls fall back to
         dosages with shape ``(n_variants, n_samples)``. With
@@ -1946,6 +2005,8 @@ class VCFReader(SNPBaseReader):
                 (``0``, ``1``, or ``2``) and rejects multiallelic variants. ``"phased"`` keeps phased allele columns separate
                 and rejects unphased GT calls. ``"auto"`` (default) preserves
                 phased calls and falls back to dosage for unphased calls.
+            assume_biallelic: Skip ALT checks for a VCF known to contain at most one
+                ALT allele per record. A wrong assumption can produce incorrect genotypes.
             chromosome_ploidy:
                 Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
@@ -1968,6 +2029,7 @@ class VCFReader(SNPBaseReader):
             fields.
         """
         genotype_mode = normalize_genotype_mode(genotype_mode)
+        _check_assume_biallelic(assume_biallelic)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         try:
             threads = operator.index(threads)
@@ -1991,6 +2053,7 @@ class VCFReader(SNPBaseReader):
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                     threads=threads,
+                    assume_biallelic=assume_biallelic,
                 )
             except ValueError as exc:
                 if _UNPHASED_VCF_PHASED_ERROR not in str(exc):
@@ -2004,6 +2067,7 @@ class VCFReader(SNPBaseReader):
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                     threads=threads,
+                    assume_biallelic=assume_biallelic,
                 )
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
@@ -2040,6 +2104,7 @@ class VCFReader(SNPBaseReader):
                 sample_idxs=sample_idxs,
                 return_dosage=return_dosage,
                 threads=threads,
+                assume_biallelic=assume_biallelic,
             )
 
         if detected_separator != "\t":
@@ -2050,6 +2115,7 @@ class VCFReader(SNPBaseReader):
                 region_filter=region_filter,
                 return_dosage=bool(return_dosage),
                 detect_non_diploid=detect_non_diploid,
+                assume_biallelic=assume_biallelic,
                 separator=detected_separator,
             )
 
@@ -2063,6 +2129,7 @@ class VCFReader(SNPBaseReader):
                     region_filter=region_filter,
                     return_dosage=bool(return_dosage),
                     detect_non_diploid=detect_non_diploid,
+                    assume_biallelic=assume_biallelic,
                 )
             return self._read_block_gt_only(
                 names=names,
@@ -2072,6 +2139,7 @@ class VCFReader(SNPBaseReader):
                 region_filter=region_filter,
                 return_dosage=bool(return_dosage),
                 detect_non_diploid=detect_non_diploid,
+                assume_biallelic=assume_biallelic,
             )
         except ValueError as exc:
             log.debug("VCF fast block path unavailable for %s: %s", self._filename, exc)
@@ -2084,6 +2152,7 @@ class VCFReader(SNPBaseReader):
                     region_filter=region_filter,
                     return_dosage=bool(return_dosage),
                     detect_non_diploid=detect_non_diploid,
+                    assume_biallelic=assume_biallelic,
                 )
             except ValueError as fallback_exc:
                 log.debug(
@@ -2098,6 +2167,7 @@ class VCFReader(SNPBaseReader):
                     region_filter=region_filter,
                     return_dosage=bool(return_dosage),
                     detect_non_diploid=detect_non_diploid,
+                    assume_biallelic=assume_biallelic,
                     separator=detected_separator,
                 )
 
@@ -2116,10 +2186,14 @@ class VCFReader(SNPBaseReader):
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
         threads: int = 1,
+        *,
+        assume_biallelic: bool = False,
     ) -> Iterator[SNPObject]:
         """
         Stream a VCF in variant chunks.
 
+        assume_biallelic: Skip ALT checks for a VCF known to contain at most one
+            ALT allele per record. A wrong assumption can produce incorrect genotypes.
         chromosome_ploidy:
             Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
             all selected variants should be treated as ordinary diploid/autosomal; this
@@ -2131,6 +2205,7 @@ class VCFReader(SNPBaseReader):
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         return_dosage = genotype_mode == "dosage"
+        _check_assume_biallelic(assume_biallelic)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
         try:
@@ -2172,16 +2247,10 @@ class VCFReader(SNPBaseReader):
             selected_samples,
         )
         n_samples_total = len(names) - 9
+        all_samples = np.array_equal(sample_indices, np.arange(n_samples_total))
         if threads != 1:
             from snputils.snp.io.read import _vcf
 
-            all_samples = (
-                len(sample_indices) == n_samples_total
-                and np.array_equal(
-                    sample_indices,
-                    np.arange(n_samples_total, dtype=sample_indices.dtype),
-                )
-            )
             native_sample_idxs = None if all_samples else sample_indices.tolist()
         wanted_variant_ids = None if variant_ids is None else set(map(str, np.asarray(variant_ids).ravel()))
         wanted_variant_idxs = None if variant_idxs is None else set(map(int, np.asarray(variant_idxs).ravel()))
@@ -2220,6 +2289,7 @@ class VCFReader(SNPBaseReader):
                     native_sample_idxs,
                     bool(return_dosage),
                     threads,
+                    assume_biallelic,
                 )
                 if decoded_records != records_count:
                     raise RuntimeError("Native VCF chunk decoder returned an unexpected record count.")
@@ -2277,7 +2347,7 @@ class VCFReader(SNPBaseReader):
                 if wanted_variant_ids is not None and not _variant_id_matches(parts, wanted_variant_ids):
                     row_idx += 1
                     continue
-                if return_dosage and b"," in parts[4]:
+                if return_dosage and not assume_biallelic and b"," in parts[4]:
                     raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
                 if "#CHROM" in include or "CHROM" in include:
                     records["chrom"].append(_decode_vcf_value(parts[0]))
@@ -2303,6 +2373,7 @@ class VCFReader(SNPBaseReader):
                                 format_value=parts[8],
                                 n_samples_total=n_samples_total,
                                 sample_idxs=sample_indices,
+                                all_samples=all_samples,
                                 return_dosage=bool(return_dosage),
                                 non_diploid_chromosome=(
                                     (
@@ -2459,42 +2530,33 @@ class VCFReaderPolars(SNPBaseReader):
         return_dosage: bool,
         non_diploid_chromosomes: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        if not sample_columns:
-            return _empty_genotype_array(vcf.height, 0, return_dosage)
+        if not sample_columns or vcf.is_empty():
+            return _empty_genotype_array(vcf.height, len(sample_columns), return_dosage)
 
-        if not return_dosage:
-            unphased = (
-                vcf[sample_columns]
-                .select(pl.all().str.contains("/").any())
-                .to_numpy()
-            )
-            if bool(np.any(unphased)):
-                raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
+        gt = vcf.select(sample_columns)
+        formats = vcf["FORMAT"].unique().to_list()
+        if formats != ["GT"]:
+            # GT is optional per record. A null index yields a missing call for every sample.
+            indexes = {fmt: _format_gt_index(fmt) for fmt in formats if fmt and "GT" in fmt.split(":")}
+            index = pl.col("FORMAT").replace_strict(indexes, default=None, return_dtype=pl.Int64)
+            gt = vcf.select(pl.col(sample_columns).str.split(":").list.get(index, null_on_oob=True))
 
-        # Process the first allele call.
-        # Extract the first position from genotype, e.g., 0|1 -> 0.
-        # Replace missing values codified as ".", "-", or "" with -1 for integer casting.
-        genotype_first_allele = (
-            vcf[sample_columns]
-            .select(pl.all().str.slice(0, length=1))
-            .select(pl.all().replace({".": -1, "-": -1, "": -1}))
-            .cast(pl.Int8)
-        )
-
-        # Process the second allele call.
-        # Extract the third position from genotype, e.g., 0|1 -> 1.
-        # Convert ":" to ".." so that a missing second allele call is decoded
-        # as missing, e.g., 0:0.982 -> 0..0.982 -> . -> -1.
-        genotype_second_allele = (
-            vcf[sample_columns]
-            .select(pl.all().str.replace_all("-1", "."))
-            .select(pl.all().str.replace(":", ".."))
-            .select(pl.all().str.slice(2, length=1))
-            .select(pl.all().replace({".": -1, "": -1}))
-            .cast(pl.Int8)
-        )
-
-        genotypes = np.dstack((genotype_first_allele, genotype_second_allele))
+        if not return_dosage and gt.select(pl.all().str.contains("/", literal=True).any()).to_numpy().any():
+            raise ValueError(_UNPHASED_VCF_PHASED_ERROR)
+        token = pl.all()
+        if return_dosage:
+            token = token.str.replace_all("/", "|", literal=True)
+        pairs = gt.select(token.str.strip_prefix("|").str.splitn("|", 2))
+        alleles = []
+        for field in ("field_0", "field_1"):
+            values = pl.all().struct.field(field).replace([".", "-", ""], "-1").fill_null("-1")
+            try:
+                allele = pairs.select(values.cast(pl.Int8).name.keep()).to_numpy()
+            except pl.exceptions.InvalidOperationError:
+                allele = pairs.select(values.cast(pl.Int64).name.keep()).to_numpy()
+                allele = allele.astype(_allele_dtype(int(allele.max())), copy=False)
+            alleles.append(allele)
+        genotypes = np.stack(alleles, axis=2)
         if return_dosage:
             genotypes = sum_diploid_alleles(
                 genotypes[:, :, 0],
@@ -2510,9 +2572,10 @@ class VCFReaderPolars(SNPBaseReader):
         field_columns: List[str],
         sample_columns: List[str],
         return_dosage: bool,
+        assume_biallelic: bool,
         detect_non_diploid: bool,
     ) -> SNPObject:
-        if return_dosage and "ALT" in vcf.columns:
+        if return_dosage and not assume_biallelic and "ALT" in vcf.columns:
             if vcf["ALT"].str.contains(",", literal=True).any():
                 raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
 
@@ -2562,6 +2625,8 @@ class VCFReaderPolars(SNPBaseReader):
              chromosome_ploidy: Optional[str] = None,
              separator: Optional[str] = None,
              threads: Optional[int] = None,
+             *,
+             assume_biallelic: bool = False,
              ) -> SNPObject:
         """
         Read a vcf file into a SNPObject.
@@ -2575,9 +2640,8 @@ class VCFReaderPolars(SNPBaseReader):
             exclude_fields: Fields to exclude for use in combination with fields='*'.
                 Available options include 'CHROM'/'#CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL',
                 'FILTER', 'INFO', and 'FORMAT'.
-            region: Genomic region to extract variants for. If provided, it should be a
-                tabix-style region string, specifying a chromosome name and optionally
-                beginning and end coordinates (e.g., '2L:100000-200000'). TODO
+            region: Select records by chromosome and 1-based inclusive POS, for
+                example ``"22"``, ``"22:100000"``, or ``"22:100000-200000"``.
             samples: Selection of samples to extract calldata for. If provided, should be
                 a list of strings giving sample identifiers. May also be a list of
                 integers giving indices of selected samples.  If an empty list is provided,
@@ -2587,6 +2651,8 @@ class VCFReaderPolars(SNPBaseReader):
                 ``"phased"`` preserves phased allele calls and rejects unphased
                 calls. ``"auto"`` preserves phased calls and falls back to
                 dosage for unphased calls.
+            assume_biallelic: Skip ALT checks for a VCF known to contain at most one
+                ALT allele per record. A wrong assumption can produce incorrect genotypes.
             chromosome_ploidy:
                 Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
@@ -2611,6 +2677,7 @@ class VCFReaderPolars(SNPBaseReader):
             if threads < 1:
                 raise ValueError("VCFReaderPolars threads must be at least 1.")
         genotype_mode = normalize_genotype_mode(genotype_mode)
+        _check_assume_biallelic(assume_biallelic)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         if genotype_mode == "auto":
             try:
@@ -2623,6 +2690,7 @@ class VCFReaderPolars(SNPBaseReader):
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                     threads=threads,
+                    assume_biallelic=assume_biallelic,
                 )
             except ValueError as exc:
                 if _UNPHASED_VCF_PHASED_ERROR not in str(exc):
@@ -2636,10 +2704,12 @@ class VCFReaderPolars(SNPBaseReader):
                     chromosome_ploidy=chromosome_ploidy,
                     separator=separator,
                     threads=threads,
+                    assume_biallelic=assume_biallelic,
                 )
         return_dosage = genotype_mode == "dosage"
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
 
+        region_filter = _parse_vcf_region(region)
         log.info(f"Reading {self._filename}")
 
         try:
@@ -2649,7 +2719,14 @@ class VCFReaderPolars(SNPBaseReader):
                 samples=samples,
                 separator=separator,
             )
-            if return_dosage and "ALT" not in field_columns:
+            region_expr = _polars_region_expr(region_filter, col_dtypes)
+            if region_expr is not None:
+                columns = list(col_dtypes)
+                region_idxs = [columns.index(col) for col in region_expr.meta.root_names()]
+                selected_column_idxs = sorted(set(selected_column_idxs + region_idxs))
+            if sample_columns and "FORMAT" not in field_columns:
+                selected_column_idxs = sorted(set(selected_column_idxs + [list(col_dtypes).index("FORMAT")]))
+            if return_dosage and not assume_biallelic and "ALT" not in field_columns:
                 selected_column_idxs = sorted(set(selected_column_idxs + [list(col_dtypes).index("ALT")]))
             if detect_non_diploid:
                 chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
@@ -2672,10 +2749,13 @@ class VCFReaderPolars(SNPBaseReader):
                 comment_prefix="##",
                 has_header=True,
                 separator=detected_separator,
-                columns=selected_column_idxs,
+                # A projection needs one column to retain the row count.
+                columns=selected_column_idxs or [0],
                 schema_overrides=col_dtypes,
                 **thread_options,
             )
+            if region_expr is not None:
+                vcf = vcf.filter(region_expr)
 
             log.debug("vcf polars read")
             snpobj = self._dataframe_to_snpobject(
@@ -2684,6 +2764,7 @@ class VCFReaderPolars(SNPBaseReader):
                 sample_columns=sample_columns,
                 return_dosage=bool(return_dosage),
                 detect_non_diploid=detect_non_diploid,
+                assume_biallelic=assume_biallelic,
             )
 
             log.info(f"Finished reading {self.filename}")
@@ -2691,6 +2772,9 @@ class VCFReaderPolars(SNPBaseReader):
             return snpobj
 
         except Exception as e:
+            # Auto mode handles this signal by retrying the Polars read in dosage mode.
+            if isinstance(e, ValueError) and str(e) == _UNPHASED_VCF_PHASED_ERROR:
+                raise
             log.warning(
                 "Polars VCF parsing failed (%s). Falling back to default VCF reader.",
                 e,
@@ -2707,6 +2791,7 @@ class VCFReaderPolars(SNPBaseReader):
                 genotype_mode=genotype_mode,
                 chromosome_ploidy=chromosome_ploidy,
                 threads=1,
+                assume_biallelic=assume_biallelic,
             )
 
             return snpobj
@@ -2725,12 +2810,18 @@ class VCFReaderPolars(SNPBaseReader):
         chromosome_ploidy: Optional[str] = None,
         separator: Optional[str] = None,
         chunk_size: int = 10_000,
+        *,
+        assume_biallelic: bool = False,
     ) -> Iterator[SNPObject]:
         """
         Stream a VCF in variant chunks using the Polars backend.
 
         Streaming parallelism uses Polars' process-wide thread pool.
 
+        region: Select records by chromosome and 1-based inclusive POS, as in
+            ``read()``. Variant indexes refer to rows in the original VCF.
+        assume_biallelic: Skip ALT checks for a VCF known to contain at most one
+            ALT allele per record. A wrong assumption can produce incorrect genotypes.
         chromosome_ploidy:
             Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
             all selected variants should be treated as ordinary diploid/autosomal; this
@@ -2739,12 +2830,12 @@ class VCFReaderPolars(SNPBaseReader):
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         return_dosage = genotype_mode == "dosage"
+        _check_assume_biallelic(assume_biallelic)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         detect_non_diploid = return_dosage and chromosome_ploidy_mode != "autosomal"
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1.")
-        if region is not None:
-            raise NotImplementedError("VCFReaderPolars.iter_read does not support `region` yet.")
+        region_filter = _parse_vcf_region(region)
         if samples is not None and (sample_ids is not None or sample_idxs is not None):
             raise ValueError("Only one of samples, sample_ids, and sample_idxs can be specified.")
         if sample_idxs is not None and sample_ids is not None:
@@ -2767,7 +2858,10 @@ class VCFReaderPolars(SNPBaseReader):
         )
 
         selected_columns = field_columns + sample_columns
-        filter_columns = []
+        filter_columns = ["FORMAT"] if sample_columns else []
+        region_expr = _polars_region_expr(region_filter, col_dtypes)
+        if region_expr is not None:
+            filter_columns.extend(region_expr.meta.root_names())
         chrom_column = "#CHROM" if "#CHROM" in col_dtypes else "CHROM" if "CHROM" in col_dtypes else None
         if detect_non_diploid and chrom_column is not None:
             filter_columns.append(chrom_column)
@@ -2775,7 +2869,7 @@ class VCFReaderPolars(SNPBaseReader):
             filter_columns.extend(["ID", "POS", "REF", "ALT"])
             if chrom_column is not None:
                 filter_columns.append(chrom_column)
-        if return_dosage:
+        if return_dosage and not assume_biallelic:
             filter_columns.append("ALT")
         scan_columns = list(dict.fromkeys(selected_columns + [col for col in filter_columns if col in col_dtypes]))
         wanted_variant_ids = None if variant_ids is None else np.asarray(variant_ids, dtype=str).ravel()
@@ -2789,7 +2883,7 @@ class VCFReaderPolars(SNPBaseReader):
                     separator=detected_separator,
                     schema_overrides=col_dtypes,
                 )
-                .select(scan_columns)
+                .select(scan_columns or [next(iter(col_dtypes))])
                 .collect_batches(chunk_size=int(chunk_size))
             )
         except Exception as exc:
@@ -2805,6 +2899,8 @@ class VCFReaderPolars(SNPBaseReader):
                 batch = batch.filter(np.isin(row_idxs, wanted_variant_idxs))
             row_offset += original_height
 
+            if region_expr is not None:
+                batch = batch.filter(region_expr)
             if wanted_variant_ids is not None and batch.height > 0:
                 id_expr = pl.col("ID").cast(pl.Utf8).is_in(wanted_variant_ids)
                 if chrom_column is not None and all(col in batch.columns for col in (chrom_column, "POS", "REF", "ALT")):
@@ -2837,6 +2933,7 @@ class VCFReaderPolars(SNPBaseReader):
                     sample_columns=sample_columns,
                     return_dosage=bool(return_dosage),
                     detect_non_diploid=detect_non_diploid,
+                    assume_biallelic=assume_biallelic,
                 )
 
         if pending is not None and pending.height > 0:
@@ -2846,4 +2943,5 @@ class VCFReaderPolars(SNPBaseReader):
                 sample_columns=sample_columns,
                 return_dosage=bool(return_dosage),
                 detect_non_diploid=detect_non_diploid,
+                assume_biallelic=assume_biallelic,
             )

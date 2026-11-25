@@ -1,3 +1,5 @@
+from argparse import BooleanOptionalAction
+
 import pytest
 
 
@@ -22,6 +24,12 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         help="Run only the benchmark case whose reader name matches this value"
+    )
+    parser.addoption(
+        "--assume-biallelic",
+        action=BooleanOptionalAction,
+        default=True,
+        help="Skip ALT checks in timed snputils VCF reads (default for the biallelic chr22 benchmark).",
     )
     parser.addoption(
         "--genotype-mode",
@@ -54,6 +62,11 @@ def memory_profile(request):
 def reader_name(request):
     """Fixture to get the optional reader-name filter."""
     return request.config.getoption("--reader-name")
+
+
+@pytest.fixture
+def assume_biallelic(request):
+    return request.config.getoption("--assume-biallelic")
 
 
 @pytest.fixture

@@ -78,7 +78,17 @@ store phase.
 
 `genotype_mode="dosage"` rejects multiallelic variants because one scalar cannot
 identify which alternate allele is being counted. Use `genotype_mode="phased"`
-to preserve multiallelic allele indexes.
+to preserve multiallelic allele indexes. For example, the VCF call `0|20`
+returns `[0, 20]`. The VCF readers widen the signed genotype array when an
+allele index exceeds 127. With the default VCF backend, use `threads=1`
+(the default) for multi-digit allele indexes. Its multithreaded decoder
+requires fixed-width diploid GT fields.
+
+If you know every record in a VCF has at most one ALT allele, you can skip
+the ALT checks with `read_vcf(path, genotype_mode="dosage", assume_biallelic=True)`.
+This can save work when reading only genotypes, especially with the Polars backend.
+Both readers accept this option in `read` and `iter_read`. The default is `False`.
+Passing `True` for a multiallelic file can give incorrect genotypes.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

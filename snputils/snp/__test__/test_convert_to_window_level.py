@@ -50,10 +50,11 @@ def test_convert_to_window_level_uses_per_chromosome_positions():
     )
 
 
-def test_convert_to_window_level_when_chrom_has_fewer_snps_than_window_size():
+@pytest.mark.parametrize("window_size", [5, np.uint32(5)])
+def test_convert_to_window_level_when_chrom_has_fewer_snps_than_window_size(window_size):
     snpobj = _multi_chrom_snpobj()
 
-    lai = snpobj.convert_to_window_level(window_size=5)
+    lai = snpobj.convert_to_window_level(window_size=window_size)
 
     assert lai.chromosomes.tolist() == ["1", "2"]
     assert lai.physical_pos.tolist() == [

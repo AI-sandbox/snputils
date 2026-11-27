@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections.abc import Mapping
 import logging
+import operator
 from pathlib import Path
 import numpy as np
 import copy
@@ -5580,6 +5581,7 @@ class SNPObject:
 
         # Fixed window size
         if window_size is not None:
+            window_size = operator.index(window_size)
             if window_size <= 0:
                 raise ValueError("`window_size` must be a positive integer.")
             physical_pos = []   # Boundaries [start, end] of each window

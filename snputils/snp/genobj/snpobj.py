@@ -5558,10 +5558,10 @@ class SNPObject:
 
         Args:
             window_size (int, optional):
-                Number of SNP records per window, ordered by position within each chromosome.
-                Records at the same position keep their input order and may fall in adjacent
-                windows. A chromosome with fewer than ``window_size`` SNPs forms a single
-                window. Otherwise, any remaining SNPs are included in the last full window.
+                Target number of SNP records per window, ordered by position within each chromosome.
+                A shorter chromosome forms one window. Otherwise, the last window includes any
+                remainder. If a window would start partway through a group of records at the same
+                position, it starts at the first such record. Windows with identical starts merge.
                 SNPs with null or masked chromosome labels are skipped with a warning.
             physical_pos (array of shape (n_windows, 2), optional):
                 A 2D array containing the start and end physical positions for each window.
@@ -5607,11 +5607,13 @@ class SNPObject:
                 chrom_indices = np.flatnonzero(variant_chrom == chrom)
                 order = np.argsort(positions[chrom_indices], kind="stable")
                 chrom_indices = chrom_indices[order]
+                sorted_positions = positions[chrom_indices]
 
-                # Leave any remainder in the last window.
-                n_full_windows = chrom_indices.size // window_size
-                split_points = range(window_size, n_full_windows * window_size, window_size)
-                for indices in np.split(chrom_indices, split_points):
+                n_windows_chrom = max(1, chrom_indices.size // window_size)
+                start_positions = sorted_positions[:n_windows_chrom * window_size:window_size]
+                # Inclusive coordinate bounds must assign all records at a position to one window.
+                window_starts = np.unique(np.searchsorted(sorted_positions, start_positions, side="left"))
+                for indices in np.split(chrom_indices, window_starts[1:]):
                     window_indices.append(indices)
                     physical_pos.append([positions[indices[0]], positions[indices[-1]]])
                     chromosomes.append(chrom)

@@ -178,15 +178,29 @@ def snps_at_shared_position():
 
 
 @pytest.mark.parametrize("shape", [(6, 2), (6, 1, 2)])
-def test_fixed_windows_split_records_at_a_shared_position(snps_at_shared_position, shape):
+def test_fixed_windows_keep_shared_positions_together_on_reuse(snps_at_shared_position, shape):
     snps = snps_at_shared_position
     snps.calldata_lai = snps.calldata_lai.reshape(shape)
 
     result = snps.convert_to_window_level(window_size=3)
+    reused = snps.convert_to_window_level(laiobj=result)
 
-    np.testing.assert_array_equal(result.physical_pos, [[10, 30], [30, 40]])
-    np.testing.assert_array_equal(result.window_sizes, [3, 3])
-    np.testing.assert_array_equal(result.lai, [[0, 0], [1, 1]])
+    np.testing.assert_array_equal(reused.lai, result.lai)
+    np.testing.assert_array_equal(result.physical_pos, [[10, 20], [30, 40]])
+    np.testing.assert_array_equal(result.window_sizes, [2, 4])
+    np.testing.assert_array_equal(result.lai, [[0, 0], [1, 0]])
+
+
+def test_single_position_spanning_multiple_windows_forms_one_window(snps_at_shared_position):
+    snps = snps_at_shared_position
+    snps.variants_pos[:] = 30
+
+    result = snps.convert_to_window_level(window_size=1)
+
+    np.testing.assert_array_equal(result.physical_pos, [[30, 30]])
+    np.testing.assert_array_equal(result.window_sizes, [6])
+    np.testing.assert_array_equal(result.lai, [[1, 0]])
+    np.testing.assert_array_equal(snps.convert_to_window_level(laiobj=result).lai, result.lai)
 
 
 def test_fixed_windows_sort_positions_within_each_chromosome():

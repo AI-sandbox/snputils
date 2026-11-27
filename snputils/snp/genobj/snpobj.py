@@ -5634,9 +5634,11 @@ class SNPObject:
                 chromosomes = laiobj.chromosomes
                 window_sizes = laiobj.window_sizes
             elif chromosomes is None:
-                if len(snps_by_chrom) != 1:
+                chroms_with_positions = [chrom for chrom, indices in snps_by_chrom.items() if indices.size]
+                candidate_chroms = chroms_with_positions or list(snps_by_chrom)
+                if len(candidate_chroms) != 1:
                     raise ValueError("Multiple chromosomes detected, but `chromosomes` was not provided.")
-                chromosomes = np.full(physical_pos.shape[0], next(iter(snps_by_chrom)), dtype=chrom_dtype)
+                chromosomes = np.full(physical_pos.shape[0], candidate_chroms[0], dtype=chrom_dtype)
 
         # Allocate an output LAI array
         n_windows = physical_pos.shape[0]

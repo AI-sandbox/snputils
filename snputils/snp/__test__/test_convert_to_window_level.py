@@ -326,3 +326,25 @@ def test_coordinate_windows_with_masked_metadata_have_missing_ancestry(snps_at_s
     for result in (explicit, reused):
         assert np.isnan(result.lai[:3]).all()
         np.testing.assert_array_equal(result.lai[3], [1, 0])
+
+
+@pytest.mark.parametrize(
+    ("chromosomes", "positions", "expected_lai"),
+    [
+        ([2, 1], [np.nan, 10], [1, 0]),
+        ([1, 1], [np.nan, np.nan], [np.nan, np.nan]),
+    ],
+)
+def test_coordinate_windows_infer_chromosome_with_missing_positions(chromosomes, positions, expected_lai):
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.array(chromosomes),
+        variants_pos=np.array(positions),
+        calldata_lai=np.array([[0, 1], [1, 0]]),
+    )
+
+    with pytest.warns(UserWarning, match="missing positions"):
+        window = snps.convert_to_window_level(physical_pos=np.array([[10, 10]]))
+
+    np.testing.assert_array_equal(window.chromosomes, [1])
+    np.testing.assert_array_equal(window.lai[0], expected_lai)

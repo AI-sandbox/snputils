@@ -5580,6 +5580,8 @@ class SNPObject:
 
         # Fixed window size
         if window_size is not None:
+            if window_size <= 0:
+                raise ValueError("`window_size` must be a positive integer.")
             physical_pos = []   # Boundaries [start, end] of each window
             chromosomes = []    # Chromosome for each window
             window_sizes = []   # Number of SNPs for each window
@@ -5592,24 +5594,25 @@ class SNPObject:
                 n_snps_chrom = pos_chrom.size
 
                 # Initialize the start of the first window with the position of the first SNP
-                current_start = self.variants_pos[0]
+                current_start = pos_chrom[0]
 
                 # Number of full windows with exactly `window_size` SNPs
                 n_full_windows = n_snps_chrom // window_size
+                n_prefix_windows = max(n_full_windows - 1, 0)
 
                 # Build all but the last window
-                for i in range(n_full_windows-1):
-                    current_end = self.variants_pos[(i+1) * window_size - 1]
+                for i in range(n_prefix_windows):
+                    current_end = pos_chrom[(i + 1) * window_size - 1]
                     physical_pos.append([current_start, current_end])
                     chromosomes.append(chrom)
                     window_sizes.append(window_size)
-                    current_start = self.variants_pos[(i+1) * window_size]
+                    current_start = pos_chrom[(i + 1) * window_size]
 
                 # Build the last window
-                current_end = self.variants_pos[-1]
+                current_end = pos_chrom[-1]
                 physical_pos.append([current_start, current_end])
                 chromosomes.append(chrom)
-                window_sizes.append(n_snps_chrom - ((n_full_windows - 1) * window_size))
+                window_sizes.append(n_snps_chrom - (n_prefix_windows * window_size))
 
             physical_pos = np.array(physical_pos)
             chromosomes = np.array(chromosomes)

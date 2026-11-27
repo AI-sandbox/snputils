@@ -107,6 +107,30 @@ def test_convert_to_window_level_rejects_nonpositive_window_size():
 
 
 @pytest.mark.parametrize(
+    ("n_chrom", "positions", "lai_shape"),
+    [
+        (2, [10, 20], (3, 2)),
+        (3, [10, 20, np.nan], (2, 1, 2)),
+        (1, [10, 20], (2, 2)),
+        (2, [10], (2, 1, 2)),
+    ],
+    ids=["extra-ancestry", "short-ancestry-with-missing-position", "short-chromosomes", "short-positions"],
+)
+def test_window_conversion_rejects_mismatched_variant_counts(n_chrom, positions, lai_shape):
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.repeat("1", n_chrom),
+        variants_pos=np.array(positions),
+        calldata_lai=np.zeros(lai_shape, dtype=int),
+    )
+    reference = _multi_chrom_snpobj().convert_to_window_level(window_size=2)
+    counts = f"variants_chrom={n_chrom}, variants_pos={len(positions)}, calldata_lai={lai_shape[0]}"
+    for window in ({"window_size": 2}, {"physical_pos": np.array([[10, 20]])}, {"laiobj": reference}):
+        with pytest.raises(ValueError, match=counts):
+            snps.convert_to_window_level(**window)
+
+
+@pytest.mark.parametrize(
     "chromosomes",
     [np.array([2, 2, np.nan, 1]), np.array(["2", "2", None, "1"], dtype=object)],
 )

@@ -5555,6 +5555,7 @@ class SNPObject:
         size via ``window_size``; explicit boundaries via ``physical_pos``
         (optionally with ``chromosomes`` and ``window_sizes``); or reuse of
         existing window metadata from ``laiobj``.
+        Each row of ``calldata_lai`` must have a corresponding chromosome and position entry.
         SNPs with null or masked chromosome labels or positions are skipped with a warning.
 
         Args:
@@ -5585,12 +5586,21 @@ class SNPObject:
             window_size = operator.index(window_size)
             if window_size <= 0:
                 raise ValueError("`window_size` must be a positive integer.")
-            if self.variants_chrom is None:
-                raise ValueError("`variants_chrom` is required to define fixed-size windows.")
+
+        if self.variants_chrom is None or self.variants_pos is None or self.calldata_lai is None:
+            raise ValueError("`variants_chrom`, `variants_pos`, and `calldata_lai` are required for window conversion.")
+
+        chrom_labels = np.atleast_1d(np.asarray(self.variants_chrom))
+        positions = np.atleast_1d(np.asarray(self.variants_pos))
+        n_lai = self.calldata_lai.shape[0]
+        if not (len(chrom_labels) == len(positions) == n_lai):
+            raise ValueError(
+                "Window conversion requires the same number of variants in all three arrays "
+                f"(variants_chrom={len(chrom_labels)}, variants_pos={len(positions)}, calldata_lai={n_lai})."
+            )
 
         snps_by_chrom = snp_indices_by_chromosome(self.variants_chrom, self.variants_pos)
-        positions = np.atleast_1d(np.asarray(self.variants_pos))
-        chrom_dtype = np.asarray(self.variants_chrom).dtype
+        chrom_dtype = chrom_labels.dtype
         if window_size is not None:
             physical_pos = []   # Boundaries [start, end] of each window
             chromosomes = []    # Chromosome for each window

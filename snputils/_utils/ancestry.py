@@ -10,12 +10,12 @@ def snp_indices_by_chromosome(chromosomes: np.ndarray, positions: np.ndarray) ->
     labels = np.atleast_1d(np.asarray(chromosomes))
     if np.ma.is_masked(chromosomes):
         labels = np.where(chromosomes.mask, None, labels)
-    labels = pd.Categorical(labels)
-    unique_chrom = labels.unique()
+    labels = labels.astype(labels.dtype.newbyteorder("="), copy=False)
+    codes, unique_chrom = pd.factorize(labels, sort=False)
     missing_positions = pd.isna(np.asarray(positions)) | np.ma.getmask(positions)
 
     missing_fields = []
-    if unique_chrom.isna().any():
+    if (codes == -1).any():
         missing_fields.append("missing chromosome labels")
     if missing_positions.any():
         missing_fields.append("missing positions")
@@ -24,8 +24,8 @@ def snp_indices_by_chromosome(chromosomes: np.ndarray, positions: np.ndarray) ->
 
     valid_positions = ~missing_positions
     return {
-        chrom: np.flatnonzero((labels == chrom) & valid_positions)
-        for chrom in unique_chrom.dropna()
+        chrom: np.flatnonzero((codes == code) & valid_positions)
+        for code, chrom in enumerate(unique_chrom)
     }
 
 

@@ -348,3 +348,21 @@ def test_coordinate_windows_infer_chromosome_with_missing_positions(chromosomes,
 
     np.testing.assert_array_equal(window.chromosomes, [1])
     np.testing.assert_array_equal(window.lai[0], expected_lai)
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.dtype("i4").newbyteorder("S")], ids=["float16", "non-native-int"])
+def test_numeric_chromosome_dtypes_round_trip(dtype):
+    labels = np.array([2, 1, 2], dtype=dtype)
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=labels,
+        variants_pos=np.array([10, 20, 30]),
+        calldata_lai=np.array([[0, 1], [1, 0], [0, 1]]),
+    )
+
+    fixed = snps.convert_to_window_level(window_size=2)
+    assert fixed.chromosomes.dtype == labels.dtype
+    np.testing.assert_array_equal(fixed.chromosomes, [2, 1])
+    np.testing.assert_array_equal(fixed.lai, [[0, 1], [1, 0]])
+    restored = fixed.convert_to_snp_level(variants_chrom=labels, variants_pos=snps.variants_pos, lai_format="2D")
+    np.testing.assert_array_equal(restored.calldata_lai, snps.calldata_lai)

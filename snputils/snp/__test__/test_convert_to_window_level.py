@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from snputils.snp.genobj import SNPObject
@@ -109,11 +110,12 @@ def test_convert_to_window_level_rejects_nonpositive_window_size():
     "chromosomes",
     [np.array([2, 2, np.nan, 1]), np.array(["2", "2", None, "1"], dtype=object)],
 )
-def test_fixed_windows_skip_snps_with_missing_chromosomes(chromosomes):
+@pytest.mark.parametrize("skipped_position", [15, None, pd.NA], ids=["known", "none", "pandas-na"])
+def test_fixed_windows_skip_snps_with_missing_chromosomes(chromosomes, skipped_position):
     snpobj = SNPObject(
         samples=np.array(["S1"]),
         variants_chrom=chromosomes,
-        variants_pos=np.array([10, 20, 15, 30]),
+        variants_pos=np.array([10, 20, skipped_position, 30]),
         calldata_lai=np.array([[1, 0], [0, 1], [1, 1], [1, 0]]),
     )
 

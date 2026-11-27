@@ -368,6 +368,18 @@ def test_numeric_chromosome_dtypes_round_trip(dtype):
     np.testing.assert_array_equal(restored.calldata_lai, snps.calldata_lai)
 
 
+def test_variable_width_string_chromosomes_round_trip():
+    pytest.importorskip("numpy", minversion="2.0")
+    snps = _multi_chrom_snpobj()
+    snps.variants_chrom = snps.variants_chrom.astype("T")
+
+    fixed = snps.convert_to_window_level(window_size=1)
+    restored = fixed.convert_to_snp_level(variants_chrom=snps.variants_chrom, variants_pos=snps.variants_pos)
+
+    assert fixed.chromosomes.dtype == snps.variants_chrom.dtype
+    np.testing.assert_array_equal(restored.calldata_lai, snps.calldata_lai)
+
+
 def test_explicit_windows_select_original_rows_across_many_contigs():
     contigs = np.arange(1_000)
     labels = np.tile(contigs, 2)

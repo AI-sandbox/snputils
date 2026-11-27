@@ -10,7 +10,8 @@ def snp_indices_by_chromosome(chromosomes: np.ndarray, positions: np.ndarray) ->
     labels = np.atleast_1d(np.asarray(chromosomes))
     if np.ma.is_masked(chromosomes):
         labels = np.where(chromosomes.mask, None, labels)
-    labels = labels.astype(labels.dtype.newbyteorder("="), copy=False)
+    if not labels.dtype.isnative:
+        labels = labels.astype(labels.dtype.newbyteorder("="), copy=False)
     codes, unique_chrom = pd.factorize(labels, sort=False)
     missing_positions = pd.isna(np.asarray(positions)) | np.ma.getmask(positions)
 

@@ -5562,7 +5562,7 @@ class SNPObject:
                 Records at the same position keep their input order and may fall in adjacent
                 windows. A chromosome with fewer than ``window_size`` SNPs forms a single
                 window. Otherwise, any remaining SNPs are included in the last full window.
-                SNPs with null chromosome labels are skipped with a warning.
+                SNPs with null or masked chromosome labels are skipped with a warning.
             physical_pos (array of shape (n_windows, 2), optional):
                 A 2D array containing the start and end physical positions for each window.
             chromosomes (array of shape (n_windows,), optional):
@@ -5591,6 +5591,9 @@ class SNPObject:
             if self.variants_chrom is None:
                 raise ValueError("`variants_chrom` is required to define fixed-size windows.")
             chrom_labels = np.asarray(self.variants_chrom)
+            chrom_dtype = chrom_labels.dtype
+            if np.ma.is_masked(self.variants_chrom):
+                chrom_labels = np.where(self.variants_chrom.mask, None, chrom_labels)
             positions = np.asarray(self.variants_pos)
             variant_chrom = pd.Categorical(chrom_labels)
             unique_chrom = variant_chrom.unique()
@@ -5615,7 +5618,7 @@ class SNPObject:
                     window_sizes.append(indices.size)
 
             physical_pos = np.asarray(physical_pos, dtype=positions.dtype).reshape(-1, 2)
-            chromosomes = np.asarray(chromosomes, dtype=chrom_labels.dtype)
+            chromosomes = np.asarray(chromosomes, dtype=chrom_dtype)
             window_sizes = np.asarray(window_sizes, dtype=int)
 
         else:

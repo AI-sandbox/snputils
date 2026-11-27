@@ -128,9 +128,36 @@ def test_fixed_windows_skip_snps_with_missing_chromosomes(chromosomes, skipped_p
     np.testing.assert_array_equal(lai.lai, [[0, 0], [1, 0]])
 
 
-def test_fixed_windows_with_only_missing_chromosomes_return_no_windows():
+@pytest.mark.parametrize(
+    "labels",
+    [
+        np.array(["1", "2", "1", "1"]),
+        np.array([2**63, 2**63 + 1, 2**63, 2**63], dtype=np.uint64),
+    ],
+    ids=["string", "uint64"],
+)
+def test_fixed_windows_exclude_masked_chromosome_labels(labels):
+    snpobj = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.ma.array(labels, mask=[True, False, True, False]),
+        variants_pos=np.array([10, 20, 30, 40]),
+        calldata_lai=np.array([[1, 1], [1, 0], [1, 1], [0, 0]]),
+    )
+
+    with pytest.warns(UserWarning, match="missing chromosome"):
+        lai = snpobj.convert_to_window_level(window_size=3)
+
+    assert lai.chromosomes.dtype == labels.dtype
+    np.testing.assert_array_equal(lai.chromosomes, labels[[1, 3]])
+    np.testing.assert_array_equal(lai.physical_pos, [[20, 20], [40, 40]])
+    np.testing.assert_array_equal(lai.window_sizes, [1, 1])
+    np.testing.assert_array_equal(lai.lai, [[1, 0], [0, 0]])
+
+
+@pytest.mark.parametrize("chromosomes", [np.full(7, np.nan), np.ma.array(np.ones(7, dtype=int), mask=True)])
+def test_fixed_windows_with_only_missing_chromosomes_return_no_windows(chromosomes):
     snpobj = _multi_chrom_snpobj()
-    snpobj.variants_chrom = np.full(snpobj.n_snps, np.nan)
+    snpobj.variants_chrom = chromosomes
 
     with pytest.warns(UserWarning, match="missing chromosome"):
         lai = snpobj.convert_to_window_level(window_size=2)

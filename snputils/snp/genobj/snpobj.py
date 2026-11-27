@@ -5557,6 +5557,7 @@ class SNPObject:
         existing window metadata from ``laiobj``.
         Each row of ``calldata_lai`` must have a corresponding chromosome and position entry.
         SNPs with null or masked chromosome labels or positions are skipped with a warning.
+        Windows with a masked chromosome, start, or end receive NaN ancestry.
 
         Args:
             window_size (int, optional):
@@ -5649,6 +5650,8 @@ class SNPObject:
         for i, ((start, end), chrom) in enumerate(zip(physical_pos, chromosomes)):
             if window_size is not None:
                 indices = window_indices[i]
+            elif np.ma.is_masked(chrom) or np.ma.is_masked(start) or np.ma.is_masked(end):
+                indices = empty_indices
             else:
                 candidates = snps_by_chrom.get(chrom, empty_indices)
                 chrom_positions = positions[candidates]

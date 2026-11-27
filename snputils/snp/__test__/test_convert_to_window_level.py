@@ -313,3 +313,16 @@ def test_coordinate_windows_include_all_records_at_shared_endpoints(snps_at_shar
     expected = [[1, 0], [1, 0], [np.nan, np.nan]]
     np.testing.assert_array_equal(explicit.lai, expected)
     np.testing.assert_array_equal(referenced.lai, expected)
+
+
+def test_coordinate_windows_with_masked_metadata_have_missing_ancestry(snps_at_shared_position):
+    snps = snps_at_shared_position
+    bounds = np.ma.array([[30, 40]] * 4, mask=[[1, 0], [0, 1], [0, 0], [0, 0]])
+    chromosomes = np.ma.array(["1"] * 4, mask=[False, False, True, False])
+
+    explicit = snps.convert_to_window_level(physical_pos=bounds, chromosomes=chromosomes)
+    reused = snps.convert_to_window_level(laiobj=explicit)
+
+    for result in (explicit, reused):
+        assert np.isnan(result.lai[:3]).all()
+        np.testing.assert_array_equal(result.lai[3], [1, 0])

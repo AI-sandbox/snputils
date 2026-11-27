@@ -13,6 +13,8 @@
 
 **snputils** is a Python package designed to ease the processing and analysis of genomic datasets, while handling all the complexities of different genome formats and operations very efficiently. The library provides robust tools for handling sequencing and ancestry data, with a focus on performance, ease of use, and advanced visualization capabilities.
 
+[Read the paper](https://doi.org/10.1093/molbev/msag291) in *Molecular Biology and Evolution*.
+
 Developed in collaboration between Stanford University's Department of Biomedical Data Science, UC Santa Cruz Genomics Institute, and more collaborators worldwide.
 
 **snputils** is stable and ready for production workflows. The core API is documented, tested, and suitable for day-to-day genomic analysis. The project is actively maintained: we ship regular releases, welcome contributions, and continue to extend format support, analyses, and performance.
@@ -212,14 +214,6 @@ Available subcommands include:
 
 The Python API remains the full surface for low-level readers/writers, object manipulation, IBD filtering and trimming, f-statistics, allele-frequency helpers, custom visualizations, and notebook-oriented workflows. Use the CLI when a workflow naturally starts from files and produces files; use Python when you need programmatic composition or in-memory objects.
 
-## Documentation and Examples
-
-- **Documentation**: [docs.snputils.org](https://docs.snputils.org)
-- **Quickstart**: [Quickstart guide](https://docs.snputils.org/quickstart.html)
-- **Tutorials**: PCA, mdPCA, maasMDS, SNP objects, allele frequency, local ancestry visualization, admixture mapping, and GRG workflows
-- **API Reference**: Readers, writers, data objects, processing classes, statistics, datasets, and visualization helpers
-- **Issues and feature requests**: [GitHub Issues](https://github.com/AI-sandbox/snputils/issues)
-
 ## Public API Highlights
 
 Top-level imports include:
@@ -229,24 +223,67 @@ Top-level imports include:
 - Datasets: `load_dataset`, `available_datasets_list`, `build_synthetic_*`
 - Visualization namespace: `snputils.viz`
 
+## Documentation and Examples
+
+- **Documentation**: [docs.snputils.org](https://docs.snputils.org)
+- **Quickstart**: [Quickstart guide](https://docs.snputils.org/quickstart.html)
+- **Tutorials**: PCA, mdPCA, maasMDS, SNP objects, allele frequency, local ancestry visualization, admixture mapping, and GRG workflows
+- **API Reference**: Readers, writers, data objects, processing classes, statistics, datasets, and visualization helpers
+- **Issues and feature requests**: [GitHub Issues](https://github.com/AI-sandbox/snputils/issues)
+
 ## Citation
 
-If you use **snputils** in your research, please cite [our paper](https://www.biorxiv.org/content/10.64898/2026.02.28.708618):
-
-```bibtex
-@article{snputils2026,
-    author    = {Bonet, David and Comajoan Cara, Marçal and Barrabés, Míriam and Smeriglio, Riccardo and Agrawal, Devang and Aounallah, Khaled and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Shanks, Cole and Huang, Edward C. and Franquesa Monés, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and López, Cayetana and Sabat, Benet Oriol and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
-    title     = {{snputils}: A High-Performance {Python} Library for Genetic Variation and Population Structure},
-    year      = {2026},
-    doi       = {10.64898/2026.02.28.708618},
-    url       = {https://www.biorxiv.org/content/10.64898/2026.02.28.708618},
-    journal   = {bioRxiv},
-    publisher = {Cold Spring Harbor Laboratory},
-}
-```
+<details>
+<summary>Cite Zigo for sex checks</summary>
 
 If you use the integrated sex-check functionality, please also cite
 [Zigo: Sex checking by zygosity distributions](https://doi.org/10.64898/2026.03.15.711924).
+
+```bibtex
+@article{zigo2026,
+    author  = {Molina-Sedano, Oscar and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
+    title   = {Sex checking by zygosity distributions},
+    year    = {2026},
+    doi     = {10.64898/2026.03.15.711924},
+    url     = {https://www.biorxiv.org/content/10.64898/2026.03.15.711924},
+    journal = {bioRxiv},
+}
+```
+
+</details>
+
+<details>
+<summary>Cite multi-array ancestry-specific multidimensional scaling (maasMDS)</summary>
+
+If you use maasMDS, please also cite the [maasMDS paper](https://doi.org/10.1093/bioadv/vbag284).
+
+```bibtex
+@article{maasmds2026,
+    title     = {{maasMDS}: Multi-array ancestry-specific multidimensional scaling for fine-scale structure in admixed genomes},
+    author    = {Aounallah, Khaled and Bonet, David and Barrab{\'e}s, M{\'i}riam and Agrawal, Devang and Rodr{\'i}guez Rodr{\'i}guez, Juan Esteban and Ioannidis, Alexander G.},
+    journal   = {Bioinformatics Advances},
+    pages     = {vbag284},
+    year      = {2026},
+    doi       = {10.1093/bioadv/vbag284},
+    url       = {https://doi.org/10.1093/bioadv/vbag284},
+    publisher = {Oxford University Press},
+}
+```
+
+</details>
+
+If you use **snputils** in your research, please cite [our paper](https://doi.org/10.1093/molbev/msag291):
+
+```bibtex
+@article{snputils2026,
+    title   = {{snputils}: A High-Performance Python Library for Genetic Variation and Population Structure},
+    author  = {Bonet, David and Comajoan Cara, Mar{\c{c}}al and Barrab{\'e}s, M{\'i}riam and Smeriglio, Riccardo and Geleta, Margarita and Dominguez Mantes, Albert and Thomassin, Christophe and Agrawal, Devang and Shanks, Cole and Huang, Edward C. and Aounallah, Khaled and Franquesa Mon{\'e}s, Marc and Luis, Aina and Saurina, Joan and Perera, Maria and L{\'o}pez, Cayetana and Jaras, Ainel and Oriol Sabat, Benet and Abante, Jordi and Moreno-Grau, Sonia and Mas Montserrat, Daniel and Ioannidis, Alexander G.},
+    journal = {Molecular Biology and Evolution},
+    year    = {2026},
+    doi     = {10.1093/molbev/msag291},
+    url     = {https://doi.org/10.1093/molbev/msag291},
+}
+```
 
 ## Acknowledgments
 

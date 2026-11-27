@@ -103,3 +103,36 @@ def test_convert_to_window_level_rejects_nonpositive_window_size():
 
     with pytest.raises(ValueError, match="window_size"):
         snpobj.convert_to_window_level(window_size=0)
+
+
+@pytest.mark.parametrize(
+    "chromosomes",
+    [np.array([2, 2, np.nan, 1]), np.array(["2", "2", None, "1"], dtype=object)],
+)
+def test_fixed_windows_skip_snps_with_missing_chromosomes(chromosomes):
+    snpobj = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=chromosomes,
+        variants_pos=np.array([10, 20, 15, 30]),
+        calldata_lai=np.array([[1, 0], [0, 1], [1, 1], [1, 0]]),
+    )
+
+    with pytest.warns(UserWarning, match="missing chromosome"):
+        lai = snpobj.convert_to_window_level(window_size=2)
+
+    np.testing.assert_array_equal(lai.chromosomes, chromosomes[[0, 3]])
+    np.testing.assert_array_equal(lai.physical_pos, [[10, 20], [30, 30]])
+    np.testing.assert_array_equal(lai.window_sizes, [2, 1])
+    np.testing.assert_array_equal(lai.lai, [[0, 0], [1, 0]])
+
+
+def test_fixed_windows_with_only_missing_chromosomes_return_no_windows():
+    snpobj = _multi_chrom_snpobj()
+    snpobj.variants_chrom = np.full(snpobj.n_snps, np.nan)
+
+    with pytest.warns(UserWarning, match="missing chromosome"):
+        lai = snpobj.convert_to_window_level(window_size=2)
+
+    assert lai.physical_pos.shape == (0, 2)
+    assert lai.chromosomes.shape == lai.window_sizes.shape == (0,)
+    assert lai.lai.shape == (0, 2 * snpobj.n_samples)

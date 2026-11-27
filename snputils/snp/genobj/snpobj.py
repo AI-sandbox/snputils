@@ -5560,7 +5560,8 @@ class SNPObject:
             window_size (int, optional):
                 Number of SNPs per window. A chromosome with fewer than ``window_size`` SNPs
                 forms a single window containing all its SNPs. Otherwise, any remaining SNPs
-                are included in the last full window.
+                are included in the last full window. SNPs with null chromosome labels are
+                skipped with a warning.
             physical_pos (array of shape (n_windows, 2), optional):
                 A 2D array containing the start and end physical positions for each window.
             chromosomes (array of shape (n_windows,), optional):
@@ -5579,19 +5580,31 @@ class SNPObject:
         if window_size is None and physical_pos is None and laiobj is None:
             raise ValueError("One of `window_size`, `physical_pos`, or `laiobj` must be provided.")
 
+        variant_chrom = self.variants_chrom
+
         # Fixed window size
         if window_size is not None:
+            import pandas as pd
+
             window_size = operator.index(window_size)
             if window_size <= 0:
                 raise ValueError("`window_size` must be a positive integer.")
+            if variant_chrom is None:
+                raise ValueError("`variants_chrom` is required to define fixed-size windows.")
+            chrom_labels = np.asarray(variant_chrom)
+            positions = np.asarray(self.variants_pos)
+            variant_chrom = pd.Categorical(chrom_labels)
+            unique_chrom = variant_chrom.unique()
+            if unique_chrom.isna().any():
+                warnings.warn("Skipping SNPs with missing chromosome labels.", stacklevel=2)
             physical_pos = []   # Boundaries [start, end] of each window
             chromosomes = []    # Chromosome for each window
             window_sizes = []   # Number of SNPs for each window
-            for chrom in self.unique_chrom:
+            for chrom in unique_chrom.dropna():
                 # Extract indices corresponding to this chromosome
-                mask_chrom = (self.variants_chrom == chrom)
+                mask_chrom = (variant_chrom == chrom)
                 # Subset to this chromosome
-                pos_chrom = self.variants_pos[mask_chrom]
+                pos_chrom = positions[mask_chrom]
                 # Number of SNPs for this chromosome
                 n_snps_chrom = pos_chrom.size
 
@@ -5616,9 +5629,9 @@ class SNPObject:
                 chromosomes.append(chrom)
                 window_sizes.append(n_snps_chrom - (n_prefix_windows * window_size))
 
-            physical_pos = np.array(physical_pos)
-            chromosomes = np.array(chromosomes)
-            window_sizes = np.array(window_sizes)
+            physical_pos = np.asarray(physical_pos, dtype=positions.dtype).reshape(-1, 2)
+            chromosomes = np.asarray(chromosomes, dtype=chrom_labels.dtype)
+            window_sizes = np.asarray(window_sizes, dtype=int)
 
         # Custom start and end positions
         elif physical_pos is not None:
@@ -5649,7 +5662,7 @@ class SNPObject:
         # For each window, find the relevant SNPs and compute the mode of the ancestries
         for i, ((start, end), chrom) in enumerate(zip(physical_pos, chromosomes)):
             snps_mask = (
-                (self.variants_chrom == chrom) &
+                (variant_chrom == chrom) &
                 (self.variants_pos >= start) &
                 (self.variants_pos <= end)
             )
@@ -5665,7 +5678,7 @@ class SNPObject:
 
         # If original data was (n_snps, n_samples, 2), flatten to (n_windows, n_samples*2)
         if self.calldata_lai.ndim == 3:
-            lai = lai.reshape(n_windows, -1)
+            lai = lai.reshape(n_windows, n_samples * 2)
 
         # Aggregate into a LocalAncestryObject
         return LocalAncestryObject(

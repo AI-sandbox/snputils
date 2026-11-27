@@ -366,3 +366,18 @@ def test_numeric_chromosome_dtypes_round_trip(dtype):
     np.testing.assert_array_equal(fixed.lai, [[0, 1], [1, 0]])
     restored = fixed.convert_to_snp_level(variants_chrom=labels, variants_pos=snps.variants_pos, lai_format="2D")
     np.testing.assert_array_equal(restored.calldata_lai, snps.calldata_lai)
+
+
+def test_explicit_windows_select_original_rows_across_many_contigs():
+    contigs = np.arange(1_000)
+    labels = np.tile(contigs, 2)
+    positions = np.repeat([10, 20], len(contigs))
+    calls = np.column_stack((labels % 2, positions == 20))
+    snps = SNPObject(samples=["S1"], variants_chrom=labels, variants_pos=positions, calldata_lai=calls)
+
+    result = snps.convert_to_window_level(
+        physical_pos=np.array([[20, 20], [10, 10]]),
+        chromosomes=np.array([999, 0]),
+    )
+
+    np.testing.assert_array_equal(result.lai, [[1, 1], [0, 0]])

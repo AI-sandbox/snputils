@@ -22,11 +22,12 @@ def snp_indices_by_chromosome(chromosomes: np.ndarray, positions: np.ndarray) ->
     if missing_fields:
         warnings.warn("Skipping SNPs with " + " or ".join(missing_fields) + ".", stacklevel=3)
 
-    valid_positions = ~missing_positions
-    return {
-        chrom: np.flatnonzero((codes == code) & valid_positions)
-        for code, chrom in enumerate(unique_chrom)
-    }
+    valid_indices = np.flatnonzero((codes >= 0) & ~missing_positions)
+    valid_codes = codes[valid_indices]
+    grouped_indices = valid_indices[np.argsort(valid_codes, kind="stable")]
+    # Keep an empty group for a known chromosome whose positions are all missing.
+    counts = np.bincount(valid_codes, minlength=len(unique_chrom))
+    return dict(zip(unique_chrom, np.split(grouped_indices, counts.cumsum()[:-1])))
 
 
 def known_lai_mask(lai: np.ndarray) -> np.ndarray:

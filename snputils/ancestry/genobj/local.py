@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from snputils.snp.genobj.snpobj import SNPObject
 
 from snputils._utils.printing import array_shape, format_repr
-from snputils._utils.ancestry import known_lai_values
+from snputils._utils.ancestry import known_lai_values, snp_indices_by_chromosome
 from .base import AncestryObject
 
 log = logging.getLogger(__name__)
@@ -637,6 +637,8 @@ class LocalAncestryObject(AncestryObject):
         If SNP positions (`variants_pos`) and/or chromosomes (`variants_chrom`) are not specified, the method generates 
         SNPs uniformly across the start and end positions of each genomic window. Otherwise, the provided SNP 
         coordinates are used to assign ancestry values based on their respective windows.
+        SNPs with null or masked chromosome labels or positions retain missing ancestry (``-1``)
+        and produce one warning per conversion.
 
         If a `SNPObject` is provided, its attributes are used unless explicitly overridden by the function arguments.
         In that case, the SNPObject is updated with the (optional) new attributes and the computed `calldata_lai`, then returned.
@@ -718,9 +720,14 @@ class LocalAncestryObject(AncestryObject):
                 ancestry_list.append(ancestry_repeated)
 
             # Store SNP positions, their corresponding chromosome labels, and their associated ancestry
-            variants_pos = np.concatenate(variants_pos_list)
-            variants_chrom = np.concatenate(variants_chrom_list)
-            calldata_lai = np.concatenate(ancestry_list)
+            if variants_pos_list:
+                variants_pos = np.concatenate(variants_pos_list)
+                variants_chrom = np.concatenate(variants_chrom_list)
+                calldata_lai = np.concatenate(ancestry_list)
+            else:
+                variants_pos = np.empty(0, dtype=int)
+                variants_chrom = np.empty(0, dtype=np.asarray(self.chromosomes).dtype)
+                calldata_lai = lai_reshaped[:0] if lai_format == "3D" else self.lai[:0]
         else:
             # Use the provided SNP positions and chromosomes
             n_snps = len(variants_pos)
@@ -731,15 +738,10 @@ class LocalAncestryObject(AncestryObject):
             # Default value is -1, meaning no matching window found
             snp_to_window_indices = np.full(n_snps, -1, dtype=int)
 
-            # Identify unique chromosome names sorted by order of appearence
-            _, idx = np.unique(variants_chrom, return_index=True)
-            unique_chroms = variants_chrom[np.sort(idx)]
-
-            # Iterate through each unique chromosome to map SNPs to windows
-            for chrom in unique_chroms:
-                # Get indices of SNPs that belong to the current chromosome
-                snp_indices = np.where(variants_chrom == chrom)[0]
-                snp_pos_chr = variants_pos[snp_indices]
+            snps_by_chrom = snp_indices_by_chromosome(variants_chrom, variants_pos)
+            positions = np.asarray(variants_pos)
+            for chrom, snp_indices in snps_by_chrom.items():
+                snp_pos_chr = positions[snp_indices]
                 
                 # Get indices of windows that belong to the current chromosome
                 window_indices = np.where(self.chromosomes == chrom)[0]

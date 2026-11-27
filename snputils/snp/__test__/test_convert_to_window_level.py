@@ -167,6 +167,66 @@ def test_fixed_windows_with_only_missing_chromosomes_return_no_windows(chromosom
     assert lai.lai.shape == (0, 2 * snpobj.n_samples)
 
 
+@pytest.mark.parametrize(
+    "positions",
+    [
+        np.array([10, np.nan, 30]),
+        np.array([10, None, 30], dtype=object),
+        np.array([10, pd.NA, 30], dtype=object),
+        np.ma.array([10, 20, 30], mask=[False, True, False]),
+    ],
+    ids=["nan", "none", "pandas-na", "masked-in-window"],
+)
+def test_missing_position_is_excluded_through_window_round_trip(positions):
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.repeat("1", 3),
+        variants_pos=positions,
+        calldata_lai=np.array([[0, 1], [1, 1], [1, 0]]),
+    )
+
+    with pytest.warns(UserWarning, match="missing positions"):
+        fixed = snps.convert_to_window_level(window_size=3)
+    np.testing.assert_array_equal(fixed.physical_pos, [[10, 30]])
+    np.testing.assert_array_equal(fixed.window_sizes, [2])
+    np.testing.assert_array_equal(fixed.lai, [[0, 0]])
+
+    with pytest.warns(UserWarning, match="missing positions"):
+        reused = snps.convert_to_window_level(laiobj=fixed)
+    with pytest.warns(UserWarning, match="missing positions"):
+        explicit = snps.convert_to_window_level(physical_pos=fixed.physical_pos)
+    np.testing.assert_array_equal(reused.lai, fixed.lai)
+    np.testing.assert_array_equal(explicit.lai, fixed.lai)
+
+    with pytest.warns(UserWarning, match="missing positions"):
+        restored = fixed.convert_to_snp_level(snpobject=snps)
+    np.testing.assert_array_equal(restored.calldata_lai, [[[0, 0]], [[-1, -1]], [[0, 0]]])
+
+
+def test_all_missing_positions_return_no_windows_and_warn_once():
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.array(["1", "2", None], dtype=object),
+        variants_pos=np.ma.array([None, 20, np.nan], mask=[False, True, False]),
+        calldata_lai=np.zeros((3, 2), dtype=int),
+    )
+
+    with pytest.warns(UserWarning, match="missing positions") as warnings:
+        fixed = snps.convert_to_window_level(window_size=2)
+    assert len(warnings) == 1
+    assert fixed.physical_pos.shape == (0, 2)
+    assert fixed.chromosomes.size == fixed.window_sizes.size == 0
+
+    generated = fixed.convert_to_snp_level()
+    assert generated.variants_pos.shape == generated.variants_chrom.shape == (0,)
+    assert generated.calldata_lai.shape == (0, 1, 2)
+
+    with pytest.warns(UserWarning, match="missing positions") as warnings:
+        restored = fixed.convert_to_snp_level(snpobject=snps, lai_format="2D")
+    assert len(warnings) == 1
+    np.testing.assert_array_equal(restored.calldata_lai, np.full((3, 2), -1))
+
+
 @pytest.fixture
 def snps_at_shared_position():
     return SNPObject(

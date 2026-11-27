@@ -5558,9 +5558,9 @@ class SNPObject:
 
         Args:
             window_size (int, optional):
-                Number of SNPs in each window if defining fixed-size windows. If the total number of
-                SNPs in a chromosome is not evenly divisible by the window size, the last window on that
-                chromosome will include all remaining SNPs and therefore be larger than the specified size.
+                Number of SNPs per window. A chromosome with fewer than ``window_size`` SNPs
+                forms a single window containing all its SNPs. Otherwise, any remaining SNPs
+                are included in the last full window.
             physical_pos (array of shape (n_windows, 2), optional):
                 A 2D array containing the start and end physical positions for each window.
             chromosomes (array of shape (n_windows,), optional):

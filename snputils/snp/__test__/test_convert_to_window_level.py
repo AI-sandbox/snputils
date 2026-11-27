@@ -136,3 +136,53 @@ def test_fixed_windows_with_only_missing_chromosomes_return_no_windows():
     assert lai.physical_pos.shape == (0, 2)
     assert lai.chromosomes.shape == lai.window_sizes.shape == (0,)
     assert lai.lai.shape == (0, 2 * snpobj.n_samples)
+
+
+@pytest.fixture
+def snps_at_shared_position():
+    return SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.repeat("1", 6),
+        variants_pos=np.array([10, 20, 30, 30, 30, 40]),
+        calldata_lai=np.array([[0, 0], [0, 0], [1, 0], [1, 1], [1, 1], [1, 0]]),
+    )
+
+
+@pytest.mark.parametrize("shape", [(6, 2), (6, 1, 2)])
+def test_fixed_windows_split_records_at_a_shared_position(snps_at_shared_position, shape):
+    snps = snps_at_shared_position
+    snps.calldata_lai = snps.calldata_lai.reshape(shape)
+
+    result = snps.convert_to_window_level(window_size=3)
+
+    np.testing.assert_array_equal(result.physical_pos, [[10, 30], [30, 40]])
+    np.testing.assert_array_equal(result.window_sizes, [3, 3])
+    np.testing.assert_array_equal(result.lai, [[0, 0], [1, 1]])
+
+
+def test_fixed_windows_sort_positions_within_each_chromosome():
+    snps = SNPObject(
+        samples=np.array(["S1"]),
+        variants_chrom=np.array(["2", "1", "2", "1", "2", "2", "2"]),
+        variants_pos=np.array([40, 80, 20, 60, 30, 10, 50]),
+        calldata_lai=np.array([[1, 0], [0, 1], [1, 1], [0, 1], [1, 0], [1, 1], [1, 0]]),
+    )
+
+    result = snps.convert_to_window_level(window_size=2)
+
+    np.testing.assert_array_equal(result.chromosomes, ["2", "2", "1"])
+    np.testing.assert_array_equal(result.physical_pos, [[10, 20], [30, 50], [60, 80]])
+    np.testing.assert_array_equal(result.window_sizes, [2, 3, 2])
+    np.testing.assert_array_equal(result.lai, [[1, 1], [1, 0], [0, 1]])
+
+
+def test_coordinate_windows_include_all_records_at_shared_endpoints(snps_at_shared_position):
+    snps = snps_at_shared_position
+    bounds = np.array([[10, 30], [30, 40], [50, 60]])
+
+    explicit = snps.convert_to_window_level(physical_pos=bounds)
+    referenced = snps.convert_to_window_level(laiobj=explicit)
+
+    expected = [[1, 0], [1, 0], [np.nan, np.nan]]
+    np.testing.assert_array_equal(explicit.lai, expected)
+    np.testing.assert_array_equal(referenced.lai, expected)

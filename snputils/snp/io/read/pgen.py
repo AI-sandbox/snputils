@@ -16,6 +16,7 @@ from snputils._utils.genotypes import (
     sum_diploid_alleles,
 )
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.read._plink_samples import open_plink_text, read_sample_table, select_samples
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
     estimate_phased_alleles_peak_bytes,
@@ -58,16 +59,6 @@ def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
             "chromosome_ploidy must be one of None, 'auto', 'autosomal', or 'mixed'."
         )
     return value
-
-
-def _open_textfile(filename):
-    if filename.endswith(".zst"):
-        import zstandard as zstd
-        return zstd.open(filename, "rt", encoding="utf-8")
-    elif filename.endswith(".gz"):
-        import gzip
-        return gzip.open(filename, "rt", encoding="utf-8")
-    return open(filename, "rt", encoding="utf-8")
 
 
 def _detect_pvar_separator(line: str) -> str:
@@ -275,7 +266,7 @@ class PGENReader(SNPBaseReader):
                 Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS', 'FILTER', 'QUAL', 'INFO'.
                 To exclude no fields, set exclude_fields to None. Defaults to None.
             sample_ids: List of sample IDs to read. If None and sample_idxs is None, all samples are read.
-            sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
+            sample_idxs: Sample indices in the desired output order. Repeated indices repeat the sample.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
             genotype_mode: ``"dosage"`` returns one biallelic ALT-copy count per
@@ -326,7 +317,9 @@ class PGENReader(SNPBaseReader):
         fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS", "FILTER", "QUAL", "INFO"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
-        only_read_pgen = fields == ["GT"] and variant_idxs is None and sample_idxs is None
+        only_read_pgen = fields == ["GT"] and all(
+            selector is None for selector in (variant_idxs, sample_idxs, variant_ids, sample_ids)
+        )
 
         filename_noext = str(self.filename)
         for ext in [".pgen", ".pvar", ".pvar.zst", ".pvar.gz", ".psam", ".psam.zst", ".psam.gz"]:
@@ -334,6 +327,7 @@ class PGENReader(SNPBaseReader):
                 filename_noext = filename_noext[:-len(ext)]
                 break
 
+        sample_order = None
         if only_read_pgen:
             file_num_samples = None  # Not needed for pgen
             file_num_variants = None  # Not needed
@@ -352,7 +346,7 @@ class PGENReader(SNPBaseReader):
 
             pvar_has_header = True
             pvar_header_line_num = 0
-            with _open_textfile(pvar_filename) as file:
+            with open_plink_text(pvar_filename) as file:
                 for line_num, line in enumerate(file):
                     if line.startswith("##"):  # Metadata
                         continue
@@ -449,27 +443,11 @@ class PGENReader(SNPBaseReader):
 
             log.info(f"Reading {psam_filename}")
 
-            with _open_textfile(psam_filename) as file:
-                first_line = file.readline().strip()
-                psam_has_header = first_line.startswith(("#FID", "FID", "#IID", "IID"))
-
-            psam = pl.read_csv(
-                psam_filename,
-                separator=separator,
-                has_header=psam_has_header,
-                new_columns=None if psam_has_header else ["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
-                schema_overrides={
-                    "#FID": pl.String,
-                    "FID": pl.String,
-                    "#IID": pl.String,
-                    "IID": pl.String,
-                    "PAT": pl.String,
-                    "MAT": pl.String,
-                    "SEX": pl.String,
-                    "PHENO1": pl.String,
-                },
-                null_values=["NA"],
-            ).with_row_index()
+            psam = read_sample_table(
+                psam_filename, separator, psam=True,
+                headerless_columns=["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
+                schema={field: pl.String for field in ("#FID", "FID", "#IID", "IID", "PAT", "MAT", "SEX", "PHENO1")},
+            )
             if "#IID" in psam.columns:
                 psam = psam.rename({"#IID": "IID"})
             if "#FID" in psam.columns:
@@ -477,16 +455,8 @@ class PGENReader(SNPBaseReader):
 
             file_num_samples = psam.height
 
-            if sample_ids is not None:
-                psam = psam.filter(pl.col("IID").is_in(sample_ids))
-                sample_idxs = psam.select("index").to_series().to_numpy()
-                num_samples = np.size(sample_idxs)
-            elif sample_idxs is not None:
-                num_samples = np.size(sample_idxs)
-                sample_idxs = np.array(sample_idxs, dtype=np.uint32)
-                psam = psam.filter(pl.col("index").is_in(sample_idxs))
-            else:
-                num_samples = file_num_samples
+            psam, sample_idxs, sample_order = select_samples(psam, sample_ids, sample_idxs)
+            num_samples = file_num_samples if sample_idxs is None else sample_idxs.size
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.pgen")
@@ -628,6 +598,9 @@ class PGENReader(SNPBaseReader):
         else:
             genotypes = None
 
+        if genotypes is not None and sample_order is not None:
+            genotypes = np.take(genotypes, sample_order, axis=1)
+
         log.info("Constructing SNPObject")
 
         fid_col = None
@@ -678,7 +651,7 @@ class PGENReader(SNPBaseReader):
 
         pvar_has_header = True
         pvar_header_line_num = 0
-        with _open_textfile(pvar_filename) as file:
+        with open_plink_text(pvar_filename) as file:
             for line_num, line in enumerate(file):
                 if line.startswith("##"):
                     continue

@@ -1713,6 +1713,54 @@ def test_concat_merges_ancestry_maps_inplace_and_rejects_conflicts():
         left.concat(conflicting)
 
 
+@pytest.mark.parametrize("ref, alt", [("A", "AT"), ("AT", "A")])
+@pytest.mark.parametrize("inplace", [False, True])
+def test_correct_flipped_variants_preserves_full_indel_alleles(tmp_path, ref, alt, inplace):
+    from snputils import read_vcf
+
+    path = tmp_path / "indel.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n"
+        f"1\t10\trs1\t{ref}\t{alt}\t.\tPASS\t.\tGT\t1|1\n"
+    )
+    query = read_vcf(path)
+    reference = SNPObject(variants_chrom=query.variants_chrom, variants_pos=query.variants_pos,
+                          variants_ref=np.array([alt]), variants_alt=np.array([ref]))
+    aligned = query.correct_flipped_variants(reference, inplace=inplace)
+    if inplace:
+        assert aligned is None
+        aligned = query
+    else:
+        assert (query.variants_ref[0], query.variants_alt[0]) == (ref, alt)
+    assert (aligned.variants_ref[0], aligned.variants_alt[0]) == (alt, ref)
+    np.testing.assert_array_equal(aligned.genotypes, [[[0, 0]]])
+
+
+def test_dosage_ploidy_stays_aligned_through_sample_and_variant_subsets():
+    left = SNPObject(
+        samples=np.array(["a", "b"]), variants_chrom=np.array(["X", "X"]),
+        variants_pos=np.array([10, 20]), variants_ref=np.array(["A", "A"]),
+        variants_alt=np.array(["G", "G"]), genotypes=np.array([[0.25, 1.75], [0.5, 1.25]]),
+        calldata_ploidy=np.array([[1, 2], [2, 2]], dtype=np.uint8),
+    )
+    right = SNPObject(
+        samples=np.array(["c"]), variants_chrom=left.variants_chrom, variants_pos=left.variants_pos,
+        variants_ref=left.variants_ref, variants_alt=left.variants_alt, genotypes=np.array([[0.25], [0.75]]),
+    )
+    merged = left.merge(right)
+    ordered = merged.filter_samples(indexes=[2, 0], reorder=True)
+    first = ordered.filter_variants(indexes=[0])
+    combined = ordered.filter_variants(indexes=[1]).concat(first)
+    reference = SNPObject(
+        variants_chrom=left.variants_chrom, variants_pos=left.variants_pos,
+        variants_ref=left.variants_alt, variants_alt=left.variants_ref,
+    )
+    combined.correct_flipped_variants(reference, inplace=True)
+    np.testing.assert_allclose(combined.genotypes, [[1.25, 1.5], [1.75, 0.75]])
+
+
 def test_correct_flipped_variants_inverts_dosages_and_preserves_missing_values():
     query = SNPObject(
         genotypes=np.array([[0.0, 1.0, 2.0, -1.0, np.nan]]),

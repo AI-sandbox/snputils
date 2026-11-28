@@ -105,6 +105,17 @@ def _concatenate_optional_arrays(
     return np.concatenate([left_array, right_array], axis=axis)
 
 
+def _concatenate_dosage_ploidy(left: SNPObject, right: SNPObject, axis: int) -> Optional[np.ndarray]:
+    if left.calldata_ploidy is None and right.calldata_ploidy is None:
+        return None
+    return _concatenate_optional_arrays(
+        left.calldata_ploidy, right.calldata_ploidy, axis=axis,
+        left_missing_shape=(left.n_snps, left.n_samples),
+        right_missing_shape=(right.n_snps, right.n_samples),
+        missing_value=2, name="calldata_ploidy",
+    )
+
+
 def _validate_variant_alignment_for_merge(left: Any, right: Any) -> None:
     left_n = left._n_snps_or_none()
     right_n = right._n_snps_or_none()
@@ -254,6 +265,9 @@ class SNPObject:
         "ER2",
     )
 
+    # Older pickled SNPObjects predate per-call ploidy.
+    calldata_ploidy: Optional[np.ndarray] = None
+
     def __init__(
         self,
         genotypes: Optional[np.ndarray] = None,
@@ -273,6 +287,7 @@ class SNPObject:
         sample_fid: Optional[np.ndarray] = None,
         sample_sex: Optional[np.ndarray] = None,
         calldata_gt: Optional[np.ndarray] = None,
+        calldata_ploidy: Optional[np.ndarray] = None,
     ) -> None:
         """
         Args:
@@ -315,6 +330,9 @@ class SNPObject:
                 unphased probabilities typically have three columns and phased probabilities
                 typically have four columns. Mixed-width BGEN reads are padded with NaN
                 columns to keep this as a single array.
+            calldata_ploidy (array, optional):
+                Per-call chromosome copy counts for a 2D dosage array. Omitted for
+                diploid dosages. Dimensions follow the variant and sample axes.
             ancestry_map (dict of str to str, optional):
                 A dictionary mapping ancestry codes to region names.
             calldata_gt (array, optional):
@@ -338,6 +356,13 @@ class SNPObject:
         self.__variants_info = variants_info
         self.__calldata_lai = calldata_lai
         self.__calldata_gp = calldata_gp
+        if calldata_ploidy is not None:
+            calldata_ploidy = np.asarray(calldata_ploidy)
+            if genotypes is None or calldata_ploidy.ndim != 2 or calldata_ploidy.shape != genotypes.shape:
+                raise ValueError("calldata_ploidy must match the shape of the 2D genotype dosages.")
+            if calldata_ploidy.dtype.kind not in "ui" or np.any((calldata_ploidy < 0) | (calldata_ploidy > 63)):
+                raise ValueError("calldata_ploidy must contain integer copy counts between 0 and 63.")
+            self.calldata_ploidy = calldata_ploidy
         self.__ancestry_map = ancestry_map
         self.__sample_fid = None if sample_fid is None else np.asarray(sample_fid)
         self.__sample_sex = None if sample_sex is None else np.asarray(sample_sex)
@@ -1026,18 +1051,13 @@ class SNPObject:
 
     @staticmethod
     def _bgen_biallelic_rows_look_phased(probabilities: np.ndarray, widths: np.ndarray) -> bool:
-        observed_widths = [int(width) for width in widths if int(width) > 0]
-        if not observed_widths or any(width % 2 != 0 for width in observed_widths):
+        width = int(widths.max(initial=0))
+        if width == 0 or np.any(widths % 2):
             return False
 
-        for sample_probs, width in zip(probabilities, widths):
-            width = int(width)
-            if width == 0:
-                continue
-            haplotypes = sample_probs[:width].reshape(width // 2, 2)
-            if not np.allclose(haplotypes.sum(axis=1), 1.0, atol=1e-4, rtol=0):
-                return False
-        return True
+        pairs = probabilities[:, :width].reshape(len(widths), width // 2, 2)
+        present = np.arange(0, width, 2) < widths[:, None]
+        return np.allclose(pairs.sum(axis=2)[present], 1.0, atol=1e-4, rtol=0)
 
     def allele_freq(
         self,
@@ -2466,11 +2486,7 @@ class SNPObject:
     def _validate_bgen_probability_padding(probabilities: np.ndarray) -> np.ndarray:
         finite = np.isfinite(probabilities)
         widths = finite.sum(axis=1)
-        for sample_idx, width in enumerate(widths):
-            if width == 0:
-                continue
-            if finite[sample_idx, :width].all() and not finite[sample_idx, width:].any():
-                continue
+        if not np.array_equal(finite, np.arange(probabilities.shape[1]) < widths[:, None]):
             raise ValueError(
                 "BGEN probability rows may only contain NaN values as all-missing rows "
                 "or as trailing padding for lower-ploidy samples."
@@ -3703,7 +3719,7 @@ class SNPObject:
         # Define keys to filter
         keys = [
             'genotypes', 'variants_ref', 'variants_alt', 'variants_chrom', 'variants_cm', 'variants_filter_pass',
-            'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai', 'calldata_gp'
+            'variants_id', 'variants_pos', 'variants_qual', 'variants_info', 'calldata_lai', 'calldata_gp', 'calldata_ploidy'
         ]
 
         # Apply filtering based on inplace parameter
@@ -4367,7 +4383,7 @@ class SNPObject:
         )
         data_updates = {
             key: subset_sample_axis(key, self[key])
-            for key in ['genotypes', 'calldata_lai', 'calldata_gp']
+            for key in ['genotypes', 'calldata_lai', 'calldata_gp', 'calldata_ploidy']
             if self[key] is not None
         }
         sample_metadata = getattr(self, "sample_metadata", None)
@@ -4990,8 +5006,11 @@ class SNPObject:
             name="calldata_gp",
         )
 
+        ploidy = _concatenate_dosage_ploidy(self, snpobj, axis=1)
+
         if inplace:
             self.genotypes = genotypes
+            self.calldata_ploidy = ploidy
             self.calldata_lai = calldata_lai
             self.calldata_gp = calldata_gp
             self.sample_fid = None
@@ -5005,6 +5024,7 @@ class SNPObject:
         # Create and return a new SNPObject containing the merged samples
         return SNPObject(
             genotypes=genotypes,
+            calldata_ploidy=ploidy,
             samples=samples,
             sample_fid=merged_fid,
             sample_sex=merged_sex,
@@ -5172,8 +5192,11 @@ class SNPObject:
             name="calldata_gp",
         )
 
+        ploidy = _concatenate_dosage_ploidy(self, snpobj, axis=0)
+
         if inplace:
             self.genotypes = genotypes
+            self.calldata_ploidy = ploidy
             self.calldata_lai = calldata_lai
             self.calldata_gp = calldata_gp
             self.sample_sex = merged_sample_sex
@@ -5185,6 +5208,7 @@ class SNPObject:
         # Create and return a new SNPObject containing the concatenated SNPs
         return SNPObject(
             genotypes=genotypes,
+            calldata_ploidy=ploidy,
             calldata_lai=calldata_lai,
             calldata_gp=calldata_gp,
             samples=self.samples,
@@ -5283,6 +5307,8 @@ class SNPObject:
         The correction swaps `variants_ref` and `variants_alt` to align with
         `snpobj`. It flips called 2D diploid dosages as `2 - dosage` and called 3D
         allele indexes as `1 - allele`, while preserving missing values.
+        Biallelic genotype probabilities are reordered to count the new ALT.
+        Dosage flips use recorded per-call ploidy when available, or infer it from probabilities.
 
         Args:
             snpobj (SNPObject):
@@ -5354,45 +5380,75 @@ class SNPObject:
 
         flip_mask = swapped_orientation & ~same_orientation & not_ambiguous
         flip_idx_query = query_idx[flip_mask]
-        flip_idx_reference = reference_idx[flip_mask]
 
-        # Correct the identified variant flips
-        if len(flip_idx_query) > 0:
-            log.info(f'Correcting {len(flip_idx_query)} variant flips...')
-
-            corrected_refs = np.asarray(snpobj['variants_ref'])[flip_idx_reference].copy()
-            corrected_alts = np.asarray(snpobj['variants_alt'])[flip_idx_reference].copy()
-
-            def flip_genotypes(target: 'SNPObject') -> None:
-                if target.genotypes is None:
-                    return
-                genotypes = np.asarray(target.genotypes)
-                selected = genotypes[flip_idx_query]
-                called = np.isfinite(selected) & (selected >= 0)
-                corrected = selected.copy()
-                if genotypes.ndim == 2:
-                    corrected[called] = 2 - selected[called]
-                elif genotypes.ndim == 3:
-                    corrected[called] = 1 - selected[called]
-                else:
-                    raise ValueError("`genotypes` must be a 2D dosage or 3D allele-call array.")
-                target.genotypes[flip_idx_query] = corrected
-
-            # Correct the variant flips based on whether the operation is in-place or not
-            if inplace:
-                self['variants_ref'][flip_idx_query] = corrected_refs
-                self['variants_alt'][flip_idx_query] = corrected_alts
-                flip_genotypes(self)
-                return None
-            else:
-                corrected = self.copy()
-                corrected['variants_ref'][flip_idx_query] = corrected_refs
-                corrected['variants_alt'][flip_idx_query] = corrected_alts
-                flip_genotypes(corrected)
-                return corrected
-        else:
+        if not flip_idx_query.size:
             log.info('No variant flips found to correct.')
             return self if not inplace else None
+
+        log.info(f'Correcting {len(flip_idx_query)} variant flips...')
+        has_dosages = self.genotypes is not None and self.genotypes.ndim == 2
+        flipped_gp = None
+        ploidy = 2
+        if self.calldata_gp is not None:
+            flipped_gp = np.asarray(self.calldata_gp)[flip_idx_query]
+            if flipped_gp.ndim != 3:
+                raise ValueError("`calldata_gp` must have shape (n_snps, n_samples, n_probabilities).")
+            if has_dosages:
+                ploidy = np.empty(flipped_gp.shape[:2], dtype=np.int16)
+            for i, probabilities in enumerate(flipped_gp):
+                sample_ploidy = self._flip_biallelic_probabilities(probabilities)
+                if has_dosages:
+                    ploidy[i] = sample_ploidy
+
+        if has_dosages and self.calldata_ploidy is not None:
+            stored_ploidy = self.calldata_ploidy[flip_idx_query]
+            if flipped_gp is None:
+                ploidy = stored_ploidy
+            else:
+                ploidy = np.where(np.isfinite(flipped_gp).any(axis=2), ploidy, stored_ploidy)
+
+        flipped_gt = None
+        if self.genotypes is not None:
+            flipped_gt = np.asarray(self.genotypes)[flip_idx_query]
+            if flipped_gt.ndim not in (2, 3):
+                raise ValueError("`genotypes` must be a 2D dosage or 3D allele-call array.")
+            total = 1 if flipped_gt.ndim == 3 else ploidy
+            called = np.isfinite(flipped_gt) & (flipped_gt >= 0)
+            flipped_gt[called] = (total - flipped_gt)[called]
+
+        corrected = self if inplace else self.copy()
+        # VCF reads can store single-base alleles in fixed-width string arrays.
+        # Widen each column before assigning a longer insertion or deletion allele.
+        for field, replacements in (("variants_ref", reference_ref[flip_mask]),
+                                    ("variants_alt", reference_alt[flip_mask])):
+            labels = np.asarray(corrected[field])
+            dtype = np.result_type(labels.dtype, replacements.dtype)
+            labels = labels.astype(dtype, copy=not labels.flags.writeable)
+            labels[flip_idx_query] = replacements
+            corrected[field] = labels
+        if flipped_gp is not None:
+            corrected.calldata_gp[flip_idx_query] = flipped_gp
+        if flipped_gt is not None:
+            corrected.genotypes[flip_idx_query] = flipped_gt
+        return None if inplace else corrected
+
+    @classmethod
+    def _flip_biallelic_probabilities(cls, probabilities: np.ndarray) -> np.ndarray:
+        """Flip one variant's sample probabilities in place and return ploidies for dosage flips."""
+        widths = cls._validate_bgen_probability_padding(probabilities)
+        columns = np.arange(probabilities.shape[1])
+        if cls._bgen_biallelic_rows_look_phased(probabilities, widths):
+            # Swap REF and ALT within each haplotype, preserving haplotype order.
+            flipped_columns = columns ^ 1
+            ploidy = widths // 2
+        else:
+            # Unphased states are ordered by ALT copy count, from zero to ploidy.
+            flipped_columns = widths[:, None] - 1 - columns
+            ploidy = widths - 1
+        order = np.where(columns < widths[:, None], flipped_columns, columns)
+        probabilities[:] = np.take_along_axis(probabilities, order, axis=1)
+        # A called dosage without probabilities retains the diploid convention.
+        return np.where(widths == 0, 2, ploidy)
 
     def remove_mismatching_variants(
         self,
@@ -5469,7 +5525,7 @@ class SNPObject:
         if inplace:
             for key in self.keys():
                 if self[key] is not None:
-                    if key in ('genotypes', 'calldata_lai', 'calldata_gp'):
+                    if key in ('genotypes', 'calldata_lai', 'calldata_gp', 'calldata_ploidy'):
                         # Genotype-like arrays are shuffled along the SNP axis.
                         self[key] = self[key][shuffle_index, ...]
                     elif 'variant' in key:
@@ -5480,7 +5536,7 @@ class SNPObject:
             shuffled_snpobj = self.copy()
             for key in shuffled_snpobj.keys():
                 if shuffled_snpobj[key] is not None:
-                    if key in ('genotypes', 'calldata_lai', 'calldata_gp'):
+                    if key in ('genotypes', 'calldata_lai', 'calldata_gp', 'calldata_ploidy'):
                         shuffled_snpobj[key] = shuffled_snpobj[key][shuffle_index, ...]
                     elif 'variant' in key:
                         shuffled_snpobj[key] = np.asarray(shuffled_snpobj[key])[shuffle_index]

@@ -100,11 +100,16 @@ class BGENWriter:
             for idx in range(n_variants):
                 variant_probabilities = np.ascontiguousarray(probabilities[idx], dtype=np.float64)
                 alleles = self._alleles(variants_ref[idx], variants_alt[idx])
-                variant_probabilities = self._trim_trailing_nan_probability_columns(variant_probabilities)
-                variant_phased = self._variant_phased(variant_probabilities, alleles, phased)
-                ploidy = self._common_case_ploidy(variant_probabilities, alleles, variant_phased)
-                if ploidy is None:
-                    ploidy = self._infer_ploidy(variant_probabilities, alleles, variant_phased)
+                if self.__snpobj.calldata_ploidy is not None and self.__snpobj.calldata_gp is None:
+                    ploidy = self.__snpobj.calldata_ploidy[idx]
+                    variant_phased = False
+                    variant_probabilities = variant_probabilities[:, :int(ploidy.max(initial=0)) + 1]
+                else:
+                    variant_probabilities = self._trim_trailing_nan_probability_columns(variant_probabilities)
+                    variant_phased = self._variant_phased(variant_probabilities, alleles, phased)
+                    ploidy = self._common_case_ploidy(variant_probabilities, alleles, variant_phased)
+                    if ploidy is None:
+                        ploidy = self._infer_ploidy(variant_probabilities, alleles, variant_phased)
                 self._write_variant(
                     handle=handle,
                     varid=str(variants_id[idx]),
@@ -259,20 +264,32 @@ class BGENWriter:
             return np.asarray(self.__snpobj.calldata_gp, dtype=np.float64)
         if self.__snpobj.genotypes is None:
             raise ValueError("BGENWriter requires either `calldata_gp` or `genotypes`.")
-        return self._hardcalls_to_probabilities(np.asarray(self.__snpobj.genotypes), phased=phased)
+        return self._hardcalls_to_probabilities(
+            np.asarray(self.__snpobj.genotypes), phased=phased, ploidy=self.__snpobj.calldata_ploidy,
+        )
 
     @staticmethod
-    def _hardcalls_to_probabilities(genotypes: np.ndarray, phased: Optional[bool]) -> np.ndarray:
-        validate_hardcall_values(
+    def _hardcalls_to_probabilities(
+        genotypes: np.ndarray, phased: Optional[bool], ploidy: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        if ploidy is not None and phased:
+            raise ValueError("Phased BGEN export requires haplotype calls or phased probabilities.")
+        max_dosage = int(ploidy.max(initial=0)) if ploidy is not None else 2
+        numeric = validate_hardcall_values(
             genotypes,
-            allowed_values=(0, 1) if genotypes.ndim == 3 else (0, 1, 2),
+            allowed_values=(0, 1) if genotypes.ndim == 3 else tuple(range(max_dosage + 1)),
         )
+        if genotypes.dtype.kind not in "biuf":
+            genotypes = numeric
+        del numeric  # Release the validation buffer before allocating probabilities.
+        missing = ~(genotypes >= 0)  # Both NaN and negative sentinels are missing.
+        if genotypes.ndim == 3:
+            missing = missing.any(axis=2)
         if genotypes.ndim == 3 and phased:
             n_variants, n_samples, n_alleles = genotypes.shape
             if n_alleles != 2:
                 raise ValueError("Phased BGEN export expects genotype shape (n_snps, n_samples, 2).")
             probabilities = np.zeros((n_variants, n_samples, 4), dtype=np.float64)
-            missing = np.any(genotypes < 0, axis=2)
             probabilities[:, :, 0] = genotypes[:, :, 0] == 0
             probabilities[:, :, 1] = genotypes[:, :, 0] == 1
             probabilities[:, :, 2] = genotypes[:, :, 1] == 0
@@ -281,18 +298,20 @@ class BGENWriter:
             return probabilities
 
         if genotypes.ndim == 3:
-            dosage = genotypes.sum(axis=2, dtype=np.int16)
-            missing = np.any(genotypes < 0, axis=2)
+            dosage = genotypes.sum(axis=2, dtype=np.result_type(genotypes.dtype, np.int16))
         elif genotypes.ndim == 2:
             dosage = genotypes
-            missing = genotypes < 0
         else:
             raise ValueError("`genotypes` must be a 2D hard-call or 3D allele array.")
 
+        if ploidy is not None and np.any(dosage > ploidy):
+            raise ValueError("A genotype dosage exceeds its recorded ploidy.")
         n_variants, n_samples = dosage.shape
-        probabilities = np.zeros((n_variants, n_samples, 3), dtype=np.float64)
-        for genotype_value in (0, 1, 2):
+        probabilities = np.zeros((n_variants, n_samples, max_dosage + 1), dtype=np.float64)
+        for genotype_value in range(max_dosage + 1):
             probabilities[:, :, genotype_value] = dosage == genotype_value
+            if ploidy is not None:
+                probabilities[:, :, genotype_value][ploidy < genotype_value] = np.nan
         probabilities[missing, :] = np.nan
         return probabilities
 
@@ -384,9 +403,10 @@ class BGENWriter:
     @staticmethod
     def _trim_trailing_nan_probability_columns(probabilities: np.ndarray) -> np.ndarray:
         keep = probabilities.shape[1]
-        while keep > 1 and np.isnan(probabilities[:, keep - 1]).all():
+        while keep > 0 and np.isnan(probabilities[:, keep - 1]).all():
             keep -= 1
-        return probabilities[:, :keep]
+        # When every sample is missing, retain the width of the genotype layout.
+        return probabilities[:, :keep] if keep else probabilities
 
     @staticmethod
     def _nonmissing_probability_counts(probabilities: np.ndarray) -> np.ndarray:
@@ -463,7 +483,15 @@ class BGENWriter:
                 )
             inferred.append(ploidy)
 
-        fallback_ploidy = max((ploidy for ploidy in inferred if ploidy is not None), default=2)
+        fallback_ploidy = max((ploidy for ploidy in inferred if ploidy is not None), default=None)
+        if fallback_ploidy is None:
+            # An all-missing haploid variant can have just two probability columns.
+            width = probabilities.shape[1]
+            if phased:
+                ploidy = BGENWriter._phased_ploidy_from_width(width, n_alleles)
+            else:
+                ploidy = BGENWriter._unphased_ploidy_from_width(width, n_alleles)
+            return 2 if ploidy is None else ploidy
         for idx, ploidy in enumerate(inferred):
             ploidies[idx] = fallback_ploidy if ploidy is None else ploidy
 

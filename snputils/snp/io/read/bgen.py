@@ -5,7 +5,7 @@ import operator
 import struct
 import warnings
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
@@ -25,7 +25,6 @@ except ImportError:  # pragma: no cover - exercised only when the extension is u
 
 _U16 = struct.Struct("<H")
 _U32 = struct.Struct("<I")
-_ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()
 
 
 def _native_zstd_unavailable(exc: BaseException) -> bool:
@@ -84,6 +83,7 @@ class _BGENRecord:
     alleles: tuple[str, ...]
     probabilities: Optional[np.ndarray]
     phased: Optional[bool]
+    ploidy: Optional[np.ndarray] = None
 
 
 def _as_field_list(fields: Optional[Union[str, Sequence[str]]]) -> Optional[List[str]]:
@@ -145,6 +145,7 @@ class _DirectBGENFile:
         self.filename = Path(filename)
         self.sample_path = sample_path
         self.handle = None
+        self._zstd_decompressor = zstd.ZstdDecompressor()
         self.header: Optional[_BGENHeader] = None
         self.samples: Optional[np.ndarray] = None
 
@@ -217,14 +218,17 @@ class _DirectBGENFile:
             raise ValueError("Malformed BGEN file: sample block length does not match its contents.")
         return np.asarray(samples, dtype=object)
 
-    def records(self, read_probabilities: bool = True):
+    def records(
+        self, read_probabilities: bool = True, read_ploidy: bool = False, ploidy_flags: Optional[bytes] = None,
+    ):
         assert self.handle is not None
         assert self.header is not None
         self.handle.seek(self.header.first_variant_offset)
         for idx in range(self.header.n_variants):
-            yield self._read_record(idx, read_probabilities)
+            need_ploidy = read_ploidy and (ploidy_flags is None or ploidy_flags[idx])
+            yield self._read_record(idx, read_probabilities, need_ploidy)
 
-    def _read_record(self, index: int, read_probabilities: bool) -> _BGENRecord:
+    def _read_record(self, index: int, read_probabilities: bool, read_ploidy: bool) -> _BGENRecord:
         assert self.handle is not None
         assert self.header is not None
 
@@ -250,7 +254,33 @@ class _DirectBGENFile:
             alleles=alleles,
             probabilities=probabilities,
             phased=phased,
+            ploidy=self._dosage_ploidy(block) if read_ploidy else None,
         )
+
+    def _dosage_ploidy(self, block: bytes) -> Optional[np.ndarray]:
+        """Read just the layout-2 header and, for non-diploid records, the ploidy bytes."""
+        assert self.header is not None
+        size = 8 + self.header.n_samples
+        if self.header.compression == 0:
+            prefix = memoryview(block)[:size]
+        elif self.header.compression == 1:
+            compressed = memoryview(block)[4:]
+            # Most variants are uniformly diploid. Usually the first few compressed
+            # bytes suffice to establish that, even for a very large cohort.
+            prefix = zlib.decompressobj().decompress(compressed[:128], 8)
+            if len(prefix) != 8 or prefix[6:8] != b"\x02\x02":
+                prefix = zlib.decompressobj().decompress(compressed, size)
+        else:
+            with self._zstd_decompressor.stream_reader(memoryview(block)[4:]) as stream:
+                header = _read_exact(stream, 8, "layout-2 header")
+                if header[6:8] == b"\x02\x02":
+                    return None
+                prefix = header + _read_exact(stream, self.header.n_samples, "ploidy")
+        if len(prefix) >= 8 and prefix[6:8] == b"\x02\x02":
+            return None
+        if len(prefix) < size:
+            raise ValueError("Malformed BGEN genotype block: truncated ploidy.")
+        return np.frombuffer(prefix, dtype=np.uint8, offset=8, count=self.header.n_samples) & 0x3f
 
     def _decode_probabilities(self, block: bytes, n_alleles: int) -> tuple[np.ndarray, bool]:
         assert self.header is not None
@@ -266,7 +296,7 @@ class _DirectBGENFile:
             if self.header.compression == 1:
                 payload = zlib.decompress(compressed)
             else:
-                payload = _ZSTD_DECOMPRESSOR.decompress(compressed, max_output_size=expected_len)
+                payload = self._zstd_decompressor.decompress(compressed, max_output_size=expected_len)
             if len(payload) != expected_len:
                 raise ValueError("BGEN genotype block decompressed to the wrong size.")
 
@@ -303,7 +333,8 @@ class BGENReader(SNPBaseReader):
             exclude_fields: Fields to exclude from the returned SNPObject.
             genotype_mode: By default, preserve BGEN genotype probabilities in
                 ``calldata_gp``. ``"dosage"`` returns expected biallelic alternate-
-                allele counts with shape ``(n_variants, n_samples)``. ``"phased"``
+                allele counts with shape ``(n_variants, n_samples)``. Non-diploid
+                dosage reads retain per-call copy counts in ``calldata_ploidy``. ``"phased"``
                 hard-calls each haplotype from phased genotype probabilities and
                 returns a diploid allele array with shape ``(n_variants, n_samples, 2)``.
                 Unphased or non-diploid records are rejected in phased mode.
@@ -400,6 +431,20 @@ class BGENReader(SNPBaseReader):
                 "fields=['GP'] with all samples and variants."
             )
 
+        genotypes = None
+        ploidy_flags = None
+        if genotype_mode == "dosage":
+            genotypes, ploidy_flags = self._read_dosage(
+                sample_path=sample_path,
+                sample_ids=sample_ids,
+                sample_idxs=sample_idxs,
+                variant_ids=variant_ids,
+                variant_idxs=variant_idxs,
+                threads=threads,
+                report_ploidy=True,
+            )
+
+        need_ploidy = genotype_mode == "dosage" and (ploidy_flags is None or b"\x01" in ploidy_flags)
         log.info("Reading %s", self.filename)
         with _DirectBGENFile(self.filename, sample_path=sample_path) as bfile:
             assert bfile.header is not None
@@ -415,25 +460,25 @@ class BGENReader(SNPBaseReader):
                 sample_indices=sample_indices,
                 variant_ids=variant_ids,
                 variant_idxs=requested_variant_idxs,
+                read_ploidy=need_ploidy,
+                ploidy_flags=ploidy_flags,
             )
             samples = bfile.samples[sample_indices] if "IID" in fields_set else None
 
         metadata, calldata_gp = self._records_to_arrays(records, sample_indices, fields_set)
-        genotypes = None
+        ploidy = None
         if genotype_mode == "phased":
             genotypes = self._records_to_phased_hardcalls(records, len(sample_indices))
             calldata_gp = None
-        elif genotype_mode == "dosage":
-            genotypes = self.read_dosage(
-                sample_path=sample_path,
-                sample_ids=sample_ids,
-                sample_idxs=sample_idxs,
-                variant_ids=variant_ids,
-                variant_idxs=variant_idxs,
-                threads=threads,
-            )
+        elif need_ploidy:
+            for i, record in enumerate(records):
+                if record.ploidy is not None:
+                    if ploidy is None:
+                        ploidy = np.full(genotypes.shape, 2, dtype=np.uint8)
+                    ploidy[i] = record.ploidy
         return SNPObject(
             genotypes=genotypes,
+            calldata_ploidy=ploidy,
             calldata_gp=calldata_gp,
             samples=samples,
             variants_ref=metadata["variants_ref"],
@@ -462,6 +507,15 @@ class BGENReader(SNPBaseReader):
         If native zstd support is unavailable, zstd reads warn and fall back to
         single-threaded Python decompression.
         """
+        dosages, _ = self._read_dosage(
+            sample_path, sample_ids, sample_idxs, variant_ids, variant_idxs, threads, report_ploidy=False,
+        )
+        return dosages
+
+    def _read_dosage(
+        self, sample_path, sample_ids, sample_idxs, variant_ids, variant_idxs, threads, *, report_ploidy: bool,
+    ) -> tuple[np.ndarray, Optional[bytes]]:
+        """Return dosages and, if reported by the native decoder, a flag per non-diploid record."""
         try:
             threads = operator.index(threads)
         except TypeError as exc:
@@ -483,13 +537,10 @@ class BGENReader(SNPBaseReader):
             and variant_idxs is None
         ):
             try:
-                buffer, n_variants, n_samples = _native_bgen.read_file_dosage(
-                    str(self.filename),
-                    threads,
-                )
-                if isinstance(buffer, np.ndarray):
-                    return buffer.astype(np.float32, copy=False).reshape(n_variants, n_samples)
-                return np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
+                result = _native_bgen.read_file_dosage(str(self.filename), threads, report_ploidy)
+                buffer, n_variants, n_samples = result[:3]
+                dosages = np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
+                return dosages, result[3] if report_ploidy else None
             except NotImplementedError as exc:
                 zstd_fallback = _native_zstd_unavailable(exc)
                 if threads != 1 and not zstd_fallback:
@@ -510,7 +561,7 @@ class BGENReader(SNPBaseReader):
             variant_ids=variant_ids,
             variant_idxs=variant_idxs,
         )
-        return snpobj.dosage().astype(np.float32, copy=False)
+        return snpobj.dosage().astype(np.float32, copy=False), None
 
     @staticmethod
     def _is_native_bulk_gp_request(
@@ -572,6 +623,8 @@ class BGENReader(SNPBaseReader):
         sample_indices: np.ndarray,
         variant_ids: Optional[Sequence[str]],
         variant_idxs: Optional[np.ndarray],
+        read_ploidy: bool = False,
+        ploidy_flags: Optional[bytes] = None,
     ) -> list[_BGENRecord]:
         read_gp = "GP" in fields_set
         by_index: dict[int, _BGENRecord] = {}
@@ -581,7 +634,7 @@ class BGENReader(SNPBaseReader):
         requested_idx_set = set(int(idx) for idx in variant_idxs) if variant_idxs is not None else None
         scan_limit = int(np.max(variant_idxs)) if variant_idxs is not None and variant_idxs.size else None
 
-        for record in bfile.records(read_probabilities=read_gp):
+        for record in bfile.records(read_probabilities=read_gp, read_ploidy=read_ploidy, ploidy_flags=ploidy_flags):
             include = False
             aliases = {
                 _variant_identifier(record.varid, record.rsid),
@@ -599,16 +652,10 @@ class BGENReader(SNPBaseReader):
 
             if include:
                 if record.probabilities is not None:
-                    record = _BGENRecord(
-                        index=record.index,
-                        varid=record.varid,
-                        rsid=record.rsid,
-                        chrom=record.chrom,
-                        pos=record.pos,
-                        alleles=record.alleles,
-                        probabilities=record.probabilities[sample_indices, :],
-                        phased=record.phased,
-                    )
+                    record = replace(record, probabilities=record.probabilities[sample_indices])
+                if record.ploidy is not None:
+                    selected_ploidy = record.ploidy[sample_indices]
+                    record = replace(record, ploidy=selected_ploidy if np.any(selected_ploidy != 2) else None)
                 if requested_idx_set is not None:
                     by_index[record.index] = record
                 else:

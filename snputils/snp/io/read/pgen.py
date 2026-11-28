@@ -19,6 +19,7 @@ from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read._plink_samples import open_plink_text, read_sample_table, select_samples
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
+    UnphasedHeterozygoteError,
     estimate_phased_alleles_peak_bytes,
     read_phased_alleles,
     read_phased_alleles_into,
@@ -166,6 +167,7 @@ def _read_phased_parallel(
     num_samples: int,
     threads: int,
     allele_idx_offsets: Optional[np.ndarray] = None,
+    require_phase: bool = False,
 ) -> np.ndarray:
     """Decode ordered phased alleles with independent pgenlib readers."""
     genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
@@ -197,6 +199,7 @@ def _read_phased_parallel(
                 reader,
                 partition_variant_idxs,
                 partition_output,
+                require_phase=require_phase,
             )
         finally:
             reader.close()
@@ -220,6 +223,8 @@ class PGENReader(SNPBaseReader):
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
         threads: int = 1,
+        *,
+        assume_uniform_phase: bool = True,
     ) -> SNPObject:
         """
         Read a pgen fileset (pgen, psam, pvar) into a SNPObject.
@@ -236,10 +241,10 @@ class PGENReader(SNPBaseReader):
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
             genotype_mode: ``"dosage"`` returns one biallelic ALT-copy count per
-                sample as an ``int8`` value in ``{0, 1, 2}`` for biallelic selections. ``"phased"``
-                returns phased allele calls and requires PGEN hardcall phase
-                information. ``"auto"`` (default) preserves phased hardcalls
-                when possible and falls back to dosage for unphased hardcalls.
+                sample as an ``int8`` value in ``{0, 1, 2}``. All selected variants must be biallelic.
+                ``"phased"`` returns allele pairs and requires the file to contain hardcall phase
+                information. ``"auto"`` (default) returns allele pairs when the file contains
+                phase information and biallelic dosages otherwise.
             chromosome_ploidy:
                 Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
@@ -250,6 +255,11 @@ class PGENReader(SNPBaseReader):
             threads: Number of independent native pgenlib decoder threads. Values
                 above one are supported for explicit ``genotype_mode="dosage"``
                 and ``genotype_mode="phased"`` reads.
+            assume_uniform_phase: By default, use the file-level phase flag and skip per-call
+                validation. In a partially phased file, allele order is arbitrary for unphased
+                heterozygotes. Set to False to validate the selected calls. If any selected
+                heterozygote is unphased, ``"phased"`` raises a ValueError and ``"auto"``
+                falls back to dosage when all selected variants are biallelic.
 
         Returns:
             **SNPObject**: 
@@ -467,35 +477,69 @@ class PGENReader(SNPBaseReader):
                         "genotype_mode='phased' is not supported. Use genotype_mode='dosage' "
                         "to load 0/1/2 genotype dosages."
                     )
-                if effective_return_dosage and allele_idx_offsets is not None and (
-                    only_read_pgen or np.any(allele_idx_offsets[variant_idxs + 1] - allele_idx_offsets[variant_idxs] > 2)
-                ):
-                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
-                detect_non_diploid = effective_return_dosage and chromosome_ploidy_mode != "autosomal"
-
-                non_diploid_mask = None
-                if detect_non_diploid:
-                    if only_read_pgen:
-                        log.debug(
-                            "Skipping chromosome-specific non-diploid correction because "
-                            ".pvar metadata is unavailable in GT-only fast path."
-                        )
-                    elif "#CHROM" in pvar.columns:
-                        non_diploid_mask = _non_diploid_chromosome_mask_or_none(
-                            pvar.get_column("#CHROM").to_numpy()
-                        )
-
-                # required arrays: variant_idxs + sample_idxs + genotypes
                 if not effective_return_dosage:
+                    require_phase = not assume_uniform_phase
                     required_ram = (
                         (num_samples + num_variants) * 4
                         + estimate_phased_alleles_peak_bytes(
                             num_variants,
                             num_samples,
                             threads=threads,
+                            require_phase=require_phase,
                         )
                     )
-                else:
+                    log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
+                    try:
+                        if threads == 1:
+                            genotypes = read_phased_alleles(
+                                pgen_reader,
+                                variant_idxs,
+                                num_variants,
+                                num_samples,
+                                require_phase=require_phase,
+                            )
+                        else:
+                            genotypes = _read_phased_parallel(
+                                filename_noext,
+                                raw_sample_ct=file_num_samples,
+                                variant_ct=file_num_variants,
+                                sample_subset=sample_idxs,
+                                variant_idxs=variant_idxs,
+                                num_variants=num_variants,
+                                num_samples=num_samples,
+                                threads=threads,
+                                allele_idx_offsets=allele_idx_offsets,
+                                require_phase=require_phase,
+                            )
+                    except UnphasedHeterozygoteError:
+                        if not auto_mode:
+                            raise
+                        effective_return_dosage = True
+
+                if effective_return_dosage:
+                    if allele_idx_offsets is not None and (
+                        only_read_pgen or np.any(allele_idx_offsets[variant_idxs + 1] - allele_idx_offsets[variant_idxs] > 2)
+                    ):
+                        if auto_mode:
+                            raise ValueError(
+                                "Selected PGEN genotypes lack complete phase information and include "
+                                "multiallelic variants. Select biallelic variants for dosage output."
+                            )
+                        raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+                    detect_non_diploid = chromosome_ploidy_mode != "autosomal"
+
+                    non_diploid_mask = None
+                    if detect_non_diploid:
+                        if only_read_pgen:
+                            log.debug(
+                                "Skipping chromosome-specific non-diploid correction because "
+                                ".pvar metadata is unavailable in GT-only fast path."
+                            )
+                        elif "#CHROM" in pvar.columns:
+                            non_diploid_mask = _non_diploid_chromosome_mask_or_none(
+                                pvar.get_column("#CHROM").to_numpy()
+                            )
+
                     required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
                     if non_diploid_mask is not None and hardcall_phase_present:
                         num_non_diploid = int(np.sum(non_diploid_mask))
@@ -504,29 +548,7 @@ class PGENReader(SNPBaseReader):
                             num_samples,
                             threads=threads,
                         )
-                log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
-
-                if not effective_return_dosage:
-                    if threads == 1:
-                        genotypes = read_phased_alleles(
-                            pgen_reader,
-                            variant_idxs,
-                            num_variants,
-                            num_samples,
-                        )
-                    else:
-                        genotypes = _read_phased_parallel(
-                            filename_noext,
-                            raw_sample_ct=file_num_samples,
-                            variant_ct=file_num_variants,
-                            sample_subset=sample_idxs,
-                            variant_idxs=variant_idxs,
-                            num_variants=num_variants,
-                            num_samples=num_samples,
-                            threads=threads,
-                            allele_idx_offsets=allele_idx_offsets,
-                        )
-                else:
+                    log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
                     if threads == 1:
                         genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                         pgen_reader.read_list(variant_idxs, genotypes)
@@ -719,6 +741,8 @@ class PGENReader(SNPBaseReader):
         separator: str = None,
         chunk_size: int = 10_000,
         threads: int = 1,
+        *,
+        assume_uniform_phase: bool = True,
     ) -> Iterator[SNPObject]:
         """
         Stream the PGEN fileset in variant chunks.
@@ -732,6 +756,9 @@ class PGENReader(SNPBaseReader):
             preserves existing behavior.
 
         threads: Number of pgenlib decoder threads used for each chunk.
+
+        assume_uniform_phase: Use the file-level phase flag by default. Set to False
+            to reject unphased heterozygotes in a phased chunk.
         """
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         _normalize_chromosome_ploidy(chromosome_ploidy)
@@ -768,4 +795,5 @@ class PGENReader(SNPBaseReader):
                 chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
                 threads=threads,
+                assume_uniform_phase=assume_uniform_phase,
             )

@@ -6,6 +6,8 @@ import pytest
 import snputils.snp.io.read.bed as bed_module
 import snputils.snp.io.read.pgen as pgen_module
 
+from snputils import read_pgen
+from snputils.snp.io.read import _pgenlib
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read import BCFReader, BEDReader, PGENReader
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
@@ -184,6 +186,58 @@ def test_pgen_unphased_hardcalls_reject_phased_mode(tmp_path: Path):
 
     with pytest.raises(ValueError, match="hardcall phase information"):
         PGENReader(prefix).read(genotype_mode="phased")
+
+
+@pytest.fixture
+def mixed_phase_prefix(tmp_path):
+    prefix = tmp_path / "mixed_phase"
+    with pg.PgenWriter(str(prefix.with_suffix(".pgen")).encode(), sample_ct=2, variant_ct=3,
+                       hardcall_phase_present=True, allele_ct_limit=3) as writer:
+        writer.append_partially_phased(np.array([1, 0, 0, 1], dtype=np.int32),
+                                       np.array([True, False]))
+        writer.append_alleles(np.array([1, 0, 0, 0], dtype=np.int32), all_phased=True)
+        writer.append_alleles(np.array([2, 1, 0, 2], dtype=np.int32), all_phased=True, allele_ct=3)
+    prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
+    prefix.with_suffix(".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n1\t100\tv1\tA\tG\n1\t200\tv2\tC\tT\n1\t300\tv3\tA\tG,T\n"
+    )
+    return prefix
+
+
+def test_pgen_assumes_uniform_phase_by_default(mixed_phase_prefix, monkeypatch):
+    def unexpected_check(*args):
+        pytest.fail("Default PGEN reads should skip per-call phase validation.")
+
+    monkeypatch.setattr(_pgenlib, "_raise_if_unphased_heterozygote", unexpected_check)
+    observed = read_pgen(mixed_phase_prefix, fields=["GT"]).genotypes
+    assert observed.shape == (3, 2, 2)
+    np.testing.assert_array_equal(observed[0, 0], [1, 0])
+    # s2 has one copy of each allele, with unknown haplotype order.
+    np.testing.assert_array_equal(np.sort(observed[0, 1]), [0, 1])
+    reader = PGENReader(mixed_phase_prefix)
+    for threads in (1, 2):
+        phased = reader.read(fields=["GT"], genotype_mode="phased", threads=threads)
+        np.testing.assert_array_equal(phased.genotypes, observed)
+    chunks = reader.iter_read(genotype_mode="phased", threads=2, chunk_size=2)
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), observed)
+
+
+def test_pgen_checks_phase_in_selected_calls(mixed_phase_prefix):
+    reader = PGENReader(mixed_phase_prefix)
+    for threads in (1, 2):
+        options = dict(fields=["GT"], genotype_mode="phased", threads=threads, assume_uniform_phase=False)
+        with pytest.raises(ValueError, match="unphased heterozygous"):
+            reader.read(sample_ids=["s2"], **options)
+        phased = reader.read(sample_ids=["s1"], **options)
+        np.testing.assert_array_equal(phased.genotypes, [[[1, 0]], [[1, 0]], [[2, 1]]])
+        with pytest.raises(ValueError, match="unphased heterozygous"):
+            next(reader.iter_read(sample_ids=["s2"], chunk_size=2, **options))
+    with pytest.raises(ValueError, match="lack complete phase.*multiallelic"):
+        reader.read(sample_ids=["s2"], assume_uniform_phase=False)
+    dosage = reader.read(sample_ids=["s2"], variant_ids=["v1", "v2"], assume_uniform_phase=False)
+    np.testing.assert_array_equal(dosage.genotypes, [[1], [0]])
+    checked = reader.read(variant_ids=["v2"], assume_uniform_phase=False)
+    np.testing.assert_array_equal(checked.genotypes, [[[1, 0], [0, 0]]])
 
 
 def test_pgen_dosage_preserves_negative_missing_sentinel(tmp_path: Path):

@@ -5693,14 +5693,14 @@ class SNPObject:
         - `.bed`: Binary PED (Plink) format.
         - `.bgen`: BGEN genotype probability format.
         - `.pgen`: Plink2 binary genotype format.
-        - `.vcf`: Variant Call Format.
+        - `.vcf`, `.vcf.gz`: Plain or BGZF-compressed Variant Call Format.
         - `.bcf`: Binary Call Format.
         - `.pkl`: Pickle format for saving `self` in serialized form.
 
         Args:
             file (str or pathlib.Path):
                 Path to the file where the data will be saved. The extension of the file determines the save format.
-                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.bcf`, `.pkl`.
+                Supported extensions: `.bed`, `.bgen`, `.pgen`, `.vcf`, `.vcf.gz`, `.bcf`, `.pkl`.
         """
         ext = Path(file).suffix.lower()
         if ext == '.bed':
@@ -5709,7 +5709,7 @@ class SNPObject:
             self.save_bgen(file)
         elif ext == '.pgen':
             self.save_pgen(file)
-        elif ext == '.vcf':
+        elif ext == '.vcf' or Path(file).name.lower().endswith('.vcf.gz'):
             self.save_vcf(file)
         elif ext == '.bcf':
             self.save_bcf(file)
@@ -5779,12 +5779,11 @@ class SNPObject:
 
     def save_vcf(self, file: Union[str, Path]) -> None:
         """
-        Save the data stored in `self` to a `.vcf` file.
+        Save the data as plain VCF or as BGZF-compressed VCF with a `.vcf.gz` suffix.
 
         Args:
             file (str or pathlib.Path):
-                Path to the file where the data will be saved. It should end with `.vcf`.
-                If the provided path does not have this extension, it will be appended.
+                Output path ending in `.vcf` or `.vcf.gz`. A missing VCF suffix is appended.
         """
         from snputils.snp.io.write.vcf import VCFWriter
         writer = VCFWriter(snpobj=self, filename=file)

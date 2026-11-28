@@ -1,14 +1,41 @@
 import logging
 import gzip
+import struct
 from copy import copy
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Iterable, Iterator, Optional, Sequence, Union
 
 import numpy as np
 
 from snputils.snp.genobj import SNPObject
 
 log = logging.getLogger(__name__)
+
+
+def _bgzf_block(data: Union[bytes, bytearray]) -> bytes:
+    member = gzip.compress(data, compresslevel=6, mtime=0)
+    # Replace the ten-byte gzip header. The BGZF extra field adds eight bytes,
+    # and BSIZE stores the size of the entire member minus one.
+    header = b"\x1f\x8b\x08\x04\x00\x00\x00\x00\x00\xff"
+    extra = struct.pack("<H2sHH", 6, b"BC", 2, len(member) + 8 - 1)
+    return header + extra + member[10:]
+
+
+def _write_bgzf_lines(file: Path, lines: Iterable[str]) -> None:
+    # Leave room for the gzip framing and worst-case deflate overhead.
+    block_size = 65280
+    pending = bytearray()
+    with file.open("wb") as out:
+        for line in lines:
+            pending.extend(line.encode("utf-8"))
+            if len(pending) >= block_size:
+                stop = len(pending) - len(pending) % block_size
+                for start in range(0, stop, block_size):
+                    out.write(_bgzf_block(pending[start:start + block_size]))
+                del pending[:stop]
+        if pending:
+            out.write(_bgzf_block(pending))
+        out.write(_bgzf_block(b""))
 
 
 def _decode_vcf_bytes(value: object) -> object:
@@ -242,30 +269,32 @@ class VCFWriter:
             data_chrom: The SNPObject instance containing the data for the chromosome.
             variants_info: Optional per-variant INFO strings; length must match variant count.
         """
+        info_values = _normalize_info_values(data_chrom, variants_info)
+        qual_values = _normalize_qual_values(data_chrom)
+        filter_values = _normalize_filter_values(data_chrom)
+        lines = self._vcf_lines(data_chrom, info_values, qual_values, filter_values)
+        if file.suffix.lower() == ".gz":
+            _write_bgzf_lines(file, lines)
+        else:
+            with file.open("w", encoding="utf-8") as out:
+                out.writelines(lines)
+
+    def _vcf_lines(self, data_chrom, info_values, qual_values, filter_values) -> Iterator[str]:
         genotypes = np.asarray(data_chrom.genotypes)
         n_windows = data_chrom.n_snps
         n_samples = data_chrom.n_samples
         has_samples = n_samples > 0
-
-        info_values = _normalize_info_values(data_chrom, variants_info)
-        qual_values = _normalize_qual_values(data_chrom)
-        filter_values = _normalize_filter_values(data_chrom)
-
-        if file.suffix.lower() == ".gz":
-            out = gzip.open(file, "wt", encoding="utf-8")
-        else:
-            out = open(file, "w")
-        out.write("##fileformat=VCFv4.1\n")
+        yield "##fileformat=VCFv4.1\n"
         if has_samples:
-            out.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n')
+            yield '##FORMAT=<ID=GT,Number=1,Type=String,Description="Phased Genotype">\n'
         if any("END=" in s for s in info_values):
-            out.write('##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the segment">\n')
+            yield '##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the segment">\n'
         for c in set(data_chrom.variants_chrom):
-            out.write(f"##contig=<ID={c}>\n")
+            yield f"##contig=<ID={c}>\n"
         cols = ["#CHROM","POS","ID","REF","ALT","QUAL","FILTER","INFO"]
         if has_samples:
             cols += ["FORMAT"] + list(data_chrom.samples)
-        out.write("\t".join(cols) + "\n")
+        yield "\t".join(cols) + "\n"
 
         sep = "|" if self.__phased else "/"
         for i in range(n_windows):
@@ -294,6 +323,4 @@ class VCFWriter:
                     for s in range(n_samples)
                 ]
                 fields.extend(["GT", *sample_fields])
-            line = "\t".join(fields)
-            out.write(line + "\n")
-        out.close()
+            yield "\t".join(fields) + "\n"

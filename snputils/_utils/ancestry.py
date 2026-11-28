@@ -1,4 +1,34 @@
+import warnings
+
 import numpy as np
+
+
+def snp_indices_by_chromosome(chromosomes: np.ndarray, positions: np.ndarray) -> dict[object, np.ndarray]:
+    """Group original SNP indices by chromosome, excluding rows with missing coordinates."""
+    import pandas as pd
+
+    labels = np.atleast_1d(np.asarray(chromosomes))
+    if np.ma.is_masked(chromosomes):
+        labels = np.where(chromosomes.mask, None, labels)
+    if not labels.dtype.isnative:
+        labels = labels.astype(labels.dtype.newbyteorder("="), copy=False)
+    codes, unique_chrom = pd.factorize(labels, sort=False)
+    missing_positions = pd.isna(np.asarray(positions)) | np.ma.getmask(positions)
+
+    missing_fields = []
+    if (codes == -1).any():
+        missing_fields.append("missing chromosome labels")
+    if missing_positions.any():
+        missing_fields.append("missing positions")
+    if missing_fields:
+        warnings.warn("Skipping SNPs with " + " or ".join(missing_fields) + ".", stacklevel=3)
+
+    valid_indices = np.flatnonzero((codes >= 0) & ~missing_positions)
+    valid_codes = codes[valid_indices]
+    grouped_indices = valid_indices[np.argsort(valid_codes, kind="stable")]
+    # Keep an empty group for a known chromosome whose positions are all missing.
+    counts = np.bincount(valid_codes, minlength=len(unique_chrom))
+    return dict(zip(unique_chrom, np.split(grouped_indices, counts.cumsum()[:-1])))
 
 
 def known_lai_mask(lai: np.ndarray) -> np.ndarray:

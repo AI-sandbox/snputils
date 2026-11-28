@@ -177,6 +177,7 @@ def test_bgen_reader_native_bulk_paths_match_general_reader(tmp_path, compressio
 
     np.testing.assert_allclose(fast_gp, general_gp, atol=1 / 65535, equal_nan=True)
     np.testing.assert_array_equal(parallel_gp, fast_gp)
+    assert np.isnan(fast_dosage[0, 2])
     np.testing.assert_allclose(fast_dosage, general_dosage, atol=1 / 65535, equal_nan=True)
     np.testing.assert_array_equal(parallel_dosage, fast_dosage)
     np.testing.assert_array_equal(parallel_object.genotypes, fast_dosage)

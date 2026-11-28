@@ -3,7 +3,7 @@ import struct
 import numpy as np
 import pytest
 
-from snputils import BGENReader, read_bgen, read_snp
+from snputils import BGENReader, BGENWriter, read_bgen, read_snp
 from snputils.snp.io.read import bgen as bgen_module
 from snputils._utils.genotypes import sum_diploid_genotypes
 from snputils.snp.genobj.snpobj import SNPObject
@@ -90,6 +90,32 @@ def test_bgen_full_read_dosage_matches_indexed_rows(data_path):
     subset = BGENReader(path).read(fields=["GP"], variant_idxs=indexes)
 
     np.testing.assert_allclose(full.dosage()[indexes], subset.dosage(), atol=1 / 255, equal_nan=True)
+
+
+@pytest.mark.parametrize("bit_depth", [8, 12, 16])
+@pytest.mark.parametrize("phased", [False, True])
+def test_assume_no_missing_matches_checked_dosage(tmp_path, bit_depth, phased):
+    diploid = [0.25, 0.75, 0.5, 0.5] if phased else [0.25, 0.5, 0.25]
+    haploid = [0.25, 0.75] + [np.nan] * (len(diploid) - 2)
+    source = SNPObject(
+        calldata_gp=np.array([[diploid, diploid], [diploid, haploid]], dtype=np.float32),
+        variants_chrom=np.array(["1", "X"]), variants_pos=np.array([10, 20]),
+        variants_ref=np.array(["A", "C"]), variants_alt=np.array(["G", "T"]),
+    )
+    path = tmp_path / "called.bgen"
+    BGENWriter(source, path).write(phased=phased, bit_depth=bit_depth)
+    reader = BGENReader(path)
+    checked = reader.read_dosage()
+    diploid_dosage = 1.25 if phased else 1.0
+    expected = [[diploid_dosage] * 2, [diploid_dosage, 0.75]]
+    np.testing.assert_allclose(checked, expected, atol=2 / (2**bit_depth - 1))
+    for threads in (1, 2):
+        np.testing.assert_array_equal(reader.read_dosage(assume_no_missing=True, threads=threads), checked)
+
+
+def test_read_dosage_rejects_nonboolean_missingness_option():
+    with pytest.raises(TypeError, match="assume_no_missing must be a boolean"):
+        BGENReader("unused.bgen").read_dosage(assume_no_missing="False")
 
 
 def test_bgen_to_dosage_populates_genotypes(snpobj_bgen):

@@ -496,6 +496,8 @@ class BGENReader(SNPBaseReader):
         variant_ids: Optional[Sequence[str]] = None,
         variant_idxs: Optional[Sequence[int]] = None,
         threads: int = 1,
+        *,
+        assume_no_missing: bool = False,
     ) -> np.ndarray:
         """
         Read biallelic BGEN alternate-allele dosages as a ``float32`` array.
@@ -504,16 +506,23 @@ class BGENReader(SNPBaseReader):
         materializing genotype probabilities. Filtered reads fall back to the general
         probability reader and convert from ``calldata_gp``. Set ``threads`` above
         1 to decode independent variant blocks in parallel for an unfiltered read.
+        Set ``assume_no_missing=True`` only for files known to have no missing
+        genotypes. The native dosage decoder then skips the missingness flags.
+        If the assumption is wrong, a missing call can appear as a valid dosage.
         If native zstd support is unavailable, zstd reads warn and fall back to
         single-threaded Python decompression.
         """
+        if not isinstance(assume_no_missing, (bool, np.bool_)):
+            raise TypeError("assume_no_missing must be a boolean.")
         dosages, _ = self._read_dosage(
-            sample_path, sample_ids, sample_idxs, variant_ids, variant_idxs, threads, report_ploidy=False,
+            sample_path, sample_ids, sample_idxs, variant_ids, variant_idxs, threads,
+            report_ploidy=False, assume_no_missing=bool(assume_no_missing),
         )
         return dosages
 
     def _read_dosage(
         self, sample_path, sample_ids, sample_idxs, variant_ids, variant_idxs, threads, *, report_ploidy: bool,
+        assume_no_missing: bool = False,
     ) -> tuple[np.ndarray, Optional[bytes]]:
         """Return dosages and, if reported by the native decoder, a flag per non-diploid record."""
         try:
@@ -537,7 +546,7 @@ class BGENReader(SNPBaseReader):
             and variant_idxs is None
         ):
             try:
-                result = _native_bgen.read_file_dosage(str(self.filename), threads, report_ploidy)
+                result = _native_bgen.read_file_dosage(str(self.filename), threads, report_ploidy, assume_no_missing)
                 buffer, n_variants, n_samples = result[:3]
                 dosages = np.frombuffer(buffer, dtype=np.float32).reshape(n_variants, n_samples)
                 return dosages, result[3] if report_ploidy else None

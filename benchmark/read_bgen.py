@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -97,13 +98,13 @@ def _phased_calls_or_skip(probabilities, reader_name):
         pytest.skip(f"{reader_name} does not expose phased BGEN probabilities: {exc}")
 
 
-def read_bgen_snputils(path, genotype_mode="dosage"):
+def read_bgen_snputils(path, genotype_mode="dosage", *, assume_no_missing=False):
     """Read BGEN file using snputils"""
     from snputils.snp.io.read.bgen import BGENReader
 
     reader = BGENReader(path)
     if genotype_mode == "dosage":
-        return reader.read_dosage()
+        return reader.read_dosage(assume_no_missing=assume_no_missing)
     if genotype_mode == "probabilities":
         return reader.read(fields=["GP"]).calldata_gp.astype(np.float32, copy=False)
     if genotype_mode == "phased":
@@ -251,7 +252,7 @@ READERS = [
 
 @pytest.mark.benchmark(group="BGEN-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
-def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode):
+def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode, assume_no_missing):
     """Benchmark readers and verify output"""
     if reader_name is not None and name != reader_name:
         pytest.skip(f"Skipping {name}; --reader-name={reader_name} requested")
@@ -259,6 +260,9 @@ def test_bgen_readers(benchmark, reader, name, path, memory_profile, reader_name
     path = Path(path)
     if path.suffix != ".bgen":
         path = Path(str(path) + ".bgen")
+    if reader is read_bgen_snputils and genotype_mode == "dosage":
+        reader = partial(reader, assume_no_missing=assume_no_missing)
+        benchmark.extra_info["assume_no_missing"] = assume_no_missing
     ref_array = None
     create_benchmark_test(
         benchmark,

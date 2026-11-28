@@ -1117,6 +1117,7 @@ decode_layout2_dosage_into_impl(
     Py_ssize_t data_len,
     uint32_t expected_samples,
     uint16_t expected_alleles,
+    int assume_no_missing,
     float *out,
     const char **error_message)
 {
@@ -1148,7 +1149,7 @@ decode_layout2_dosage_into_impl(
             uint32_t raw0 = read_u16_le(bits);
             uint32_t raw1 = read_u16_le(bits + 2);
             bits += 4;
-            if (info.ploidy_bytes[sample] & 0x80U) {
+            if (!assume_no_missing && (info.ploidy_bytes[sample] & 0x80U)) {
                 out[sample] = NAN;
             } else {
                 out[sample] = 2.0f - ((float)(raw0 + raw1) * (1.0f / 65535.0f));
@@ -1167,7 +1168,7 @@ decode_layout2_dosage_into_impl(
             uint32_t raw0 = read_u16_le(bits);
             uint32_t raw1 = read_u16_le(bits + 2);
             bits += 4;
-            if (info.ploidy_bytes[sample] & 0x80U) {
+            if (!assume_no_missing && (info.ploidy_bytes[sample] & 0x80U)) {
                 out[sample] = NAN;
             } else {
                 float p0 = (float)raw0 * (1.0f / 65535.0f);
@@ -1188,7 +1189,7 @@ decode_layout2_dosage_into_impl(
             uint32_t raw0 = bits[0];
             uint32_t raw1 = bits[1];
             bits += 2;
-            if (info.ploidy_bytes[sample] & 0x80U) {
+            if (!assume_no_missing && (info.ploidy_bytes[sample] & 0x80U)) {
                 out[sample] = NAN;
             } else {
                 out[sample] = 2.0f - ((float)(raw0 + raw1) * (1.0f / 255.0f));
@@ -1207,7 +1208,7 @@ decode_layout2_dosage_into_impl(
             uint32_t raw0 = bits[0];
             uint32_t raw1 = bits[1];
             bits += 2;
-            if (info.ploidy_bytes[sample] & 0x80U) {
+            if (!assume_no_missing && (info.ploidy_bytes[sample] & 0x80U)) {
                 out[sample] = NAN;
             } else {
                 float p0 = (float)raw0 * (1.0f / 255.0f);
@@ -1222,7 +1223,7 @@ decode_layout2_dosage_into_impl(
     for (uint32_t sample = 0; sample < info.n_samples; sample++) {
         uint8_t ploidy_byte = info.ploidy_bytes[sample];
         uint32_t ploidy = (uint32_t)(ploidy_byte & 0x3FU);
-        int missing = (ploidy_byte & 0x80U) != 0;
+        int missing = !assume_no_missing && (ploidy_byte & 0x80U);
         double dosage = 0.0;
 
         if (ploidy < info.min_ploidy || ploidy > info.max_ploidy) {
@@ -1288,6 +1289,7 @@ decode_layout2_dosage_into(
     Py_ssize_t data_len,
     uint32_t expected_samples,
     uint16_t expected_alleles,
+    int assume_no_missing,
     float *out)
 {
     const char *error_message = NULL;
@@ -1296,6 +1298,7 @@ decode_layout2_dosage_into(
         data_len,
         expected_samples,
         expected_alleles,
+        assume_no_missing,
         out,
         &error_message);
     if (status < 0) {
@@ -1321,6 +1324,7 @@ typedef struct {
     uint32_t output_width;
     uint32_t required_output_width;
     int return_probabilities;
+    int assume_no_missing;
     char *non_diploid_rows;
     float *out;
     BgenLibdeflateApi *libdeflate;
@@ -1547,6 +1551,7 @@ bgen_decode_worker(void *argument)
                 payload_len,
                 task->n_samples,
                 record->n_alleles,
+                task->assume_no_missing,
                 task->out + (uint64_t)variant * (uint64_t)task->n_samples,
                 &task->error_message);
             if (decode_status == 0 && task->non_diploid_rows != NULL) {
@@ -1580,7 +1585,8 @@ read_file_parallel(
     BgenLibdeflateApi *libdeflate,
     BgenZstdApi *zstd,
     uint32_t *required_output_width,
-    char *non_diploid_rows)
+    char *non_diploid_rows,
+    int assume_no_missing)
 {
     struct stat file_stat;
     size_t file_size;
@@ -1643,6 +1649,7 @@ read_file_parallel(
         task->required_output_width = output_width;
         task->return_probabilities = return_probabilities;
         task->non_diploid_rows = non_diploid_rows;
+        task->assume_no_missing = assume_no_missing;
         task->out = out;
         task->libdeflate = libdeflate;
         task->zstd = zstd;
@@ -1816,7 +1823,8 @@ read_file_probabilities(PyObject *self, PyObject *args)
                     libdeflate,
                     zstd,
                     &required_width,
-                    NULL);
+                    NULL,
+                    0);
                 if (parallel_status < 0) {
                     goto error;
                 }
@@ -1930,6 +1938,7 @@ read_file_dosage(PyObject *self, PyObject *args)
     const char *path;
     int threads = 1;
     int report_ploidy = 0;
+    int assume_no_missing = 0;
     PyObject *ploidy_flags = NULL;
     char *non_diploid_rows = NULL;
     FILE *fp = NULL;
@@ -1949,7 +1958,7 @@ read_file_dosage(PyObject *self, PyObject *args)
     BgenLibdeflateDecompressor *libdeflate_decompressor = NULL;
     BgenZstdApi *zstd = bgen_get_zstd_api();
 
-    if (!PyArg_ParseTuple(args, "s|ip", &path, &threads, &report_ploidy)) {
+    if (!PyArg_ParseTuple(args, "s|ipp", &path, &threads, &report_ploidy, &assume_no_missing)) {
         return NULL;
     }
     if (threads < 1) {
@@ -1990,7 +1999,8 @@ read_file_dosage(PyObject *self, PyObject *args)
     }
     if (threads > 1) {
 #if BGEN_HAVE_PTHREAD && BGEN_HAVE_MMAP
-        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd, NULL, non_diploid_rows) < 0) {
+        if (read_file_parallel(fp, &header, out, 1, 0, threads, libdeflate, zstd,
+                               NULL, non_diploid_rows, assume_no_missing) < 0) {
             goto error;
         }
         goto success;
@@ -2031,6 +2041,7 @@ read_file_dosage(PyObject *self, PyObject *args)
                 payload_len,
                 header.n_samples,
                 n_alleles,
+                assume_no_missing,
                 out + (uint64_t)variant * (uint64_t)header.n_samples) < 0) {
             goto error;
         }

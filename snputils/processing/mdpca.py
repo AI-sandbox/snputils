@@ -73,7 +73,9 @@ class mdPCA:
                 - `'cov_matrix_imputation_ils'`: 
                     The method of 'cov_matrix_imputation', but where afterwards missing samples are re-projected onto the space 
                     given by 'cov_matrix_imputation' using the same iterative method on the original covariance matrix just 
-                    as done in 'regularized_optimization_ils'.
+                    as done in 'regularized_optimization_ils'. To project incomplete samples, the scores of the
+                    fully observed samples must span all requested components.
+                    A pair of samples needs at least two shared SNPs to contribute to the projection.
                 - `'nonmissing_pca_ils'`: 
                     The method of 'weighted_cov_pca' on the non-missing samples, followed by the projection of missing samples onto 
                     the space given by 'weighted_cov_pca' using the same iterative method on the original covariance matrix just as 
@@ -141,8 +143,9 @@ class mdPCA:
             rsid_or_chrompos (int, default=2): 
                 Format indicator for SNP IDs in `self.__X_new_`. Use 1 for `rsID` format or 2 for `chromosome_position`.
             percent_vals_masked (float, default=0): 
-                Percentage of values in the covariance matrix to be masked and then imputed. Only applicable if `method` is 
-                `'cov_matrix_imputation'` or `'cov_matrix_imputation_ils'`.
+                Percentage of covariance entries to mask for `'cov_matrix_imputation'` or
+                `'cov_matrix_imputation_ils'`. Both entries of each off-diagonal pair are
+                masked together, rounding down if the cutoff would split a pair.
         """
         if labels is not None:
             if labels_file is not None:
@@ -747,7 +750,7 @@ class mdPCA:
         strength_matrix /= X.shape[1]
         return strength_matrix
 
-    def _cov(self, x):
+    def _cov(self, x, *, preserve_undefined=False):
         ddof = 1
         x = np.ma.array(x, ndmin=2, copy=True, dtype=np.float32)
         xmask = np.ma.getmaskarray(x)
@@ -755,11 +758,12 @@ class mdPCA:
         fact = np.dot(xnotmask, xnotmask.T) * 1. - ddof
         del xnotmask
         gc.collect()
-        result = (np.ma.dot(x, x.T, strict=False) / fact).squeeze()
+        result = np.ma.dot(x, x.T, strict=False) / fact
         x = x.data
         strength_vec = self._compute_strength_vector(x)
         strength_mat = self._compute_strength_matrix(x)
-        return result.data, strength_vec, strength_mat
+        covariance = result.filled(np.nan) if preserve_undefined else result.data.squeeze()
+        return covariance, strength_vec, strength_mat
 
     @staticmethod
     def _demean(S, w):
@@ -772,15 +776,22 @@ class mdPCA:
 
     @staticmethod
     def _iterative_svd_matrix_completion(cov):
-        num_masked = np.isnan(cov).sum()
-        if num_masked > 0:
+        missing = np.isnan(cov)
+        if missing.any():
             start_time = time.time()
             start_rank = 1
             end_rank = 10
             rank = 5
             choose_best = True
             num_cores = 5
-            cov_complete = IterativeSVD(start_rank=start_rank, end_rank=end_rank, rank=rank, choose_best=choose_best, num_cores=num_cores).fit_transform(cov)
+            cov_complete = IterativeSVD(
+                start_rank=start_rank, end_rank=end_rank, rank=rank, choose_best=choose_best,
+                num_cores=num_cores, symmetric=True,
+            ).fit_transform(cov)
+            # A missing pair gets one estimate. If its mirror was observed, use that value.
+            mirror = cov.T[missing]
+            pair_mean = (cov_complete[missing] + cov_complete.T[missing]) / 2
+            cov_complete[missing] = np.where(np.isnan(mirror), pair_mean, mirror)
             logging.info("Iterative SVD --- %s seconds ---" % (time.time() - start_time))
         else:
             cov_complete = cov
@@ -832,14 +843,25 @@ class mdPCA:
         masked_inds_val = sorted(list(set(masked_inds_new) - set(masked_inds)))
         return X_incomplete, masked_inds_val
 
-    @staticmethod    
+    @staticmethod
     def _create_cov_mask(cov, strength_mat, percent_vals_masked):
-        cov_flattened = cov.reshape(-1).copy()
-        num_vals_masked = int(percent_vals_masked * len(cov_flattened) / 100)
-        pos_masked = strength_mat.reshape(-1).argsort()[:num_vals_masked]
-        cov_flattened[pos_masked] = np.nan
-        cov_masked = cov_flattened.reshape(cov.shape)
-        return cov_masked
+        """Mask the weakest pairs, rounding down if the cell budget would split a pair."""
+        masked = cov.copy()
+        budget = int(percent_vals_masked * cov.size / 100)
+        if budget == 0:
+            return masked
+
+        rows, cols = np.triu_indices_from(cov)
+        # At a given overlap, visit disjoint pairs first. Within each round
+        # a sample i has just one partner j with (i + j) % n equal to that round.
+        pair_round = (rows + cols) % len(cov)
+        order = np.lexsort((pair_round, strength_mat[rows, cols]))[:budget]
+        pair_sizes = np.where(rows[order] == cols[order], 1, 2)
+        selected = order[np.cumsum(pair_sizes) <= budget]
+        i, j = rows[selected], cols[selected]
+        masked[i, j] = np.nan
+        masked[j, i] = np.nan
+        return masked
 
     def _regularized_optimization_ils(self, X_incomplete, covariance_matrix_file, n_components):
         def run_cov_matrix_regularized_optimization_ils(X_incomplete, covariance_matrix_file):
@@ -904,82 +926,79 @@ class mdPCA:
         T = _compute_projection_regularized_optimization_ils(X_incomplete, S, S_robust, n_components)
         return T
 
-    def _cov_matrix_imputation(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
+    def _complete_covariance(self, X_incomplete, percent_vals_masked):
         start_time = time.time()
-        X_incomplete = np.ma.array(X_incomplete, mask=np.isnan(X_incomplete))
-        S, strength_vec, strength_mat = self._cov(X_incomplete)
-        logging.info("Covariance Matrix --- %s seconds ---" % (time.time() - start_time))
-        S_masked = self._create_cov_mask(S, strength_mat, percent_vals_masked)
-        S = self._iterative_svd_matrix_completion(S_masked)
-        weights = np.ones(len(strength_vec))
-        weights_normalized = weights / weights.sum()
-        S = self._demean(S, weights_normalized)
-        W = np.diag(weights)
-        WSW = np.matmul(np.matmul(np.sqrt(W), S), np.sqrt(W))
+        masked = np.ma.masked_invalid(X_incomplete)
+        observed, _, strength = self._cov(masked, preserve_undefined=True)
+        logging.info("Covariance Matrix --- %s seconds ---", time.time() - start_time)
+        to_impute = self._create_cov_mask(observed, strength, percent_vals_masked)
+        cross_covariances = np.isfinite(to_impute)
+        np.fill_diagonal(cross_covariances, False)
+        isolated = np.flatnonzero(~cross_covariances.any(axis=1))
+        if isolated.size:
+            raise ValueError(
+                f"Sample at index {isolated[0]} has no observed covariance with another sample "
+                "after masking. Check SNP overlap or reduce percent_vals_masked."
+            )
+        completed = self._iterative_svd_matrix_completion(to_impute)
+        return observed, completed, strength
+
+    def _fit_completed_covariance(self, completed, covariance_matrix_file, n_components):
+        weights = np.full(len(completed), 1 / len(completed))
+        centered = self._demean(completed, weights)
         if covariance_matrix_file:
-            np.save(covariance_matrix_file, S.data)
+            np.save(covariance_matrix_file, centered)
         svd = TruncatedSVD(n_components, algorithm="arpack")
-        svd.fit(WSW)
-        U = np.matmul(svd.components_, np.linalg.inv(np.sqrt(W))).T
-        D = np.diag(np.sqrt(svd.singular_values_))
-        T = np.matmul(U, D)
-        total_var = np.trace(S)
+        svd.fit(centered.astype(np.float64, copy=False))
+        total_var = np.trace(centered)
         for i in range(n_components):
             pc_percentvar = 100 * svd.singular_values_[i] / total_var
             logging.info("Percent variance explained by the principal component %d: %s", i + 1, pc_percentvar)
-        return T
+        return svd.components_.T * np.sqrt(svd.singular_values_)
+
+    def _cov_matrix_imputation(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
+        _, completed, _ = self._complete_covariance(X_incomplete, percent_vals_masked)
+        return self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
 
     def _cov_matrix_imputation_ils(self, X_incomplete, percent_vals_masked, covariance_matrix_file, n_components):
-        
-        def run_cov_matrix_cov_matrix_imputation_ils(X_incomplete, covariance_matrix_file):
-            start_time = time.time()
-            X_incomplete = np.ma.array(X_incomplete, mask=np.isnan(X_incomplete))
-            S, strength_vec, strength_mat = self._cov(X_incomplete)
-            logging.info("Covariance Matrix --- %s seconds ---" % (time.time() - start_time))
-            S_masked = self._create_cov_mask(S, strength_mat, percent_vals_masked)
-            S = self._iterative_svd_matrix_completion(S_masked)
-            weights = np.ones(len(strength_vec))
-            weights_normalized = weights / weights.sum()
-            S = self._demean(S, weights_normalized)
-            W = np.diag(weights)
-            if covariance_matrix_file:
-                np.save(covariance_matrix_file, S.data)
-            return S, W
+        missing_counts = np.isnan(X_incomplete).sum(axis=1)
+        fitted = np.flatnonzero(missing_counts == 0)
+        if not fitted.size:
+            raise ValueError("cov_matrix_imputation_ils requires at least one fully observed sample.")
+        missing = np.flatnonzero(missing_counts)
+        if missing.size and fitted.size < n_components:
+            raise ValueError(
+                f"Projecting {n_components} components requires at least {n_components} fully observed samples, "
+                f"but found {fitted.size}."
+            )
 
-        def compute_projection_cov_matrix_imputation_ils(X_incomplete, S, W, n_components):
-            S, _, strength_mat = self._cov(np.ma.array(X_incomplete, mask=np.isnan(X_incomplete)))
-            S = self._demean(S, np.ones(S.shape[0]) / S.shape[0])
-            nonmissing = np.flatnonzero(np.isnan(X_incomplete).sum(axis=1) == 0)
-            missing = np.flatnonzero(np.isnan(X_incomplete).sum(axis=1) > 0)
-            missing_sorted = sorted(missing, key=lambda x: (~np.isnan(X_incomplete[x])).sum(), reverse=True)
-            svd = TruncatedSVD(n_components, algorithm="arpack")
-            WSW = np.matmul(np.matmul(np.sqrt(W), S), np.sqrt(W))
-            svd.fit(WSW)
-            U = np.matmul(svd.components_, np.linalg.inv(np.sqrt(W))).T
-            U_nonmissing = U[nonmissing]
-            D_nonmissing = np.diag(np.sqrt(svd.singular_values_))
-            T = np.zeros((X_incomplete.shape[0], n_components))
-            T_filled = np.matmul(U_nonmissing, D_nonmissing)
-            i_filled = nonmissing
-            T[nonmissing] = T_filled
-            for i in missing_sorted:
-                S_i = S[i][i_filled]
-                W_i = np.diag(strength_mat[i][i_filled])
-                A = np.matmul(W_i, T_filled)
-                b = np.matmul(W_i, S_i)
-                t = np.linalg.lstsq(A, b, rcond=None)[0]
-                T[i] = t
-                i_filled = np.append(i_filled, i)
-                T_filled = np.append(T_filled, [t], axis=0)
-            total_var = np.trace(S)
-            for i in range(n_components):
-                pc_percentvar = 100 * svd.singular_values_[i] / total_var
-                logging.info("Percent variance explained by the principal component %d: %s", i + 1, pc_percentvar)
-            return T
-        
-        S, W = run_cov_matrix_cov_matrix_imputation_ils(X_incomplete, covariance_matrix_file)
-        T = compute_projection_cov_matrix_imputation_ils(X_incomplete, S, W, n_components)
-        return T
+        observed, completed, strength = self._complete_covariance(X_incomplete, percent_vals_masked)
+        # Use imputed entries to compute centering offsets for incomplete rows.
+        # Only defined, originally observed covariances enter the least-squares fit.
+        undefined = np.isnan(observed)
+        observed[undefined] = completed[undefined]
+        self._demean(observed, np.full(len(observed), 1 / len(observed)))
+        observed[undefined] = np.nan
+
+        scores = self._fit_completed_covariance(completed, covariance_matrix_file, n_components)
+        for i in missing[np.argsort(missing_counts[missing], kind="stable")]:
+            neighbors = fitted[np.isfinite(observed[i, fitted])]
+            if not neighbors.size:
+                raise ValueError(f"Cannot project sample at index {i}: no previously fitted sample "
+                                 "shares at least two observed SNPs with it.")
+            weights = strength[i, neighbors]
+            projected, _, rank, _ = np.linalg.lstsq(
+                scores[neighbors] * weights[:, None], observed[i, neighbors] * weights, rcond=None
+            )
+            if rank < n_components:
+                raise ValueError(
+                    f"Cannot project sample at index {i}: the weighted sample scores have rank {rank} "
+                    f"for {n_components} requested components. Reduce n_components or include more "
+                    "independent fully observed samples."
+                )
+            scores[i] = projected
+            fitted = np.append(fitted, i)
+        return scores
 
     def _nonmissing_pca_ils(self, X_incomplete, covariance_matrix_file, n_components):
     

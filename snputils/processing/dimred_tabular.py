@@ -47,21 +47,51 @@ def embedding_column_names(
     return [f"{prefix}{i + 1}" for i in range(n_components)]
 
 
+def _pca_subset_indexer(subset, axis_size: int):
+    """Convert a prefix length, integer indices, or a boolean mask to a NumPy indexer."""
+    if subset is None:
+        return slice(None)
+    if isinstance(subset, (int, np.integer)) and not isinstance(subset, (bool, np.bool_)):
+        return slice(int(subset))
+
+    index = np.asarray(subset)
+    if index.ndim != 1:
+        raise ValueError("PCA subset must be a prefix length or a one-dimensional index or mask.")
+    if index.dtype.kind == "b":
+        if index.size != axis_size:
+            raise ValueError(f"PCA subset mask has length {index.size}, expected {axis_size}.")
+    elif index.dtype.kind not in "iu":
+        if index.size == 0 and isinstance(subset, (list, tuple)):
+            return np.empty(0, dtype=np.intp)
+        raise ValueError("PCA subset must contain integer indices or boolean values.")
+    return index
+
+
 def pca_row_haplotype_ids(
     snpobj: SNPObject,
     average_haplotypes: bool,
-    samples_subset: Optional[Union[int, Sequence[int]]] = None,
+    samples_subset: Optional[Union[int, Sequence[int], np.ndarray]] = None,
 ) -> List[str]:
     """
     Row identifiers aligned with :meth:`snputils.processing.pca.PCA.fit_transform` output rows.
 
     Each string uniquely identifies one row of the projection (one haplotype row when
     ``average_haplotypes`` is False). Format uses ``\"indID|haplotype\"`` with haplotype ``0`` or ``1``
-    when two haplotypes are expanded; use :func:`pca_row_individual_ids` for sample IDs alone.
+    when two haplotypes are expanded.
 
     Raises:
         ValueError: If ``snpobj.samples`` is missing while IDs are required for export.
     """
+    _, row_ids = _pca_row_ids(snpobj, average_haplotypes, samples_subset)
+    return row_ids
+
+
+def _pca_row_ids(
+    snpobj: SNPObject,
+    average_haplotypes: bool,
+    samples_subset: Optional[Union[int, Sequence[int], np.ndarray]],
+) -> tuple[List[str], List[str]]:
+    """Return the original sample ID and the haplotype label for each projection row."""
     if snpobj.samples is None:
         raise ValueError(
             "Cannot derive PCA row IDs: snpobj.samples is None. "
@@ -75,27 +105,18 @@ def pca_row_haplotype_ids(
         raise ValueError(
             f"Length of samples ({len(s)}) does not match genotype matrix ({gt.shape[1]} samples)."
         )
-    if isinstance(samples_subset, int):
-        s = s[: int(samples_subset)]
-    elif samples_subset is not None:
-        s = s[np.asarray(samples_subset, dtype=int)]
-
-    if gt.ndim == 2:
-        return [str(x) for x in s.tolist()]
-    if gt.ndim == 3:
-        if average_haplotypes:
-            return [str(x) for x in s.tolist()]
-        return [
-            f"{sample}|{haplotype}"
-            for sample in s
-            for haplotype in range(gt.shape[2])
-        ]
-    raise AssertionError(gt.ndim)
+    samples = s[_pca_subset_indexer(samples_subset, len(s))].tolist()
+    if gt.ndim == 2 or average_haplotypes:
+        return samples, samples
+    ploidy = gt.shape[2]
+    sample_ids = [sample for sample in samples for _ in range(ploidy)]
+    haplotype_ids = [f"{sample}|{i}" for sample in samples for i in range(ploidy)]
+    return sample_ids, haplotype_ids
 
 
 def pca_row_individual_ids(haplotype_row_ids: Sequence[str]) -> List[str]:
-    """Map haplotype-level row IDs to individual IDs (part before ``|`` when present)."""
-    return [h.split("|", 1)[0] if "|" in h else str(h) for h in haplotype_row_ids]
+    """Remove the final haplotype suffix from expanded row labels."""
+    return [str(h).rsplit("|", 1)[0] for h in haplotype_row_ids]
 
 
 def build_embedding_dataframe(

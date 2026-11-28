@@ -226,3 +226,260 @@ def test_embedding_dataframe_from_pca_after_transform_has_sample_ids():
 
     assert df["indID"].tolist() == ["s1", "s2", "s3"]
     assert ["PC1", "PC2"] == [c for c in df.columns if c.startswith("PC")]
+
+
+@pytest.mark.parametrize("order", [
+    [2, 0, 1], [1, 0], 2, np.array([2, 0, 1]),
+    [True, True, True], np.array([True, False, True]),
+])
+def test_transform_selects_cached_samples_and_preserves_ids(order):
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [1, 2, 0]]), samples=["A", "B", "C"])
+    pca = PCA(snpobj=snp)
+    rows = slice(order) if isinstance(order, int) else order
+    expected = pca.X_new_[rows].copy()
+    expected_ids = np.asarray(snp.samples)[rows].tolist()
+
+    np.testing.assert_allclose(pca.transform(samples_subset=order), expected, atol=1e-12)
+    assert pca.samples_ == expected_ids
+    np.testing.assert_allclose(pca.transform(), expected, atol=1e-12)
+    assert pca.samples_ == expected_ids
+
+
+def test_cached_projection_uses_last_object_and_preparation_options():
+    gt = np.random.default_rng(42).integers(0, 2, size=(6, 4, 2))
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"])
+    pca = PCA().fit(snp, snps_subset=[4, 1, 5])
+    reference = PCA().fit(snp, snps_subset=[4, 1, 5])
+    expected = reference.transform(snp, average_haplotypes=False, samples_subset=[3, 0], snps_subset=[4, 1, 5])
+
+    np.testing.assert_allclose(pca.transform(average_haplotypes=False, samples_subset=[3, 0]), expected)
+    assert pca.haplotypes_ == ["D|0", "D|1", "A|0", "A|1"]
+    other = SNPObject(genotypes=gt[:, ::-1], samples=["E", "F", "G", "H"])
+    expected = pca.transform(other, snps_subset=[4, 1, 5]).copy()
+    np.testing.assert_allclose(pca.transform(samples_subset=[2, 0]), expected[[2, 0]])
+    assert pca.samples_ == ["G", "E"]
+
+    # A failed projection must leave the last successful matrix and labels paired.
+    with pytest.raises(ValueError):
+        pca.transform(snps_subset=[0, 1])
+    np.testing.assert_allclose(pca.transform(), expected[[2, 0]])
+    assert pca.samples_ == ["G", "E"]
+
+
+@pytest.mark.parametrize("mode", ["dosage", "averaged", "expanded"])
+def test_pca_preserves_pipe_in_sample_ids(mode, tmp_path):
+    gt = np.random.default_rng(42).integers(0, 2, size=(4, 3, 2))
+    if mode == "dosage":
+        gt = gt.sum(axis=2)
+    samples = ["family|A", "family|B", "family|0"]
+    snp = SNPObject(genotypes=gt, samples=samples)
+    pca = PCA(snpobj=snp, average_haplotypes=mode == "averaged")
+    assert pca.samples_ == (np.repeat(samples, 2).tolist() if mode == "expanded" else samples)
+    pca.transform(samples_subset=[2, 0])
+    pca.transform()
+
+    expected = ["family|0", "family|A"]
+    if mode == "expanded":
+        haplotypes = [f"{sample}|{i}" for sample in expected for i in range(2)]
+        expected = [sample for sample in expected for _ in range(2)]
+    else:
+        haplotypes = expected
+    assert pca.samples_ == expected
+    assert pca.haplotypes_ == haplotypes
+
+    metadata = pd.DataFrame({"sample": samples, "batch": [1, 2, 3]})
+    frame = embedding_dataframe_from_model(pca, metadata=metadata, require_metadata_match=True)
+    assert frame["batch"].tolist() == ([3, 3, 1, 1] if mode == "expanded" else [3, 1])
+    path = tmp_path / "projection.tsv"
+    save_embedding_table_from_model(pca, path)
+    exported = pd.read_csv(path, sep="\t")
+    assert exported["indID"].tolist() == expected
+    if mode == "expanded":
+        assert exported["haplotype_id"].tolist() == haplotypes
+    else:
+        assert "haplotype_id" not in exported
+
+
+@pytest.mark.parametrize("subset", [[True, False], [[0, 1]], [1.5]])
+def test_pca_rejects_invalid_sample_subset(subset):
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [1, 2, 0]]), samples=["A", "B", "C"])
+    with pytest.raises(ValueError, match="subset|mask"):
+        PCA(snpobj=snp, samples_subset=subset)
+
+
+def test_pca_applies_snp_mask_to_genotypes_and_variant_metadata():
+    snp = SNPObject(
+        genotypes=np.array([[0, 1, 2], [1, 2, 1], [2, 1, 0]]),
+        samples=["A", "B", "C"],
+        variants_alt=["A", "C,G", "T"],
+    )
+    pca = PCA(snpobj=snp, samples_subset=np.array([2, 0]), snps_subset=np.array([True, False, True]))
+    np.testing.assert_array_equal(pca.X_, snp.genotypes[[0, 2]][:, [2, 0]].T)
+    assert pca.samples_ == ["C", "A"]
+
+
+@pytest.mark.parametrize("axis", ["samples", "variants"])
+def test_cached_projection_keeps_its_selection_after_default_changes(axis):
+    gt = np.array([[0, 1, 2], [1, 2, 0], [0, 0, 2], [2, 0, 1]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"])
+    pca = PCA(snpobj=snp)
+    original = pca.X_new_.copy()
+    if axis == "samples":
+        pca.samples_subset = [2, 0, 1]
+        scores = pca.transform(snps_subset=[0, 1, 2, 3])
+    else:
+        pca.snps_subset = [3, 0, 2, 1]
+        scores = pca.transform(samples_subset=[0, 1, 2])
+
+    np.testing.assert_allclose(scores, original, atol=1e-12)
+    assert embedding_dataframe_from_model(pca)["indID"].tolist() == ["A", "B", "C"]
+
+    # An explicit source uses the current model defaults.
+    if axis == "samples":
+        pca.transform(snp)
+        np.testing.assert_allclose(pca.X_new_, original[[2, 0, 1]], atol=1e-12)
+        assert pca.samples_ == ["C", "A", "B"]
+    else:
+        with pytest.raises(ValueError, match="fitted variant order"):
+            pca.transform(snp)
+
+
+@pytest.mark.parametrize("backend", ["sklearn", "pytorch"])
+def test_projection_rejects_wrong_feature_count_without_changing_cache(backend):
+    if backend == "pytorch":
+        pytest.importorskip("torch")
+    snp = SNPObject(genotypes=np.array([[0, 1, 2], [2, 1, 0], [1, 2, 0]]), samples=["A", "B", "C"])
+    model = PCA(snpobj=snp, backend=backend)
+    expected = np.asarray(model.X_new_).copy()
+    with pytest.raises(ValueError, match="1 feature.*expected 3"):
+        model.transform(snps_subset=[0])
+    np.testing.assert_allclose(model.transform(), expected, atol=1e-12)
+    assert model.samples_ == ["A", "B", "C"]
+    if backend == "pytorch":
+        with pytest.raises(ValueError, match="1 feature.*expected 3"):
+            model.pca.transform(model.X_[:, :1])
+
+
+@pytest.mark.parametrize("fit_method", ["fit", "fit_transform"])
+def test_projection_preserves_fitted_variant_selection(fit_method):
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0], [0, 0, 1]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"])
+    pca = PCA()
+    getattr(pca, fit_method)(snp, snps_subset=[0, 2, 3])
+    expected = pca.transform(snps_subset=[True, False, True, True], samples_subset=[2, 0]).copy()
+    for selection in ([3, 2, 0], [0, 1, 3]):
+        with pytest.raises(ValueError, match="fitted variant order"):
+            pca.transform(snps_subset=selection, samples_subset=[1, 2])
+        np.testing.assert_allclose(pca.transform(), expected)
+        assert pca.samples_ == ["C", "A"]
+
+
+def test_projection_checks_variant_ids_across_objects():
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"], variants_id=["a", "b", "c"])
+    pca = PCA().fit(snp, snps_subset=[2, 0])
+    expected = pca.transform().copy()
+    aligned = SNPObject(genotypes=gt[[2, 0]], samples=snp.samples, variants_id=["c", "a"])
+    np.testing.assert_allclose(pca.transform(aligned), expected)
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(aligned, snps_subset=[1, 0])
+    np.testing.assert_allclose(pca.transform(), expected)
+
+
+def test_projection_uses_fitted_coordinates_and_alleles_without_variant_ids():
+    gt = np.array([[0, 2, 1], [1, 0, 2], [2, 1, 0]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C"], variants_chrom=[1, 1, 1],
+                    variants_pos=[10, 20, 30], variants_ref=["A", "C", "T"], variants_alt=["C", "G", "A"])
+    pca = PCA().fit(snp, snps_subset=[2, 0])
+    expected = pca.transform().copy()
+    aligned = SNPObject(genotypes=gt[[2, 0]], samples=snp.samples, variants_chrom=["1", "1"],
+                        variants_pos=[30, 10], variants_ref=["T", "A"], variants_alt=["A", "C"])
+    np.testing.assert_allclose(pca.transform(aligned), expected)
+    aligned.variants_ref = ["G", "A"]
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(aligned)
+    np.testing.assert_allclose(pca.transform(), expected)
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+@pytest.mark.parametrize("store_source", [False, True])
+def test_load_pca_pickle_without_projection_cache(expanded, store_source):
+    import pickle
+
+    gt = np.array([[[0, 0], [1, 1]], [[0, 1], [0, 0]], [[1, 1], [0, 1]]])
+    samples = ["family|0", "family|B"]
+    snp = SNPObject(genotypes=gt, samples=samples)
+    model = PCA(snpobj=snp if store_source else None, average_haplotypes=not expanded)
+    if not store_source:
+        model.fit_transform(snp)
+    scores = model.X_new_.copy()
+    labels = model.haplotypes_.copy()
+    # These attributes were absent from pickles written before projection caching.
+    for key in ("_cached_input", "_cached_row_ids", "_fitted_variant_order", "_PCA__sample_row_ids"):
+        del vars(model)[key]
+
+    restored = pickle.loads(pickle.dumps(model))
+    expected_ids = np.repeat(samples, 2).tolist() if expanded else samples
+    assert restored.samples_ == expected_ids
+    np.testing.assert_allclose(restored.transform(), scores, atol=1e-12)
+    assert restored.haplotypes_ == labels
+    assert restored.samples_ == expected_ids
+    with pytest.raises(ValueError, match="Refit"):
+        restored.transform(snp, snps_subset=[2, 1, 0])
+    restored.fit(snp)
+    restored.transform(snps_subset=[0, 1, 2])
+    assert restored.samples_ == expected_ids
+
+
+def test_pickle_roundtrip_retains_fitted_variant_order():
+    import pickle
+
+    snp = SNPObject(genotypes=np.array([[0, 1], [1, 2], [2, 0]]), samples=["a", "b"])
+    model = PCA().fit(snp, snps_subset=[2, 0])
+    restored = pickle.loads(pickle.dumps(model))
+    with pytest.raises(ValueError, match="fitted variant order"):
+        restored.transform(snps_subset=[0, 2])
+    np.testing.assert_allclose(restored.transform(), model.transform())
+
+
+@pytest.mark.parametrize("metadata", [
+    {"variants_id": ["dup", "dup", "unique"]},
+    {"variants_chrom": ["1", "1", "1"], "variants_pos": [10, 10, 20]},
+])
+def test_projection_rejects_substitution_of_duplicate_variant(metadata):
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    snp = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], **metadata)
+    pca = PCA().fit(snp, snps_subset=[0, 2])
+    expected = pca.transform().copy()
+    with pytest.raises(ValueError, match="fitted variant order"):
+        pca.transform(snps_subset=[1, 2])
+    np.testing.assert_allclose(pca.transform(), expected)
+    np.testing.assert_allclose(pca.transform(snps_subset=[0, 2]), expected)
+
+
+@pytest.mark.parametrize("duplicate_in_fit", [True, False])
+@pytest.mark.parametrize("selected", [[1, 2], [0, 2]])
+def test_shifted_projection_requires_unique_ids_in_both_inputs(duplicate_in_fit, selected):
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    full = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], variants_id=["dup", "dup", "unique"])
+    small = SNPObject(genotypes=gt[[1, 2]], samples=full.samples, variants_id=["dup", "unique"])
+    if duplicate_in_fit:
+        model = PCA().fit(full, snps_subset=selected)
+        with pytest.raises(ValueError, match="fitted variant order"):
+            model.transform(small)
+    else:
+        model = PCA().fit(small)
+        with pytest.raises(ValueError, match="fitted variant order"):
+            model.transform(full, snps_subset=selected)
+
+
+def test_projection_disambiguates_duplicate_ids_with_coordinates():
+    gt = np.array([[0, 0, 2, 2], [2, 2, 0, 0], [0, 1, 1, 2]])
+    full = SNPObject(genotypes=gt, samples=["A", "B", "C", "D"], variants_id=["dup", "dup", "unique"])
+    small = SNPObject(genotypes=gt[[1, 2]], samples=full.samples, variants_id=["dup", "unique"])
+    full.variants_chrom = ["1", "1", "1"]
+    full.variants_pos = [10, 11, 20]
+    small.variants_chrom = ["1", "1"]
+    small.variants_pos = [11, 20]
+    model = PCA().fit(full, snps_subset=[1, 2])
+    np.testing.assert_allclose(model.transform(small), model.pca.transform(gt[[1, 2]].T))

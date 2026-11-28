@@ -629,7 +629,7 @@ class BCFWriter:
         del after
         filename = self.__filename
         if filename.suffix != ".bcf":
-            filename = filename.with_suffix(".bcf")
+            filename = filename.with_name(filename.name + ".bcf")
         self.__filename = filename
 
         data = self.__snpobj

@@ -205,19 +205,18 @@ class VCFWriter:
         elif genotypes.ndim not in (2, 3):
             raise ValueError("Sampleless VCF writes require an empty genotype array with a variant axis.")
 
-        file_extensions = (".vcf", ".bcf")
-        suffixes = self.__filename.suffixes
-        if len(suffixes) >= 2 and suffixes[-2:] == [".vcf", ".gz"]:
-            self.__file_extension = ".vcf.gz"
-            self.__filename = self.__filename.with_suffix("").with_suffix("")
-        elif self.__filename.suffix in file_extensions:
-            self.__file_extension = self.__filename.suffix
-            self.__filename = self.__filename.with_suffix('')
+        file = self.__filename
+        if file.name.lower().endswith(".vcf.gz"):
+            extension = file.name[-len(".vcf.gz"):]
+        elif file.suffix.lower() in (".vcf", ".bcf"):
+            extension = file.suffix
         else:
-            self.__file_extension = ".vcf"
+            extension = ".vcf"
+            file = file.with_name(file.name + extension)
 
         if chrom_partition:
             chroms = data.unique_chrom
+            prefix = file.name[:-len(extension)]
 
             for chrom in chroms:
                 data_chrom = data.filter_variants(chrom=chrom, inplace=False)
@@ -227,18 +226,19 @@ class VCFWriter:
                 else:
                     info_chrom = None
                 log.debug(f'Storing chromosome {chrom}')
-                self._write_chromosome_data(chrom, data_chrom, info_chrom)
+                chrom_file = file.with_name(f"{prefix}_{chrom}{extension}")
+                self._write_chromosome_data(chrom_file, data_chrom, info_chrom)
         else:
-            self._write_chromosome_data("All", data, variants_info)
+            self._write_chromosome_data(file, data, variants_info)
 
     def _write_chromosome_data(
-        self, chrom, data_chrom, variants_info: Optional[Sequence[str]] = None
+        self, file: Path, data_chrom, variants_info: Optional[Sequence[str]] = None
     ):
         """
         Writes the SNP data for a specific chromosome to a VCF file.
 
         Args:
-            chrom: The chromosome name.
+            file: The output path.
             data_chrom: The SNPObject instance containing the data for the chromosome.
             variants_info: Optional per-variant INFO strings; length must match variant count.
         """
@@ -251,12 +251,7 @@ class VCFWriter:
         qual_values = _normalize_qual_values(data_chrom)
         filter_values = _normalize_filter_values(data_chrom)
 
-        if chrom == "All":
-            file = self.__filename.with_suffix(self.__file_extension)
-        else:
-            file = self.__filename.parent / f"{self.__filename.stem}_{chrom}{self.__file_extension}"
-
-        if self.__file_extension == ".vcf.gz":
+        if file.suffix.lower() == ".gz":
             out = gzip.open(file, "wt", encoding="utf-8")
         else:
             out = open(file, "w")

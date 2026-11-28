@@ -81,6 +81,23 @@ def _single_sample_snpobj(alleles):
     )
 
 
+@pytest.mark.parametrize("suffix", [".vcf", ".vcf.gz", ""])
+def test_vcf_writer_preserves_dotted_prefix(tmp_path, suffix):
+    extension = suffix or ".vcf"
+    original = tmp_path / f"study{extension}"
+    _single_sample_snpobj([0, 0]).save_vcf(original)
+    original_bytes = original.read_bytes()
+
+    writer = VCFWriter(_single_sample_snpobj([1, 1]), tmp_path / f"study.filtered{suffix}")
+    writer.write()
+    writer.write(chrom_partition=True)
+
+    assert original.read_bytes() == original_bytes
+    for prefix in ("study.filtered", "study.filtered_1"):
+        observed = VCFReader(tmp_path / f"{prefix}{extension}").read(genotype_mode="dosage")
+        np.testing.assert_array_equal(observed.genotypes, [[2]])
+
+
 @pytest.mark.parametrize("dtype", ["S1", object])
 def test_vcf_writer_writes_byte_string_alleles(tmp_path, dtype):
     path = tmp_path / "bytes.vcf"

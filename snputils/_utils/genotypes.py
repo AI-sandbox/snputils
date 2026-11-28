@@ -15,6 +15,11 @@ _MULTIALLELIC_DOSAGE_ERROR = (
 )
 
 
+def _check_assume_biallelic(value: bool) -> None:
+    if not isinstance(value, (bool, np.bool_)):
+        raise TypeError("assume_biallelic must be a boolean.")
+
+
 @overload
 def normalize_genotype_mode(
     genotype_mode: str,

@@ -95,6 +95,11 @@ This can save work when reading only genotypes, especially with the Polars backe
 Both readers accept this option in `read` and `iter_read`. The default is `False`.
 Passing `True` for a multiallelic file can give incorrect genotypes.
 
+For a known-biallelic PGEN fileset, `read_pgen(path, fields=["GT"], assume_biallelic=True)`
+reads genotypes directly from the PGEN. The default is `False`, which checks allele
+counts when a PVAR is available. Filtered and streaming reads also accept the
+option and still use the metadata they need to resolve selectors.
+
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 
 **BGEN notes:** Genotype probabilities are stored on `SNPObject.calldata_gp` with shape `(n_snps, n_samples, n_probs)`. Hard calls are not inferred during reads. Mixed-width BGEN records are padded with `NaN` columns.

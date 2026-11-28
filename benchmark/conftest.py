@@ -29,7 +29,7 @@ def pytest_addoption(parser):
         "--assume-biallelic",
         action=BooleanOptionalAction,
         default=True,
-        help="Skip ALT checks in timed snputils VCF reads (default for the biallelic chr22 benchmark).",
+        help="Skip ALT checks in timed snputils VCF and PGEN reads (default for the biallelic chr22 benchmark).",
     )
     parser.addoption(
         "--genotype-mode",

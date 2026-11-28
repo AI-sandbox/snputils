@@ -404,6 +404,35 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
 
 
+@pytest.mark.parametrize("mode", ["dosage", "phased"])
+def test_pgen_assume_biallelic_skips_allele_checks(tmp_path, monkeypatch, mode):
+    prefix = tmp_path / "biallelic"
+    calls = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]], dtype=np.int8)
+    _toy_snpobj(calls).save_pgen(prefix)
+    expected = read_pgen(prefix, fields=["GT"], genotype_mode=mode).genotypes
+
+    def unexpected_check(*args, **kwargs):
+        pytest.fail("Trusted genotype reads should skip PVAR allele-count checks.")
+
+    monkeypatch.setattr(pgen_module, "_find_pvar_path", unexpected_check)
+    options = dict(fields=["GT"], genotype_mode=mode, assume_biallelic=True)
+    np.testing.assert_array_equal(read_pgen(prefix, **options).genotypes, expected)
+
+    monkeypatch.undo()
+    string_methods = type(pgen_module.pl.col("ALT").str)
+    monkeypatch.setattr(string_methods, "count_matches", unexpected_check)
+    chunks = PGENReader(prefix).iter_read(variant_idxs=[1, 0], chunk_size=1, **options)
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected[::-1])
+
+
+def test_pgen_assume_biallelic_requires_boolean(tmp_path):
+    reader = PGENReader(tmp_path / "unused")
+    with pytest.raises(TypeError, match="assume_biallelic"):
+        reader.read(assume_biallelic="False")
+    with pytest.raises(TypeError, match="assume_biallelic"):
+        next(reader.iter_read(assume_biallelic="False"))
+
+
 @pytest.mark.parametrize("threads", [1, 2])
 def test_pgen_dosage_checks_only_selected_variants(tmp_path, threads):
     prefix = tmp_path / "mixed_alleles"
@@ -471,6 +500,8 @@ def test_pgen_multiallelic_modes_and_parallel_allele_offsets(
 
     with pytest.raises(ValueError, match="dosage.*biallelic"):
         PGENReader(prefix).read(fields=["GT"], genotype_mode="dosage")
+    with pytest.raises(ValueError, match="assume_biallelic=False"):
+        read_pgen(prefix, fields=["GT"], assume_biallelic=True)
 
     phased = PGENReader(prefix).read(fields=["GT"], genotype_mode="phased")
     np.testing.assert_array_equal(

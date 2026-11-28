@@ -1,12 +1,17 @@
+from functools import partial
+
 import pytest
 import numpy as np
 from .utils import create_benchmark_test
 
 
-def read_pgen_snputils(path, genotype_mode="dosage"):
+def read_pgen_snputils(path, genotype_mode="dosage", *, assume_biallelic=False):
     """Read PGEN file using snputils"""
     import snputils
-    return snputils.read_pgen(path, genotype_mode=genotype_mode, fields=["GT"], chromosome_ploidy="autosomal").genotypes
+    return snputils.read_pgen(
+        path, genotype_mode=genotype_mode, fields=["GT"], chromosome_ploidy="autosomal",
+        assume_biallelic=assume_biallelic,
+    ).genotypes
 
 
 def read_pgen_pgenlib(path, genotype_mode="dosage"):
@@ -35,11 +40,16 @@ READERS = [
 
 @pytest.mark.benchmark(group="PGEN-readers", warmup=False)
 @pytest.mark.parametrize("reader,name", READERS)
-def test_pgen_readers(benchmark, reader, name, path, memory_profile, reader_name, genotype_mode):
+def test_pgen_readers(
+    benchmark, reader, name, path, memory_profile, reader_name, genotype_mode, assume_biallelic,
+):
     """Benchmark readers and verify output"""
     if reader_name is not None and name != reader_name:
         pytest.skip(f"Skipping {name}; --reader-name={reader_name} requested")
     ref_array = None if memory_profile else read_pgen_snputils(path, genotype_mode=genotype_mode)
+    if reader is read_pgen_snputils:
+        reader = partial(reader, assume_biallelic=assume_biallelic)
+        benchmark.extra_info["assume_biallelic"] = assume_biallelic
     create_benchmark_test(
         benchmark,
         reader,

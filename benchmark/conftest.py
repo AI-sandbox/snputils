@@ -32,6 +32,11 @@ def pytest_addoption(parser):
         help="Skip ALT checks in timed snputils VCF reads (default for the biallelic chr22 benchmark).",
     )
     parser.addoption(
+        "--check-missing",
+        action="store_true",
+        help="Check missing genotypes in timed snputils BGEN dosage reads (the chr22 input has none).",
+    )
+    parser.addoption(
         "--genotype-mode",
         action="store",
         default="dosage",
@@ -67,6 +72,11 @@ def reader_name(request):
 @pytest.fixture
 def assume_biallelic(request):
     return request.config.getoption("--assume-biallelic")
+
+
+@pytest.fixture
+def assume_no_missing(request):
+    return not request.config.getoption("--check-missing")
 
 
 @pytest.fixture

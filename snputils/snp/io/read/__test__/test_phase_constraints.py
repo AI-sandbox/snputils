@@ -350,7 +350,45 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
 
 
-def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(
+@pytest.mark.parametrize("threads", [1, 2])
+def test_pgen_dosage_checks_only_selected_variants(tmp_path, threads):
+    prefix = tmp_path / "mixed_alleles"
+    with pg.PgenWriter(
+        str(prefix.with_suffix(".pgen")).encode(), sample_ct=2, variant_ct=4,
+        hardcall_phase_present=True, allele_ct_limit=3,
+    ) as writer:
+        for alleles, count in [([0, 1, 1, 1], 2), ([1, 2, 2, 2], 3),
+                               ([0, 0, 0, 1], 2), ([0, 1, 0, 0], 2)]:
+            writer.append_alleles(np.array(alleles, dtype=np.int32), all_phased=True, allele_ct=count)
+    prefix.with_suffix(".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n1\t10\tsnp1\tA\tG\n1\t20\tmulti\tA\tG,C\n"
+        "1\t30\tsnp2\tA\tG\n1\t40\tsnp3\tA\tG\n"
+    )
+    prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
+    reader = PGENReader(prefix)
+    options = dict(fields=["GT"], genotype_mode="dosage", threads=threads)
+    result = reader.read(variant_ids=["snp1", "snp2"], **options)
+    np.testing.assert_array_equal(result.genotypes, [[1, 2], [0, 1]])
+    chunks = reader.iter_read(chunk_size=1, variant_idxs=[2, 0], **options)
+    np.testing.assert_array_equal(np.concatenate([c.genotypes for c in chunks]), [[0, 1], [1, 2]])
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        reader.read(variant_ids=["multi"], **options)
+
+
+def test_pgen_dosage_checks_declared_alleles_even_when_alt2_is_unobserved(tmp_path):
+    prefix = tmp_path / "unobserved"
+    source = _toy_snpobj(np.array([[0, 1], [1, 2]], dtype=np.int8))
+    source.variants_alt = np.array(["G", "T,A"])
+    source.save_pgen(prefix)
+    reader = PGENReader(prefix)
+    for selectors in ({}, {"variant_ids": ["rs2"]}):
+        with pytest.raises(ValueError, match="dosage.*biallelic"):
+            reader.read(fields=["GT"], genotype_mode="dosage", **selectors)
+    selected = reader.read(fields=["GT"], variant_ids=["rs1"])
+    np.testing.assert_array_equal(selected.genotypes, [[0, 1]])
+
+
+def test_pgen_multiallelic_modes_and_parallel_allele_offsets(
     tmp_path: Path,
     monkeypatch,
 ):

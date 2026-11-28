@@ -67,7 +67,7 @@ class BGENWriter:
         """
         output = self.__filename
         if output.suffix != ".bgen":
-            output = output.with_suffix(".bgen")
+            output = output.with_name(output.name + ".bgen")
 
         probabilities = self._probabilities(phased)
         if probabilities.ndim != 3:

@@ -22,7 +22,11 @@ class BEDWriter:
 
     def __init__(self, snpobj: SNPObject, filename: str):
         self.__snpobj = snpobj.copy()
-        self.__filename = Path(filename)
+        path = Path(filename)
+        if path.suffix in (".bed", ".bim", ".fam"):
+            self.__filename = path.with_suffix(".bed")
+        else:
+            self.__filename = path.with_name(path.name + ".bed")
 
     def write(
             self,
@@ -46,10 +50,6 @@ class BEDWriter:
             sample_phenotype (optional): PLINK phenotype value per sample, or a scalar used for all samples.
                 Defaults to ``-9`` for all samples.
         """
-        # Save .bed file
-        if self.__filename.suffix != '.bed':
-            self.__filename = self.__filename.with_suffix('.bed')
-
         log.info(f"Writing .bed file: {self.__filename}")
 
         # pgenlib expects a numeric hardcall matrix in (samples, variants) order.
@@ -90,12 +90,9 @@ class BEDWriter:
 
         log.info(f"Finished writing .bed file: {self.__filename}")
 
-        # Remove .bed from the file name
-        if self.__filename.suffix == '.bed':
-            self.__filename = self.__filename.with_suffix('')
-
         # Save .fam file
-        log.info(f"Writing .fam file: {self.__filename}")
+        fam_path = self.__filename.with_suffix(".fam")
+        log.info(f"Writing .fam file: {fam_path}")
 
         # Fill .fam file
         fam_file = pd.DataFrame(columns=['fid', 'iid', 'father', 'mother', 'gender', 'trait'])
@@ -118,11 +115,12 @@ class BEDWriter:
         fam_file['trait'] = self._coerce_phenotypes(sample_phenotype, len(self.__snpobj.samples))
 
         # Save .fam file
-        fam_file.to_csv(self.__filename.with_suffix('.fam'), sep='\t', index=False, header=False)
-        log.info(f"Finished writing .fam file: {self.__filename}")
+        fam_file.to_csv(fam_path, sep='\t', index=False, header=False)
+        log.info(f"Finished writing .fam file: {fam_path}")
 
         # Save .bim file
-        log.info(f"Writing .bim file: {self.__filename}")
+        bim_path = self.__filename.with_suffix(".bim")
+        log.info(f"Writing .bim file: {bim_path}")
 
         # Fill .bim file
         bim_file = pd.DataFrame(columns=['chrom', 'snp', 'cm', 'pos', 'a0', 'a1'])
@@ -134,8 +132,8 @@ class BEDWriter:
         bim_file['a1'] = self.__snpobj.variants_ref
 
         # Save .bim file
-        bim_file.to_csv(self.__filename.with_suffix('.bim'), sep='\t', index=False, header=False)
-        log.info(f"Finished writing .bim file: {self.__filename}")
+        bim_file.to_csv(bim_path, sep='\t', index=False, header=False)
+        log.info(f"Finished writing .bim file: {bim_path}")
 
     @staticmethod
     def _coerce_centimorgans(

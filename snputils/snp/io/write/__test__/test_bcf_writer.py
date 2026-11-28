@@ -50,6 +50,34 @@ def test_bcf_writer_roundtrip(tmp_path):
     np.testing.assert_allclose(observed.variants_qual, snpobj.variants_qual, equal_nan=True)
     np.testing.assert_array_equal(observed.variants_filter_pass, np.array([True, True]))
 
+@pytest.mark.parametrize("extension", ["bcf", "bgen"])
+def test_binary_export_keeps_dotted_prefix_and_original_file(tmp_path, extension):
+    from snputils import read_snp
+
+    original = tmp_path / f"cohort.{extension}"
+    source = SNPObject(
+        genotypes=np.array([[[0, 1]], [[1, 1]]], dtype=np.int8),
+        samples=np.array(["s1"]),
+        variants_chrom=np.array(["1", "1"]),
+        variants_pos=np.array([10, 20]),
+        variants_id=np.array(["v1", "v2"]),
+        variants_ref=np.array(["A", "C"]),
+        variants_alt=np.array(["G", "T"]),
+    )
+    source.save(original)
+    original_bytes = original.read_bytes()
+    filtered = source.filter_variants(indexes=[1])
+    if extension == "bcf":
+        filtered.save_bcf(tmp_path / "cohort.filtered")
+    else:
+        filtered.save_bgen(tmp_path / "cohort.filtered")
+
+    assert original.read_bytes() == original_bytes
+    result = read_snp(tmp_path / f"cohort.filtered.{extension}")
+    np.testing.assert_array_equal(result.variants_id, ["v2"])
+    np.testing.assert_array_equal(result.dosage(), [[2]])
+
+
 def test_bcf_writer_phased(tmp_path):
     output_path = tmp_path / "phased.bcf"
 

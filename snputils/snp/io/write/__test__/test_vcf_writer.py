@@ -1,3 +1,7 @@
+import gzip
+import shutil
+import subprocess
+
 import numpy as np
 import pytest
 
@@ -79,6 +83,42 @@ def _single_sample_snpobj(alleles):
         variants_id=np.array(["rs1"]),
         variants_pos=np.array([100]),
     )
+
+
+def test_compressed_vcf_save_supports_indexed_region_queries(tmp_path):
+    source = _single_sample_snpobj([0, 1])
+    # One long record crosses a BGZF block boundary.
+    source.variants_info = np.array(["NOTE=" + "A" * 70000])
+    path = tmp_path / "cohort.filtered.vcf.gz"
+    source.save(path)
+    data = path.read_bytes()
+    assert data[12:16] == b"BC\x02\x00"
+    next_block = int.from_bytes(data[16:18], "little") + 1
+    assert data[next_block + 12:next_block + 16] == b"BC\x02\x00"
+    with gzip.open(path, "rt") as handle:
+        record = next(line for line in handle if not line.startswith("#"))
+    assert record.rstrip().endswith(source.variants_info[0] + "\tGT\t0/1")
+    if shutil.which("tabix"):
+        subprocess.run(["tabix", "-p", "vcf", path], check=True)
+        indexed = subprocess.check_output(["tabix", path, "1:100-100"], text=True)
+        assert indexed == record
+
+
+@pytest.mark.parametrize("suffix", [".vcf", ".vcf.gz", ""])
+def test_vcf_writer_preserves_dotted_prefix(tmp_path, suffix):
+    extension = suffix or ".vcf"
+    original = tmp_path / f"study{extension}"
+    _single_sample_snpobj([0, 0]).save_vcf(original)
+    original_bytes = original.read_bytes()
+
+    writer = VCFWriter(_single_sample_snpobj([1, 1]), tmp_path / f"study.filtered{suffix}")
+    writer.write()
+    writer.write(chrom_partition=True)
+
+    assert original.read_bytes() == original_bytes
+    for prefix in ("study.filtered", "study.filtered_1"):
+        observed = VCFReader(tmp_path / f"{prefix}{extension}").read(genotype_mode="dosage")
+        np.testing.assert_array_equal(observed.genotypes, [[2]])
 
 
 @pytest.mark.parametrize("dtype", ["S1", object])

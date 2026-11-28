@@ -12,12 +12,15 @@ from snputils._utils.genotypes import (
     ExplicitGenotypeMode,
     GenotypeMode,
     _MULTIALLELIC_DOSAGE_ERROR,
+    _check_assume_biallelic,
     normalize_genotype_mode,
     sum_diploid_alleles,
 )
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.read._plink_samples import open_plink_text, read_sample_table, select_samples
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
+    UnphasedHeterozygoteError,
     estimate_phased_alleles_peak_bytes,
     read_phased_alleles,
     read_phased_alleles_into,
@@ -60,16 +63,6 @@ def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
     return value
 
 
-def _open_textfile(filename):
-    if filename.endswith(".zst"):
-        import zstandard as zstd
-        return zstd.open(filename, "rt", encoding="utf-8")
-    elif filename.endswith(".gz"):
-        import gzip
-        return gzip.open(filename, "rt", encoding="utf-8")
-    return open(filename, "rt", encoding="utf-8")
-
-
 def _detect_pvar_separator(line: str) -> str:
     if "\t" in line:
         return "\t"
@@ -93,46 +86,14 @@ def _open_pgen_reader(
     raw_sample_ct: Optional[int],
     variant_ct: Optional[int],
     sample_subset: Optional[np.ndarray],
-    genotype_mode: GenotypeMode,
-    allele_idx_offsets: Optional[np.ndarray] = None,
-) -> tuple[Any, bool, Optional[np.ndarray]]:
-    """Open the biallelic fast path first; consult PVAR only after PGEN reports multiallelic data."""
-    reader_kwargs = {
-        "raw_sample_ct": raw_sample_ct,
-        "variant_ct": variant_ct,
-        "sample_subset": sample_subset,
-    }
-    if allele_idx_offsets is not None:
-        return (
-            pg.PgenReader(
-                str.encode(filename_noext + ".pgen"),
-                allele_idx_offsets=allele_idx_offsets,
-                **reader_kwargs,
-            ),
-            True,
-            allele_idx_offsets,
-        )
-    try:
-        return pg.PgenReader(str.encode(filename_noext + ".pgen"), **reader_kwargs), False, None
-    except RuntimeError as exc:
-        if "multiallelic variants present" not in str(exc):
-            raise
-        if genotype_mode == "dosage":
-            raise ValueError(_MULTIALLELIC_DOSAGE_ERROR) from exc
-
-    pvar_filename = _find_pvar_path(filename_noext)
-    if pvar_filename is None:
-        raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
-    with pg.PvarReader(str.encode(pvar_filename)) as pvar_reader:
-        allele_idx_offsets = pvar_reader.get_allele_idx_offsets()
-    return (
-        pg.PgenReader(
-            str.encode(filename_noext + ".pgen"),
-            allele_idx_offsets=allele_idx_offsets,
-            **reader_kwargs,
-        ),
-        True,
-        allele_idx_offsets,
+    allele_idx_offsets: Optional[np.ndarray],
+) -> pg.PgenReader:
+    return pg.PgenReader(
+        str.encode(filename_noext + ".pgen"),
+        raw_sample_ct=raw_sample_ct,
+        variant_ct=variant_ct,
+        sample_subset=sample_subset,
+        allele_idx_offsets=allele_idx_offsets,
     )
 
 
@@ -146,6 +107,7 @@ def _read_dosage_parallel(
     num_variants: int,
     num_samples: int,
     threads: int,
+    allele_idx_offsets: Optional[np.ndarray],
 ) -> np.ndarray:
     """Decode ordered biallelic hardcalls with independent pgenlib readers."""
     genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
@@ -165,16 +127,14 @@ def _read_dosage_parallel(
         output_stop = int(output_boundaries[worker_idx + 1])
         partition_variant_idxs = variant_idxs[output_start:output_stop]
         partition_output = genotypes[output_start:output_stop]
-        reader, contains_multiallelic, _ = _open_pgen_reader(
+        reader = _open_pgen_reader(
             filename_noext,
             raw_sample_ct=raw_sample_ct,
             variant_ct=variant_ct,
             sample_subset=sample_subset,
-            genotype_mode="dosage",
+            allele_idx_offsets=allele_idx_offsets,
         )
         try:
-            if contains_multiallelic:
-                raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
             if (
                 int(partition_variant_idxs[-1])
                 - int(partition_variant_idxs[0])
@@ -208,6 +168,7 @@ def _read_phased_parallel(
     num_samples: int,
     threads: int,
     allele_idx_offsets: Optional[np.ndarray] = None,
+    require_phase: bool = False,
 ) -> np.ndarray:
     """Decode ordered phased alleles with independent pgenlib readers."""
     genotypes = np.empty((num_variants, num_samples, 2), dtype=np.int8)
@@ -227,12 +188,11 @@ def _read_phased_parallel(
         output_stop = int(output_boundaries[worker_idx + 1])
         partition_variant_idxs = variant_idxs[output_start:output_stop]
         partition_output = genotypes[output_start:output_stop]
-        reader, _, _ = _open_pgen_reader(
+        reader = _open_pgen_reader(
             filename_noext,
             raw_sample_ct=raw_sample_ct,
             variant_ct=variant_ct,
             sample_subset=sample_subset,
-            genotype_mode="phased",
             allele_idx_offsets=allele_idx_offsets,
         )
         try:
@@ -240,6 +200,7 @@ def _read_phased_parallel(
                 reader,
                 partition_variant_idxs,
                 partition_output,
+                require_phase=require_phase,
             )
         finally:
             reader.close()
@@ -263,6 +224,9 @@ class PGENReader(SNPBaseReader):
         chromosome_ploidy: Optional[str] = None,
         separator: str = None,
         threads: int = 1,
+        *,
+        assume_uniform_phase: bool = True,
+        assume_biallelic: bool = False,
     ) -> SNPObject:
         """
         Read a pgen fileset (pgen, psam, pvar) into a SNPObject.
@@ -275,14 +239,14 @@ class PGENReader(SNPBaseReader):
                 Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS', 'FILTER', 'QUAL', 'INFO'.
                 To exclude no fields, set exclude_fields to None. Defaults to None.
             sample_ids: List of sample IDs to read. If None and sample_idxs is None, all samples are read.
-            sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
+            sample_idxs: Sample indices in the desired output order. Repeated indices repeat the sample.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
             genotype_mode: ``"dosage"`` returns one biallelic ALT-copy count per
-                sample as an ``int8`` value in ``{0, 1, 2}`` and rejects multiallelic variants. ``"phased"``
-                returns phased allele calls and requires PGEN hardcall phase
-                information. ``"auto"`` (default) preserves phased hardcalls
-                when possible and falls back to dosage for unphased hardcalls.
+                sample as an ``int8`` value in ``{0, 1, 2}``. All selected variants must be biallelic.
+                ``"phased"`` returns allele pairs and requires the file to contain hardcall phase
+                information. ``"auto"`` (default) returns allele pairs when the file contains
+                phase information and biallelic dosages otherwise.
             chromosome_ploidy:
                 Optional hint for chromosome-specific dosage conversion. Use "autosomal" when
                 all selected variants should be treated as ordinary diploid/autosomal; this
@@ -293,6 +257,14 @@ class PGENReader(SNPBaseReader):
             threads: Number of independent native pgenlib decoder threads. Values
                 above one are supported for explicit ``genotype_mode="dosage"``
                 and ``genotype_mode="phased"`` reads.
+            assume_biallelic: Set to True when every variant in the fileset has at most
+                one ALT allele. This skips the PVAR allele-count checks. Unfiltered
+                genotype-only reads then need only the PGEN file. Defaults to False.
+            assume_uniform_phase: By default, use the file-level phase flag and skip per-call
+                validation. In a partially phased file, allele order is arbitrary for unphased
+                heterozygotes. Set to False to validate the selected calls. If any selected
+                heterozygote is unphased, ``"phased"`` raises a ValueError and ``"auto"``
+                falls back to dosage when all selected variants are biallelic.
 
         Returns:
             **SNPObject**: 
@@ -304,6 +276,7 @@ class PGENReader(SNPBaseReader):
         assert (
             variant_idxs is None or variant_ids is None
         ), "Only one of variant_idxs and variant_ids can be specified"
+        _check_assume_biallelic(assume_biallelic)
         genotype_mode = normalize_genotype_mode(genotype_mode)
         chromosome_ploidy_mode = _normalize_chromosome_ploidy(chromosome_ploidy)
         try:
@@ -326,7 +299,9 @@ class PGENReader(SNPBaseReader):
         fields = fields or ["GT", "IID", "REF", "ALT", "#CHROM", "CM", "ID", "POS", "FILTER", "QUAL", "INFO"]
         exclude_fields = exclude_fields or []
         fields = [field for field in fields if field not in exclude_fields]
-        only_read_pgen = fields == ["GT"] and variant_idxs is None and sample_idxs is None
+        only_read_pgen = fields == ["GT"] and all(
+            selector is None for selector in (variant_idxs, sample_idxs, variant_ids, sample_ids)
+        )
 
         filename_noext = str(self.filename)
         for ext in [".pgen", ".pvar", ".pvar.zst", ".pvar.gz", ".psam", ".psam.zst", ".psam.gz"]:
@@ -334,17 +309,18 @@ class PGENReader(SNPBaseReader):
                 filename_noext = filename_noext[:-len(ext)]
                 break
 
+        pvar_filename = None if only_read_pgen and assume_biallelic else _find_pvar_path(filename_noext)
+        allele_idx_offsets = None
+        sample_order = None
         if only_read_pgen:
-            file_num_samples = None  # Not needed for pgen
-            file_num_variants = None  # Not needed
+            file_num_samples = None
+            file_num_variants = None
+            if pvar_filename is not None:
+                with pg.PvarReader(os.fsencode(pvar_filename), omit_chrom=True, omit_pos=True) as pvar_reader:
+                    file_num_variants = pvar_reader.get_variant_ct()
+                    if pvar_reader.get_max_allele_ct() > 2:
+                        allele_idx_offsets = pvar_reader.get_allele_idx_offsets()
         else:
-            pvar_extensions = [".pvar", ".pvar.zst", ".pvar.gz"]
-            pvar_filename = None
-            for ext in pvar_extensions:
-                possible_pvar = filename_noext + ext
-                if os.path.exists(possible_pvar):
-                    pvar_filename = possible_pvar
-                    break
             if pvar_filename is None:
                 raise FileNotFoundError(f"No .pvar, .pvar.zst, or .pvar.gz file found for {filename_noext}")
 
@@ -352,7 +328,7 @@ class PGENReader(SNPBaseReader):
 
             pvar_has_header = True
             pvar_header_line_num = 0
-            with _open_textfile(pvar_filename) as file:
+            with open_plink_text(pvar_filename) as file:
                 for line_num, line in enumerate(file):
                     if line.startswith("##"):  # Metadata
                         continue
@@ -400,8 +376,18 @@ class PGENReader(SNPBaseReader):
                 pvar = pl.scan_csv(pvar_filename, **pvar_reading_args)
 
             # We need to map requested IDs to row positions before reading genotypes.
-            variant_meta = pvar.select(["ID", "#CHROM", "POS"]).with_row_index().collect()
+            variant_columns = [pl.col("ID"), pl.col("#CHROM"), pl.col("POS")]
+            check_allele_counts = "GT" in fields and not assume_biallelic
+            if check_allele_counts:
+                variant_columns.append(pl.col("ALT").str.count_matches(",").fill_null(0).alias("extra_alts"))
+            variant_meta = pvar.select(variant_columns).with_row_index().collect()
             file_num_variants = variant_meta.height
+            if check_allele_counts and variant_meta["extra_alts"].max():
+                # pgenlib needs offsets for the whole file, including unselected variants.
+                allele_counts = 2 + variant_meta["extra_alts"].to_numpy()
+                allele_idx_offsets = np.empty(file_num_variants + 1, dtype=np.uintp)
+                allele_idx_offsets[0] = 0
+                np.cumsum(allele_counts, dtype=np.uintp, out=allele_idx_offsets[1:])
 
             if variant_ids is not None:
                 variant_id_values = [str(v) for v in np.atleast_1d(variant_ids)]
@@ -449,27 +435,11 @@ class PGENReader(SNPBaseReader):
 
             log.info(f"Reading {psam_filename}")
 
-            with _open_textfile(psam_filename) as file:
-                first_line = file.readline().strip()
-                psam_has_header = first_line.startswith(("#FID", "FID", "#IID", "IID"))
-
-            psam = pl.read_csv(
-                psam_filename,
-                separator=separator,
-                has_header=psam_has_header,
-                new_columns=None if psam_has_header else ["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
-                schema_overrides={
-                    "#FID": pl.String,
-                    "FID": pl.String,
-                    "#IID": pl.String,
-                    "IID": pl.String,
-                    "PAT": pl.String,
-                    "MAT": pl.String,
-                    "SEX": pl.String,
-                    "PHENO1": pl.String,
-                },
-                null_values=["NA"],
-            ).with_row_index()
+            psam = read_sample_table(
+                psam_filename, separator, psam=True,
+                headerless_columns=["FID", "IID", "PAT", "MAT", "SEX", "PHENO1"],
+                schema={field: pl.String for field in ("#FID", "FID", "#IID", "IID", "PAT", "MAT", "SEX", "PHENO1")},
+            )
             if "#IID" in psam.columns:
                 psam = psam.rename({"#IID": "IID"})
             if "#FID" in psam.columns:
@@ -477,26 +447,29 @@ class PGENReader(SNPBaseReader):
 
             file_num_samples = psam.height
 
-            if sample_ids is not None:
-                psam = psam.filter(pl.col("IID").is_in(sample_ids))
-                sample_idxs = psam.select("index").to_series().to_numpy()
-                num_samples = np.size(sample_idxs)
-            elif sample_idxs is not None:
-                num_samples = np.size(sample_idxs)
-                sample_idxs = np.array(sample_idxs, dtype=np.uint32)
-                psam = psam.filter(pl.col("index").is_in(sample_idxs))
-            else:
-                num_samples = file_num_samples
+            psam, sample_idxs, sample_order = select_samples(psam, sample_ids, sample_idxs)
+            num_samples = file_num_samples if sample_idxs is None else sample_idxs.size
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.pgen")
-            pgen_reader, contains_multiallelic, allele_idx_offsets = _open_pgen_reader(
-                filename_noext,
-                raw_sample_ct=file_num_samples,
-                variant_ct=file_num_variants,
-                sample_subset=sample_idxs,
-                genotype_mode=genotype_mode,
-            )
+            try:
+                pgen_reader = _open_pgen_reader(
+                    filename_noext,
+                    raw_sample_ct=file_num_samples,
+                    variant_ct=file_num_variants,
+                    sample_subset=sample_idxs,
+                    allele_idx_offsets=allele_idx_offsets,
+                )
+            except RuntimeError as exc:
+                if "multiallelic variants present" not in str(exc):
+                    raise
+                if assume_biallelic:
+                    raise ValueError("Multiallelic PGEN data detected. Read with assume_biallelic=False.") from exc
+                if pvar_filename is not None:
+                    raise
+                if genotype_mode == "dosage":
+                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR) from exc
+                raise FileNotFoundError(f"Multiallelic PGEN reads require a PVAR file for {filename_noext}") from exc
 
             try:
                 if only_read_pgen:
@@ -515,33 +488,69 @@ class PGENReader(SNPBaseReader):
                         "genotype_mode='phased' is not supported. Use genotype_mode='dosage' "
                         "to load 0/1/2 genotype dosages."
                     )
-                if effective_return_dosage and contains_multiallelic:
-                    raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
-                detect_non_diploid = effective_return_dosage and chromosome_ploidy_mode != "autosomal"
-
-                non_diploid_mask = None
-                if detect_non_diploid:
-                    if only_read_pgen:
-                        log.debug(
-                            "Skipping chromosome-specific non-diploid correction because "
-                            ".pvar metadata is unavailable in GT-only fast path."
-                        )
-                    elif "#CHROM" in pvar.columns:
-                        non_diploid_mask = _non_diploid_chromosome_mask_or_none(
-                            pvar.get_column("#CHROM").to_numpy()
-                        )
-
-                # required arrays: variant_idxs + sample_idxs + genotypes
                 if not effective_return_dosage:
+                    require_phase = not assume_uniform_phase
                     required_ram = (
                         (num_samples + num_variants) * 4
                         + estimate_phased_alleles_peak_bytes(
                             num_variants,
                             num_samples,
                             threads=threads,
+                            require_phase=require_phase,
                         )
                     )
-                else:
+                    log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
+                    try:
+                        if threads == 1:
+                            genotypes = read_phased_alleles(
+                                pgen_reader,
+                                variant_idxs,
+                                num_variants,
+                                num_samples,
+                                require_phase=require_phase,
+                            )
+                        else:
+                            genotypes = _read_phased_parallel(
+                                filename_noext,
+                                raw_sample_ct=file_num_samples,
+                                variant_ct=file_num_variants,
+                                sample_subset=sample_idxs,
+                                variant_idxs=variant_idxs,
+                                num_variants=num_variants,
+                                num_samples=num_samples,
+                                threads=threads,
+                                allele_idx_offsets=allele_idx_offsets,
+                                require_phase=require_phase,
+                            )
+                    except UnphasedHeterozygoteError:
+                        if not auto_mode:
+                            raise
+                        effective_return_dosage = True
+
+                if effective_return_dosage:
+                    if allele_idx_offsets is not None and (
+                        only_read_pgen or np.any(allele_idx_offsets[variant_idxs + 1] - allele_idx_offsets[variant_idxs] > 2)
+                    ):
+                        if auto_mode:
+                            raise ValueError(
+                                "Selected PGEN genotypes lack complete phase information and include "
+                                "multiallelic variants. Select biallelic variants for dosage output."
+                            )
+                        raise ValueError(_MULTIALLELIC_DOSAGE_ERROR)
+                    detect_non_diploid = chromosome_ploidy_mode != "autosomal"
+
+                    non_diploid_mask = None
+                    if detect_non_diploid:
+                        if only_read_pgen:
+                            log.debug(
+                                "Skipping chromosome-specific non-diploid correction because "
+                                ".pvar metadata is unavailable in GT-only fast path."
+                            )
+                        elif "#CHROM" in pvar.columns:
+                            non_diploid_mask = _non_diploid_chromosome_mask_or_none(
+                                pvar.get_column("#CHROM").to_numpy()
+                            )
+
                     required_ram = (num_samples + num_variants) * 4 + num_variants * num_samples
                     if non_diploid_mask is not None and hardcall_phase_present:
                         num_non_diploid = int(np.sum(non_diploid_mask))
@@ -550,29 +559,7 @@ class PGENReader(SNPBaseReader):
                             num_samples,
                             threads=threads,
                         )
-                log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
-
-                if not effective_return_dosage:
-                    if threads == 1:
-                        genotypes = read_phased_alleles(
-                            pgen_reader,
-                            variant_idxs,
-                            num_variants,
-                            num_samples,
-                        )
-                    else:
-                        genotypes = _read_phased_parallel(
-                            filename_noext,
-                            raw_sample_ct=file_num_samples,
-                            variant_ct=file_num_variants,
-                            sample_subset=sample_idxs,
-                            variant_idxs=variant_idxs,
-                            num_variants=num_variants,
-                            num_samples=num_samples,
-                            threads=threads,
-                            allele_idx_offsets=allele_idx_offsets,
-                        )
-                else:
+                    log.info(f">{required_ram / 1024**3:.2f} GiB of RAM are required to process {num_samples} samples with {num_variants} variants each")
                     if threads == 1:
                         genotypes = np.empty((num_variants, num_samples), dtype=np.int8)
                         pgen_reader.read_list(variant_idxs, genotypes)
@@ -586,6 +573,7 @@ class PGENReader(SNPBaseReader):
                             num_variants=num_variants,
                             num_samples=num_samples,
                             threads=threads,
+                            allele_idx_offsets=allele_idx_offsets,
                         )
                     if detect_non_diploid and non_diploid_mask is not None:
                         if hardcall_phase_present:
@@ -627,6 +615,9 @@ class PGENReader(SNPBaseReader):
                 pgen_reader.close()
         else:
             genotypes = None
+
+        if genotypes is not None and sample_order is not None:
+            genotypes = np.take(genotypes, sample_order, axis=1)
 
         log.info("Constructing SNPObject")
 
@@ -678,7 +669,7 @@ class PGENReader(SNPBaseReader):
 
         pvar_has_header = True
         pvar_header_line_num = 0
-        with _open_textfile(pvar_filename) as file:
+        with open_plink_text(pvar_filename) as file:
             for line_num, line in enumerate(file):
                 if line.startswith("##"):
                     continue
@@ -761,6 +752,9 @@ class PGENReader(SNPBaseReader):
         separator: str = None,
         chunk_size: int = 10_000,
         threads: int = 1,
+        *,
+        assume_uniform_phase: bool = True,
+        assume_biallelic: bool = False,
     ) -> Iterator[SNPObject]:
         """
         Stream the PGEN fileset in variant chunks.
@@ -774,7 +768,14 @@ class PGENReader(SNPBaseReader):
             preserves existing behavior.
 
         threads: Number of pgenlib decoder threads used for each chunk.
+
+        assume_biallelic: Skip PVAR allele-count checks for a known-biallelic fileset.
+            Defaults to False.
+
+        assume_uniform_phase: Use the file-level phase flag by default. Set to False
+            to reject unphased heterozygotes in a phased chunk.
         """
+        _check_assume_biallelic(assume_biallelic)
         genotype_mode = normalize_genotype_mode(genotype_mode, allow_auto=False)
         _normalize_chromosome_ploidy(chromosome_ploidy)
         try:
@@ -810,4 +811,6 @@ class PGENReader(SNPBaseReader):
                 chromosome_ploidy=chromosome_ploidy,
                 separator=separator,
                 threads=threads,
+                assume_uniform_phase=assume_uniform_phase,
+                assume_biallelic=assume_biallelic,
             )

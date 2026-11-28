@@ -6,6 +6,8 @@ import pytest
 import snputils.snp.io.read.bed as bed_module
 import snputils.snp.io.read.pgen as pgen_module
 
+from snputils import read_pgen
+from snputils.snp.io.read import _pgenlib
 from snputils.snp.genobj.snpobj import SNPObject
 from snputils.snp.io.read import BCFReader, BEDReader, PGENReader
 from snputils.snp.io.read.vcf import VCFReader, VCFReaderPolars
@@ -186,6 +188,58 @@ def test_pgen_unphased_hardcalls_reject_phased_mode(tmp_path: Path):
         PGENReader(prefix).read(genotype_mode="phased")
 
 
+@pytest.fixture
+def mixed_phase_prefix(tmp_path):
+    prefix = tmp_path / "mixed_phase"
+    with pg.PgenWriter(str(prefix.with_suffix(".pgen")).encode(), sample_ct=2, variant_ct=3,
+                       hardcall_phase_present=True, allele_ct_limit=3) as writer:
+        writer.append_partially_phased(np.array([1, 0, 0, 1], dtype=np.int32),
+                                       np.array([True, False]))
+        writer.append_alleles(np.array([1, 0, 0, 0], dtype=np.int32), all_phased=True)
+        writer.append_alleles(np.array([2, 1, 0, 2], dtype=np.int32), all_phased=True, allele_ct=3)
+    prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
+    prefix.with_suffix(".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n1\t100\tv1\tA\tG\n1\t200\tv2\tC\tT\n1\t300\tv3\tA\tG,T\n"
+    )
+    return prefix
+
+
+def test_pgen_assumes_uniform_phase_by_default(mixed_phase_prefix, monkeypatch):
+    def unexpected_check(*args):
+        pytest.fail("Default PGEN reads should skip per-call phase validation.")
+
+    monkeypatch.setattr(_pgenlib, "_raise_if_unphased_heterozygote", unexpected_check)
+    observed = read_pgen(mixed_phase_prefix, fields=["GT"]).genotypes
+    assert observed.shape == (3, 2, 2)
+    np.testing.assert_array_equal(observed[0, 0], [1, 0])
+    # s2 has one copy of each allele, with unknown haplotype order.
+    np.testing.assert_array_equal(np.sort(observed[0, 1]), [0, 1])
+    reader = PGENReader(mixed_phase_prefix)
+    for threads in (1, 2):
+        phased = reader.read(fields=["GT"], genotype_mode="phased", threads=threads)
+        np.testing.assert_array_equal(phased.genotypes, observed)
+    chunks = reader.iter_read(genotype_mode="phased", threads=2, chunk_size=2)
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), observed)
+
+
+def test_pgen_checks_phase_in_selected_calls(mixed_phase_prefix):
+    reader = PGENReader(mixed_phase_prefix)
+    for threads in (1, 2):
+        options = dict(fields=["GT"], genotype_mode="phased", threads=threads, assume_uniform_phase=False)
+        with pytest.raises(ValueError, match="unphased heterozygous"):
+            reader.read(sample_ids=["s2"], **options)
+        phased = reader.read(sample_ids=["s1"], **options)
+        np.testing.assert_array_equal(phased.genotypes, [[[1, 0]], [[1, 0]], [[2, 1]]])
+        with pytest.raises(ValueError, match="unphased heterozygous"):
+            next(reader.iter_read(sample_ids=["s2"], chunk_size=2, **options))
+    with pytest.raises(ValueError, match="lack complete phase.*multiallelic"):
+        reader.read(sample_ids=["s2"], assume_uniform_phase=False)
+    dosage = reader.read(sample_ids=["s2"], variant_ids=["v1", "v2"], assume_uniform_phase=False)
+    np.testing.assert_array_equal(dosage.genotypes, [[1], [0]])
+    checked = reader.read(variant_ids=["v2"], assume_uniform_phase=False)
+    np.testing.assert_array_equal(checked.genotypes, [[[1, 0], [0, 0]]])
+
+
 def test_pgen_dosage_preserves_negative_missing_sentinel(tmp_path: Path):
     prefix = tmp_path / "missing"
     genotypes = np.array(
@@ -350,7 +404,74 @@ def test_pgen_phased_hardcalls_preserve_allele_calls(tmp_path: Path):
     np.testing.assert_array_equal(filtered_parallel.genotypes, filtered_serial.genotypes)
 
 
-def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_path(
+@pytest.mark.parametrize("mode", ["dosage", "phased"])
+def test_pgen_assume_biallelic_skips_allele_checks(tmp_path, monkeypatch, mode):
+    prefix = tmp_path / "biallelic"
+    calls = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]], dtype=np.int8)
+    _toy_snpobj(calls).save_pgen(prefix)
+    expected = read_pgen(prefix, fields=["GT"], genotype_mode=mode).genotypes
+
+    def unexpected_check(*args, **kwargs):
+        pytest.fail("Trusted genotype reads should skip PVAR allele-count checks.")
+
+    monkeypatch.setattr(pgen_module, "_find_pvar_path", unexpected_check)
+    options = dict(fields=["GT"], genotype_mode=mode, assume_biallelic=True)
+    np.testing.assert_array_equal(read_pgen(prefix, **options).genotypes, expected)
+
+    monkeypatch.undo()
+    string_methods = type(pgen_module.pl.col("ALT").str)
+    monkeypatch.setattr(string_methods, "count_matches", unexpected_check)
+    chunks = PGENReader(prefix).iter_read(variant_idxs=[1, 0], chunk_size=1, **options)
+    np.testing.assert_array_equal(np.concatenate([chunk.genotypes for chunk in chunks]), expected[::-1])
+
+
+def test_pgen_assume_biallelic_requires_boolean(tmp_path):
+    reader = PGENReader(tmp_path / "unused")
+    with pytest.raises(TypeError, match="assume_biallelic"):
+        reader.read(assume_biallelic="False")
+    with pytest.raises(TypeError, match="assume_biallelic"):
+        next(reader.iter_read(assume_biallelic="False"))
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_pgen_dosage_checks_only_selected_variants(tmp_path, threads):
+    prefix = tmp_path / "mixed_alleles"
+    with pg.PgenWriter(
+        str(prefix.with_suffix(".pgen")).encode(), sample_ct=2, variant_ct=4,
+        hardcall_phase_present=True, allele_ct_limit=3,
+    ) as writer:
+        for alleles, count in [([0, 1, 1, 1], 2), ([1, 2, 2, 2], 3),
+                               ([0, 0, 0, 1], 2), ([0, 1, 0, 0], 2)]:
+            writer.append_alleles(np.array(alleles, dtype=np.int32), all_phased=True, allele_ct=count)
+    prefix.with_suffix(".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n1\t10\tsnp1\tA\tG\n1\t20\tmulti\tA\tG,C\n"
+        "1\t30\tsnp2\tA\tG\n1\t40\tsnp3\tA\tG\n"
+    )
+    prefix.with_suffix(".psam").write_text("#IID\ns1\ns2\n")
+    reader = PGENReader(prefix)
+    options = dict(fields=["GT"], genotype_mode="dosage", threads=threads)
+    result = reader.read(variant_ids=["snp1", "snp2"], **options)
+    np.testing.assert_array_equal(result.genotypes, [[1, 2], [0, 1]])
+    chunks = reader.iter_read(chunk_size=1, variant_idxs=[2, 0], **options)
+    np.testing.assert_array_equal(np.concatenate([c.genotypes for c in chunks]), [[0, 1], [1, 2]])
+    with pytest.raises(ValueError, match="dosage.*biallelic"):
+        reader.read(variant_ids=["multi"], **options)
+
+
+def test_pgen_dosage_checks_declared_alleles_even_when_alt2_is_unobserved(tmp_path):
+    prefix = tmp_path / "unobserved"
+    source = _toy_snpobj(np.array([[0, 1], [1, 2]], dtype=np.int8))
+    source.variants_alt = np.array(["G", "T,A"])
+    source.save_pgen(prefix)
+    reader = PGENReader(prefix)
+    for selectors in ({}, {"variant_ids": ["rs2"]}):
+        with pytest.raises(ValueError, match="dosage.*biallelic"):
+            reader.read(fields=["GT"], genotype_mode="dosage", **selectors)
+    selected = reader.read(fields=["GT"], variant_ids=["rs1"])
+    np.testing.assert_array_equal(selected.genotypes, [[0, 1]])
+
+
+def test_pgen_multiallelic_modes_and_parallel_allele_offsets(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -379,6 +500,8 @@ def test_pgen_dosage_rejects_multiallelic_without_scanning_pvar_on_biallelic_pat
 
     with pytest.raises(ValueError, match="dosage.*biallelic"):
         PGENReader(prefix).read(fields=["GT"], genotype_mode="dosage")
+    with pytest.raises(ValueError, match="assume_biallelic=False"):
+        read_pgen(prefix, fields=["GT"], assume_biallelic=True)
 
     phased = PGENReader(prefix).read(fields=["GT"], genotype_mode="phased")
     np.testing.assert_array_equal(

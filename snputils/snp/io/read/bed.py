@@ -16,6 +16,7 @@ from snputils._utils.genotypes import (
     sum_diploid_alleles,
 )
 from snputils.snp.genobj.snpobj import SNPObject
+from snputils.snp.io.read._plink_samples import open_plink_text, read_sample_table, select_samples
 from snputils.snp.io.read.base import SNPBaseReader
 from snputils.snp.io.read._pgenlib import (
     estimate_phased_alleles_peak_bytes,
@@ -70,16 +71,6 @@ def _resolve_compressed_path(base_path: str, ext: str) -> str:
         if os.path.exists(candidate_compressed):
             return candidate_compressed
     return candidate
-
-
-def _open_textfile(filename: str, mode: str = "rt"):
-    if filename.endswith(".zst"):
-        import zstandard as zstd
-        return zstd.open(filename, mode, encoding="utf-8") if "t" in mode else zstd.open(filename, mode)
-    elif filename.endswith(".gz"):
-        import gzip
-        return gzip.open(filename, mode, encoding="utf-8") if "t" in mode else gzip.open(filename, mode)
-    return open(filename, mode)
 
 
 def _strip_bed_fileset_suffix(filename: Union[str, Path]) -> str:
@@ -230,7 +221,7 @@ class BEDReader(SNPBaseReader):
                 Available fields are 'GT', 'IID', 'REF', 'ALT', '#CHROM', 'CM', 'ID', 'POS'.
                 To exclude no fields, set exclude_fields to None. Defaults to None.
             sample_ids: List of sample IDs to read. If None and sample_idxs is None, all samples are read.
-            sample_idxs: List of sample indices to read. If None and sample_ids is None, all samples are read.
+            sample_idxs: Sample indices in the desired output order. Repeated indices repeat the sample.
             variant_ids: List of variant IDs to read. If None and variant_idxs is None, all variants are read.
             variant_idxs: List of variant indices to read. If None and variant_ids is None, all variants are read.
             genotype_mode: ``"dosage"`` (default) returns genotype dosages in
@@ -242,7 +233,7 @@ class BEDReader(SNPBaseReader):
                 all selected variants should be treated as ordinary diploid/autosomal; this
                 skips non-diploid chromosome checks and can be faster. The default None/"auto"
                 preserves existing behavior.
-            separator: Separator used in the pvar file. If None, the separator is automatically detected.
+            separator: Separator used in the BIM file. If None, the separator is automatically detected.
                 If the automatic detection fails, please specify the separator manually.
             threads: Number of independent native pgenlib decoder threads.
 
@@ -280,22 +271,25 @@ class BEDReader(SNPBaseReader):
                 "PLINK BED/BIM/FAM does not store phase, so genotype_mode='phased' is not supported. "
                 "Use genotype_mode='dosage' to load 0/1/2 genotype dosages."
             )
-        only_read_bed = fields == ["GT"] and variant_idxs is None and sample_idxs is None
+        only_read_bed = fields == ["GT"] and all(
+            selector is None for selector in (variant_idxs, sample_idxs, variant_ids, sample_ids)
+        )
 
         filename_noext = _strip_bed_fileset_suffix(self.filename)
 
         fam_filename = _resolve_compressed_path(filename_noext, ".fam")
         bim_filename = _resolve_compressed_path(filename_noext, ".bim")
 
+        sample_order = None
         if only_read_bed:
-            with _open_textfile(fam_filename, 'rt') as f:
+            with open_plink_text(fam_filename, 'rt') as f:
                 file_num_samples = sum(1 for _ in f)  # Get sample count from fam file
             file_num_variants = None  # Not needed
         else:
             log.info(f"Reading {bim_filename}")
 
             if separator is None:
-                with _open_textfile(bim_filename, "rt") as file:
+                with open_plink_text(bim_filename, "rt") as file:
                     separator = csv.Sniffer().sniff(file.readline()).delimiter
 
             bim = pl.read_csv(
@@ -349,32 +343,14 @@ class BEDReader(SNPBaseReader):
 
             log.info(f"Reading {fam_filename}")
 
-            fam = pl.read_csv(
-                fam_filename,
-                separator=separator,
-                has_header=False,
-                new_columns=["Family ID", "IID", "Father ID",
-                             "Mother ID", "Sex code", "Phenotype value"],
-                schema_overrides={
-                    "Family ID": pl.String,
-                    "IID": pl.String,
-                    "Father ID": pl.String,
-                    "Mother ID": pl.String,
-                    "Sex code": pl.String,
-                },
-                null_values=["NA"]
-            ).with_row_index()
+            fam = read_sample_table(
+                fam_filename, separator,
+                headerless_columns=["Family ID", "IID", "Father ID", "Mother ID", "Sex code", "Phenotype value"],
+                schema={field: pl.String for field in ("Family ID", "IID", "Father ID", "Mother ID", "Sex code")},
+            )
             file_num_samples = fam.height
-
-            if sample_ids is not None:
-                sample_idxs = fam.filter(pl.col("IID").is_in(sample_ids)).select("index").to_series().to_numpy()
-
-            if sample_idxs is None:
-                num_samples = file_num_samples
-            else:
-                num_samples = np.size(sample_idxs)
-                sample_idxs = np.array(sample_idxs, dtype=np.uint32)
-                fam = fam.filter(pl.col("index").is_in(sample_idxs))
+            fam, sample_idxs, sample_order = select_samples(fam, sample_ids, sample_idxs)
+            num_samples = file_num_samples if sample_idxs is None else sample_idxs.size
 
         if "GT" in fields:
             log.info(f"Reading {filename_noext}.bed")
@@ -474,6 +450,9 @@ class BEDReader(SNPBaseReader):
         else:
             genotypes = None
 
+        if genotypes is not None and sample_order is not None:
+            genotypes = np.take(genotypes, sample_order, axis=1)
+
         log.info("Constructing SNPObject")
 
         fid_col = None
@@ -511,7 +490,7 @@ class BEDReader(SNPBaseReader):
 
         local_separator = separator
         if local_separator is None:
-            with _open_textfile(bim_filename, "rt") as file:
+            with open_plink_text(bim_filename, "rt") as file:
                 local_separator = csv.Sniffer().sniff(file.readline()).delimiter
 
         bim = pl.read_csv(

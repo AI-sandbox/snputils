@@ -189,11 +189,15 @@ def read_phased_alleles_into(
     return genotypes
 
 
+class UnphasedHeterozygoteError(ValueError):
+    """A requested PGEN heterozygote has no known haplotype order."""
+
+
 def _raise_if_unphased_heterozygote(alleles: np.ndarray, phase_present: np.ndarray) -> None:
     called = np.all(alleles >= 0, axis=2)
     heterozygous = alleles[:, :, 0] != alleles[:, :, 1]
     if np.any(called & heterozygous & ~phase_present):
-        raise ValueError(
+        raise UnphasedHeterozygoteError(
             "Cannot read unphased heterozygous PGEN genotypes with genotype_mode='phased'; "
             "use genotype_mode='dosage' to load 0/1/2 genotype dosages."
         )

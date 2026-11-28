@@ -46,7 +46,7 @@ vcf  = read_vcf("cohort.vcf.gz")
 ```python
 from snputils import BCFReader, PGENReader, BGENReader, VCFReader
 
-# PGEN: read specific samples/variants (phased by default)
+# PGEN reads use the file-level phase flag by default.
 pgen = PGENReader("cohort.pgen").read(
     sample_ids=["sample1", "sample2"],
     variant_ids=["rs1", "rs2"],
@@ -71,8 +71,13 @@ Phase-capable formats (`VCFReader`, `VCFReaderPolars`, `BCFReader`, `PGENReader`
 default to `genotype_mode="auto"`: phased genotypes are preserved with shape
 `(n_variants, n_samples, 2)`, while unphased hardcalls fall back to per-sample
 dosages (`0`, `1`, `2`, or missing). Use `genotype_mode="dosage"` to always get
-dosages. Use `genotype_mode="phased"` to require phased allele-call output and
-reject unphased hardcalls because their allele order is not meaningful.
+dosages. Use `genotype_mode="phased"` to request phased allele-call output.
+The VCF and BCF readers reject unphased heterozygotes in that mode.
+PGEN assumes uniform phasing by default. In a partially phased file, the order
+of an unphased heterozygote's alleles is arbitrary. To check each selected
+heterozygote, pass `assume_uniform_phase=False` to `read_pgen`, `PGENReader.read`,
+or `PGENReader.iter_read`. In that case, `"phased"` raises an error for an
+unphased heterozygote and `"auto"` falls back to dosage for a biallelic selection.
 `BEDReader` defaults to `genotype_mode="dosage"` because PLINK BED/BIM/FAM does not
 store phase.
 
@@ -89,6 +94,11 @@ the ALT checks with `read_vcf(path, genotype_mode="dosage", assume_biallelic=Tru
 This can save work when reading only genotypes, especially with the Polars backend.
 Both readers accept this option in `read` and `iter_read`. The default is `False`.
 Passing `True` for a multiallelic file can give incorrect genotypes.
+
+For a known-biallelic PGEN fileset, `read_pgen(path, fields=["GT"], assume_biallelic=True)`
+reads genotypes directly from the PGEN. The default is `False`, which checks allele
+counts when a PVAR is available. Filtered and streaming reads also accept the
+option and still use the metadata they need to resolve selectors.
 
 **BCF notes:** BCF reads use a native snputils parser over BGZF-compressed BCF2.2 records. Genotypes are stored on `SNPObject.genotypes` just like VCF input. ``region=...`` works without an index by scanning and filtering matching records.
 

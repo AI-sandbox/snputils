@@ -23,7 +23,7 @@ The BGEN GP results are:
 
 The reader benchmark measures wall-clock read time and peak memory on chromosome 22 from the 1000 Genomes Project dataset.
 
-The chromosome 22 VCF input is biallelic. The default and Polars snputils backends use `assume_biallelic=True` during VCF timing and memory measurements. The reference read uses the library default with ALT checks enabled. Pass `--no-assume-biallelic` to benchmark those checks or to use a VCF of unknown allele content. The figure above predates this option.
+The chromosome 22 VCF and PGEN inputs are biallelic. The snputils PGEN reader and both snputils VCF backends use `assume_biallelic=True` during timing and memory measurements. The reference read uses the library default with ALT checks enabled. Pass `--no-assume-biallelic` to benchmark those checks or to use a file of unknown allele content. The figure above predates this option.
 
 Each reader is run in an Slurm allocation with 8 AMD EPYC 9684X CPU cores and 200 GB of RAM and a Python 3.12 environment.
 Python 3.12 is used because some libraries are not yet compatible with Python 3.13 or 3.14.

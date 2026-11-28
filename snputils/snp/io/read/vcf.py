@@ -13,6 +13,7 @@ from snputils._utils.genotypes import (
     ExplicitGenotypeMode,
     GenotypeMode,
     _MULTIALLELIC_DOSAGE_ERROR,
+    _check_assume_biallelic,
     normalize_genotype_mode,
     sum_diploid_alleles,
 )
@@ -56,11 +57,6 @@ def _non_diploid_chromosome_mask_or_none(chromosomes: np.ndarray) -> Optional[np
         count=len(chromosomes),
     )
     return mask if np.any(mask) else None
-
-
-def _check_assume_biallelic(value: bool) -> None:
-    if not isinstance(value, (bool, np.bool_)):
-        raise TypeError("assume_biallelic must be a boolean.")
 
 
 def _normalize_chromosome_ploidy(value: Optional[str]) -> str:
